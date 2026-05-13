@@ -49,9 +49,12 @@ from tifffile import TiffFile
 
 from .annotation_statistics import show_annotation_statistics
 from .coco_json_combiner import show_coco_json_combiner
+from .dino_phrase_editor import ClassThresholdTable, PhraseEditorPanel
+from .dino_utils import DINOUtils
 from .dataset_splitter import DatasetSplitterTool
 from .default_stylesheet import default_stylesheet
 from .dicom_converter import DicomConverter
+from .dino_merge_dialog import show_dino_merge_dialog
 from .export_formats import (
     export_coco_json,
     export_labeled_images,
@@ -189,6 +192,13 @@ class ImageAnnotator(QMainWindow):
         # Initialize SAM utils
         self.current_sam_model = None
         self.sam_utils = SAMUtils()
+
+        # Initialize DINO utils for LLM-assisted detection
+        self.dino_utils = DINOUtils()
+        self.dino_model_loaded = False
+        self.dino_custom_model_path = None
+        self.dino_phrases = {}   # {class_name: [phrase, ...]}
+        self.dino_thresholds = {}  # {class_name: {"box": 0.25, "txt": 0.25, "nms": 0.50}}
 
         # Debounce timer for SAM points: wait 1s after last click before inference
         self.sam_inference_timer = QTimer(self)
@@ -457,6 +467,13 @@ class ImageAnnotator(QMainWindow):
                 self.load_multi_slice_image(image_path, dimensions, shape)
             else:
                 self.add_images_to_list([image_path])
+
+        # Restore DINO configuration if present
+        dino_cfg = project_data.get("dino_config", {})
+        self.dino_phrases = dino_cfg.get("phrases", {})
+        self.dino_thresholds = dino_cfg.get("thresholds", {})
+        if self.dino_phrases:
+            self.dino_phrase_panel.set_phrases(self.dino_phrases)
 
         # Update UI
         self.update_ui()
@@ -784,6 +801,14 @@ class ImageAnnotator(QMainWindow):
             ),
             "last_modified": datetime.now().isoformat(),
         }
+
+        # Persist DINO configuration
+        dino_cfg = {
+            "phrases": dict(self.dino_phrases) if self.dino_phrases else {},
+            "thresholds": dict(self.dino_thresholds) if self.dino_thresholds else {},
+        }
+        if dino_cfg["phrases"] or dino_cfg["thresholds"]:
+            project_data["dino_config"] = dino_cfg
 
         # Save project data
         with open(self.current_project_file, "w") as f:
@@ -2397,6 +2422,10 @@ class ImageAnnotator(QMainWindow):
         dataset_splitter_action.triggered.connect(self.open_dataset_splitter)
         tools_menu.addAction(dataset_splitter_action)
 
+        dino_merge_action = QAction("Merge COCO for Training", self)
+        dino_merge_action.triggered.connect(self.show_dino_merge_dialog)
+        tools_menu.addAction(dino_merge_action)
+
         stack_to_slices_action = QAction("Stack to Slices", self)
         stack_to_slices_action.triggered.connect(self.show_stack_to_slices)
         tools_menu.addAction(stack_to_slices_action)
@@ -2533,6 +2562,76 @@ class ImageAnnotator(QMainWindow):
         sam_layout.addWidget(self.sam_model_selector)
 
         annotation_layout.addWidget(sam_widget)
+
+        # --- LLM-Assisted Detection (DINO) subsection ---
+        dino_widget = QWidget()
+        dino_layout = QVBoxLayout(dino_widget)
+
+        dino_model_layout = QHBoxLayout()
+        self.dino_model_selector = QComboBox()
+        self.dino_model_selector.addItem("Pick a DINO Model")
+        self.dino_model_selector.addItem("grounding-dino-base")
+        self.dino_model_selector.addItem("grounding-dino-tiny")
+        self.dino_model_selector.addItem("Custom / fine-tuned (browse)")
+        self.dino_model_selector.currentTextChanged.connect(self._on_dino_model_changed)
+        dino_model_layout.addWidget(self.dino_model_selector, 1)
+        self.btn_load_dino = QPushButton("Load")
+        self.btn_load_dino.setFixedWidth(50)
+        self.btn_load_dino.clicked.connect(self.load_dino_models)
+        dino_model_layout.addWidget(self.btn_load_dino)
+        dino_layout.addLayout(dino_model_layout)
+
+        # Custom model browse row (hidden by default)
+        self.dino_browse_row = QWidget()
+        dino_browse_layout = QHBoxLayout(self.dino_browse_row)
+        dino_browse_layout.setContentsMargins(0, 0, 0, 0)
+        self.lbl_dino_custom = QLabel("No path set")
+        self.lbl_dino_custom.setWordWrap(True)
+        self.lbl_dino_custom.setStyleSheet("font-size:10px;color:#555;")
+        btn_dino_browse = QPushButton("Browse")
+        btn_dino_browse.setFixedWidth(60)
+        btn_dino_browse.clicked.connect(self.browse_dino_model)
+        dino_browse_layout.addWidget(self.lbl_dino_custom, 1)
+        dino_browse_layout.addWidget(btn_dino_browse)
+        self.dino_browse_row.setVisible(False)
+        dino_layout.addWidget(self.dino_browse_row)
+
+        self.lbl_dino_status = QLabel("No DINO model loaded")
+        self.lbl_dino_status.setWordWrap(True)
+        self.lbl_dino_status.setStyleSheet(
+            "color:#888;font-size:11px;background:#f5f5f5;padding:4px;border-radius:3px;")
+        dino_layout.addWidget(self.lbl_dino_status)
+
+        # Threshold table
+        self.dino_class_table = ClassThresholdTable()
+        self.dino_class_table.itemSelectionChanged.connect(self.on_dino_class_row_changed)
+        dino_layout.addWidget(self.dino_class_table)
+
+        # Phrase editor
+        self.dino_phrase_panel = PhraseEditorPanel()
+        dino_layout.addWidget(self.dino_phrase_panel)
+
+        # Detect buttons
+        det_btn_layout = QHBoxLayout()
+        self.btn_detect_single = QPushButton("Detect Current Image")
+        self.btn_detect_single.clicked.connect(self.run_dino_detection_single)
+        self.btn_detect_single.setEnabled(False)
+        det_btn_layout.addWidget(self.btn_detect_single)
+
+        self.btn_detect_batch = QPushButton("Detect All Images")
+        self.btn_detect_batch.clicked.connect(self.run_dino_detection_batch)
+        self.btn_detect_batch.setEnabled(False)
+        det_btn_layout.addWidget(self.btn_detect_batch)
+        dino_layout.addLayout(det_btn_layout)
+
+        # Batch mode
+        self.dino_batch_mode = QComboBox()
+        self.dino_batch_mode.addItem("Review before accepting")
+        self.dino_batch_mode.addItem("Auto-accept all detections")
+        dino_layout.addWidget(self.dino_batch_mode)
+
+        annotation_layout.addWidget(dino_widget)
+        # --- END DINO section ---
 
         # Add tool group
         self.tool_group = QButtonGroup(self)
@@ -2733,6 +2832,358 @@ class ImageAnnotator(QMainWindow):
             self.deactivate_sam_magic_wand()
             print("SAM model unset")
 
+    # --- DINO / LLM-Assisted Detection Methods ---
+
+    def _on_dino_model_changed(self, text):
+        """Show/hide custom model browse row based on selection."""
+        self.dino_browse_row.setVisible(text == "Custom / fine-tuned (browse)")
+
+    def load_dino_models(self):
+        model_name = self.dino_model_selector.currentText()
+        if model_name == "Pick a DINO Model":
+            self.dino_model_loaded = False
+            self.lbl_dino_status.setText("No DINO model loaded")
+            self.btn_detect_single.setEnabled(False)
+            self.btn_detect_batch.setEnabled(False)
+            return
+
+        if model_name == "Custom / fine-tuned (browse)":
+            if not self.dino_custom_model_path or not os.path.exists(self.dino_custom_model_path):
+                QMessageBox.warning(self, "No Model Path",
+                                    "Please browse to a custom model folder first.")
+                return
+            model_path = self.dino_custom_model_path
+        else:
+            from .dino_utils import GDINO_MODEL_PATHS
+            model_path = GDINO_MODEL_PATHS.get(model_name)
+            if model_path and not os.path.isabs(model_path):
+                abs_from_pkg = os.path.join(
+                    os.path.dirname(os.path.dirname(os.path.abspath(__file__))),
+                    model_path
+                )
+                if os.path.exists(abs_from_pkg):
+                    model_path = abs_from_pkg
+                else:
+                    abs_from_cwd = os.path.join(os.getcwd(), model_path)
+                    if os.path.exists(abs_from_cwd):
+                        model_path = abs_from_cwd
+
+        # Check path exists; if not, offer to download
+        if model_path and not os.path.exists(model_path):
+            reply = QMessageBox.question(
+                self, "Model Not Found",
+                f"Model not found at:\n{model_path}\n\nDownload from Hugging Face Hub?",
+                QMessageBox.Yes | QMessageBox.No
+            )
+            if reply == QMessageBox.Yes:
+                downloaded = self.dino_utils.download_model(model_name)
+                if not downloaded:
+                    return
+                model_path = downloaded
+            else:
+                return
+
+        self.dino_model_loaded = True
+        self.lbl_dino_status.setText(f"Loaded: {model_name}")
+        self.btn_detect_single.setEnabled(True)
+        self.btn_detect_batch.setEnabled(True)
+        print(f"DINO model ready: {model_name}")
+
+    def browse_dino_model(self):
+        path = QFileDialog.getExistingDirectory(self, "Select DINO Model Folder")
+        if path:
+            self.dino_custom_model_path = path
+            self.lbl_dino_custom.setText(os.path.basename(path))
+
+    def on_dino_class_row_changed(self):
+        name = self.dino_class_table.selected_class_name()
+        self.dino_phrase_panel.set_active_class(name)
+
+    def _build_dino_class_configs(self) -> list[dict]:
+        """Build class_configs from threshold table + phrase panel."""
+        configs = []
+        for cfg in self.dino_class_table.get_class_configs():
+            phrases = self.dino_phrase_panel.get_phrases_for(cfg["name"])
+            configs.append({
+                "name": cfg["name"],
+                "phrases": phrases,
+                "box_thr": cfg["box_thr"],
+                "txt_thr": cfg["txt_thr"],
+                "nms_thr": cfg["nms_thr"],
+            })
+        return configs
+
+    def run_dino_detection_single(self):
+        if not self.dino_model_loaded:
+            QMessageBox.warning(self, "No DINO Model",
+                                "Please load a DINO model first.")
+            return
+        if not self.current_image or self.current_image.isNull():
+            QMessageBox.warning(self, "No Image",
+                                "Please load an image first.")
+            return
+
+        model_name = self.dino_model_selector.currentText()
+        class_configs = self._build_dino_class_configs()
+        if not class_configs:
+            QMessageBox.warning(self, "No Classes",
+                                "Please add at least one class with phrases.")
+            return
+
+        self.btn_detect_single.setEnabled(False)
+        self.btn_detect_batch.setEnabled(False)
+        self.lbl_dino_status.setText("Detecting...")
+        QApplication.processEvents()
+
+        try:
+            results = self.dino_utils.detect(
+                self.current_image, class_configs,
+                model_name=model_name,
+                custom_model_path=self.dino_custom_model_path,
+            )
+        except Exception as e:
+            traceback.print_exc()
+            QMessageBox.critical(self, "DINO Error", str(e))
+            self.btn_detect_single.setEnabled(True)
+            self.btn_detect_batch.setEnabled(True)
+            self.lbl_dino_status.setText("Detection failed.")
+            return
+
+        self.btn_detect_single.setEnabled(True)
+        self.btn_detect_batch.setEnabled(True)
+
+        if results is None:
+            self.lbl_dino_status.setText("No detections.")
+            return
+
+        if not results:
+            self.lbl_dino_status.setText("No detections found.")
+            return
+
+        self.lbl_dino_status.setText(f"{len(results)} detection(s). Running SAM...")
+        QApplication.processEvents()
+
+        # Batch SAM segmentation
+        bboxes = [r["bbox"] for r in results]
+        sam_results = self.sam_utils.apply_sam_predictions_batch(
+            self.current_image, bboxes
+        )
+
+        if sam_results is None:
+            QMessageBox.warning(self, "SAM Error",
+                                "Failed to segment detections with SAM.")
+            self.lbl_dino_status.setText("SAM segmentation failed.")
+            return
+
+        # Build temp annotations
+        temp_annotations = []
+        for r, s in zip(results, sam_results):
+            if "error" in s:
+                print(f"  SAM failed for {r['class_name']}: {s['error']}")
+                continue
+            temp_annotations.append({
+                "segmentation": s["segmentation"],
+                "bbox": r["bbox"],
+                "category_name": r["class_name"],
+                "score": r["score"],
+                "source": "dino",
+                "temp": True,
+            })
+
+        self.image_label.temp_annotations = temp_annotations
+        self.image_label.update()
+        self.lbl_dino_status.setText(
+            f"Loaded: {model_name}  |  {len(temp_annotations)} mask(s) ready"
+        )
+        print(f"DINO detection: {len(results)} boxes, {len(temp_annotations)} masks.")
+
+    def run_dino_detection_batch(self):
+        if not self.dino_model_loaded:
+            QMessageBox.warning(self, "No DINO Model",
+                                "Please load a DINO model first.")
+            return
+        if not self.all_images:
+            QMessageBox.warning(self, "No Images",
+                                "Please load images first.")
+            return
+
+        model_name = self.dino_model_selector.currentText()
+        class_configs = self._build_dino_class_configs()
+        if not class_configs:
+            QMessageBox.warning(self, "No Classes",
+                                "Please add at least one class with phrases.")
+            return
+
+        auto_accept = self.dino_batch_mode.currentText() == "Auto-accept all detections"
+        total = len(self.all_images)
+
+        progress = QProgressDialog("Running LLM Detection...", "Cancel", 0, total, self)
+        progress.setWindowModality(Qt.WindowModal)
+        progress.setMinimumDuration(0)
+
+        for idx, img_info in enumerate(self.all_images):
+            if progress.wasCanceled():
+                break
+            progress.setValue(idx)
+            QApplication.processEvents()
+
+            image_name = img_info["file_name"]
+            image_path = self.image_paths.get(image_name)
+            if not image_path or not os.path.exists(image_path):
+                continue
+
+            # Load image as QImage for DINO + SAM
+            from PIL import Image as PILImage
+            pil_img = PILImage.open(image_path).convert("RGB")
+            qimage = QImage(pil_img.tobytes(), pil_img.width, pil_img.height,
+                            pil_img.width * 3, QImage.Format_RGB888)
+
+            try:
+                results = self.dino_utils.detect(
+                    qimage, class_configs,
+                    model_name=model_name,
+                    custom_model_path=self.dino_custom_model_path,
+                )
+            except Exception as e:
+                print(f"  DINO failed for {image_name}: {e}")
+                continue
+
+            if not results:
+                continue
+
+            bboxes = [r["bbox"] for r in results]
+            sam_results = self.sam_utils.apply_sam_predictions_batch(qimage, bboxes)
+            if sam_results is None:
+                continue
+
+            if auto_accept:
+                self._commit_dino_results(image_name, results, sam_results)
+            else:
+                # Store for later review
+                self._store_dino_batch_results(image_name, results, sam_results)
+
+        progress.setValue(total)
+        progress.close()
+
+        if auto_accept:
+            QMessageBox.information(
+                self, "Batch Detection Complete",
+                "Detections have been saved to annotations."
+            )
+            self.update_annotation_list()
+            self.auto_save()
+        else:
+            self._show_dino_batch_review()
+
+    def _commit_dino_results(self, image_name, dino_results, sam_results):
+        """Commit DINO+SAM results directly to annotations."""
+        if image_name not in self.all_annotations:
+            self.all_annotations[image_name] = {}
+
+        for r, s in zip(dino_results, sam_results):
+            if "error" in s:
+                continue
+            class_name = r["class_name"]
+            ann = {
+                "segmentation": s["segmentation"],
+                "bbox": r["bbox"],
+                "category_id": self.class_mapping.get(class_name, 0),
+                "category_name": class_name,
+                "score": r["score"],
+                "source": "dino",
+                "number": len(self.all_annotations[image_name].get(class_name, [])) + 1,
+            }
+            self.all_annotations[image_name].setdefault(class_name, []).append(ann)
+
+    def _store_dino_batch_results(self, image_name, dino_results, sam_results):
+        """Store results for batch review mode."""
+        if not hasattr(self, "dino_batch_results"):
+            self.dino_batch_results = {}
+
+        valid = []
+        for r, s in zip(dino_results, sam_results):
+            if "error" not in s:
+                valid.append({
+                    "segmentation": s["segmentation"],
+                    "bbox": r["bbox"],
+                    "category_name": r["class_name"],
+                    "score": r["score"],
+                    "source": "dino",
+                    "temp": True,
+                })
+        self.dino_batch_results[image_name] = valid
+
+    def _show_dino_batch_review(self):
+        """Navigate to first image with batch results for review."""
+        if not hasattr(self, "dino_batch_results") or not self.dino_batch_results:
+            QMessageBox.information(self, "Batch Detection",
+                                    "No detections found in any image.")
+            return
+        first = next(iter(self.dino_batch_results))
+        # Switch to first image with results
+        for i in range(self.image_list.count()):
+            item = self.image_list.item(i)
+            if item and item.text() == first:
+                self.image_list.setCurrentRow(i)
+                self.switch_image(item)
+                break
+        self.image_label.temp_annotations = self.dino_batch_results.get(first, [])
+        self.image_label.update()
+        self.lbl_dino_status.setText(
+            f"Review: {first}  ({len(self.image_label.temp_annotations)} detections)"
+        )
+
+    def accept_dino_results(self):
+        """Accept current temp_annotations (called from keyPressEvent)."""
+        if not self.image_label.temp_annotations:
+            return
+        image_name = self.current_slice or self.image_file_name
+        if image_name not in self.all_annotations:
+            self.all_annotations[image_name] = {}
+
+        for ann in self.image_label.temp_annotations:
+            class_name = ann["category_name"]
+            # Ensure class exists
+            if class_name not in self.class_mapping:
+                self.add_class(class_name)
+            new_ann = {
+                "segmentation": ann["segmentation"],
+                "bbox": ann.get("bbox"),
+                "category_id": self.class_mapping.get(class_name, 0),
+                "category_name": class_name,
+                "score": ann.get("score", 0.0),
+                "source": "dino",
+                "number": len(self.all_annotations[image_name].get(class_name, [])) + 1,
+            }
+            self.all_annotations[image_name].setdefault(class_name, []).append(new_ann)
+            self.add_annotation_to_list(new_ann)
+
+        self.image_label.temp_annotations = []
+        # Clear batch results if reviewing
+        if hasattr(self, "dino_batch_results"):
+            self.dino_batch_results.pop(image_name, None)
+            if self.dino_batch_results:
+                self._show_dino_batch_review()
+        self.save_current_annotations()
+        self.update_slice_list_colors()
+        self.image_label.update()
+        self.lbl_dino_status.setText("Results accepted.")
+        print("DINO results accepted.")
+
+    def reject_dino_results(self):
+        """Discard current temp_annotations."""
+        self.image_label.temp_annotations = []
+        image_name = self.current_slice or self.image_file_name
+        if hasattr(self, "dino_batch_results"):
+            self.dino_batch_results.pop(image_name, None)
+            if self.dino_batch_results:
+                self._show_dino_batch_review()
+        self.image_label.update()
+        self.lbl_dino_status.setText("Results discarded.")
+        print("DINO results discarded.")
+
+    # --- END DINO Methods ---
+
     def setup_font_size_selector(self):
         font_size_label = QLabel("Font Size:")
         self.font_size_selector = QComboBox()
@@ -2869,6 +3320,9 @@ class ImageAnnotator(QMainWindow):
     def show_coco_json_combiner(self):
         self.coco_json_combiner_dialog = show_coco_json_combiner(self)
 
+    def show_dino_merge_dialog(self):
+        show_dino_merge_dialog(self)
+
     def show_stack_to_slices(self):
         self.stack_to_slices_dialog = show_stack_to_slices(self)
 
@@ -2941,11 +3395,20 @@ class ImageAnnotator(QMainWindow):
 
         # Reset class-related data
         self.class_list.clear()
-        self.allButton.setEnabled(False)
-        self.clrButton.setEnabled(False)
-        
         self.image_label.class_colors.clear()
         self.class_mapping.clear()
+
+        # Reset DINO state
+        self.dino_phrases.clear()
+        self.dino_thresholds.clear()
+        self.dino_class_table.setRowCount(0)
+        self.dino_phrase_panel.set_active_class(None)
+        self.dino_model_loaded = False
+        self.dino_custom_model_path = None
+        self.dino_model_selector.setCurrentIndex(0)
+        self.lbl_dino_status.setText("No DINO model loaded")
+        self.btn_detect_single.setEnabled(False)
+        self.btn_detect_batch.setEnabled(False)
 
         # Clear slices
         self.image_slices.clear()
@@ -3691,6 +4154,10 @@ class ImageAnnotator(QMainWindow):
             self.current_class = class_name
             print(f"Class added successfully: {class_name}")
 
+            # Sync DINO phrase/threshold state
+            self.dino_class_table.add_class(class_name)
+            self.dino_phrase_panel.on_class_added(class_name)
+
             if not self.is_loading_project:
                 self.auto_save()
         except Exception as e:
@@ -4092,6 +4559,10 @@ class ImageAnnotator(QMainWindow):
 
             # Remove annotations for this class from current image
             self.image_label.annotations.pop(class_name, None)
+
+            # Sync DINO state
+            self.dino_class_table.remove_class(class_name)
+            self.dino_phrase_panel.on_class_removed(class_name)
 
             # Update annotation list
             self.update_annotation_list()

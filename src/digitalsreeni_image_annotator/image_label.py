@@ -940,7 +940,11 @@ class ImageLabel(QLabel):
 
     def keyPressEvent(self, event: QKeyEvent):
         if event.key() == Qt.Key_Return or event.key() == Qt.Key_Enter:
-            if self.temp_annotations:
+            if self.temp_annotations and any(
+                a.get("source") == "dino" for a in self.temp_annotations
+            ):
+                self.main_window.accept_dino_results()
+            elif self.temp_annotations:
                 self.accept_temp_annotations()
             elif self.temp_sam_prediction:
                 self.main_window.accept_sam_prediction()
@@ -965,6 +969,10 @@ class ImageLabel(QLabel):
                 self.sam_negative_points = []
                 self.clear_temp_sam_prediction()
                 self.update()
+            elif self.temp_annotations and any(
+                a.get("source") == "dino" for a in self.temp_annotations
+            ):
+                self.main_window.reject_dino_results()
             elif self.temp_annotations:
                 self.discard_temp_annotations()
             elif self.sam_magic_wand_active:

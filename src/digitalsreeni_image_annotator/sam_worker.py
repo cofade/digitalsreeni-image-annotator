@@ -107,12 +107,64 @@ def _predicted_bbox_area_ratio(pred_contour: list, user_bbox: list) -> float:
 
 # ── core SAM runner ──────────────────────────────────────────────────────────
 
+def _is_single_bbox(value) -> bool:
+    """Return True if value is a single bbox [x1,y1,x2,y2] (list of 4 numbers)."""
+    return (
+        isinstance(value, list)
+        and len(value) == 4
+        and all(isinstance(v, (int, float)) for v in value)
+    )
+
+
+def _filter_and_rank_masks(
+    masks, confidences, user_bbox, positive_pts, negative_pts
+) -> dict | None:
+    """Apply hard constraints and return the best single mask as a dict."""
+    best_result = None
+    best_score = -1.0
+
+    for i, mask in enumerate(masks):
+        contour = mask_to_polygon(mask)
+        if contour is None:
+            continue
+
+        score = float(confidences[i]) if i < len(confidences) else 0.0
+        mask_pixels = int(mask.sum())
+
+        if user_bbox is not None:
+            ratio = _predicted_bbox_area_ratio(contour, user_bbox)
+            if ratio < 0.20:
+                continue
+            ux, uy, ux2, uy2 = user_bbox
+            uw, uh = ux2 - ux, uy2 - uy
+            px, py, px2, py2 = _bbox_of_contour(contour)
+            pw, ph = px2 - px, py2 - py
+            if pw < 0.5 * uw or ph < 0.5 * uh:
+                continue
+            if pw > 1.5 * uw or ph > 1.5 * uh:
+                continue
+
+        if positive_pts is not None and negative_pts is not None:
+            if not _check_points(contour, positive_pts, negative_pts):
+                continue
+
+        if mask_pixels > best_score:
+            best_score = mask_pixels
+            best_result = {
+                "segmentation": contour,
+                "score": score,
+                "mask_pixels": mask_pixels,
+            }
+
+    return best_result
+
+
 def run_sam(
     image_path: str,
     model_name: str,
     bboxes: list | None = None,
     points: dict | None = None,
-) -> dict:
+) -> dict | list[dict]:
     from ultralytics import SAM
 
     _log_device()
@@ -132,69 +184,63 @@ def run_sam(
         user_bbox = None
         positive_pts = pos
         negative_pts = neg
+
+        masks = results[0].masks.data.cpu().numpy()
+        confidences = results[0].boxes.conf.cpu().numpy()
+        best = _filter_and_rank_masks(masks, confidences, user_bbox, positive_pts, negative_pts)
+
+        if best is None:
+            return {"error": "No SAM mask matches the given constraints. Try repositioning positive/negative points."}
+        return {"segmentation": best["segmentation"], "score": best["score"]}
+
     elif bboxes is not None:
-        results = sam_model(image_np, bboxes=[bboxes])
-        user_bbox = bboxes
-        positive_pts = []
-        negative_pts = []
-    else:
-        return {"error": "No prompts provided."}
+        is_batch = not _is_single_bbox(bboxes)
+        sam_bboxes = bboxes if is_batch else [bboxes]
 
-    masks = results[0].masks.data.cpu().numpy()
-    confidences = results[0].boxes.conf.cpu().numpy()
+        # Ultralytics always returns [Results] (single Results object)
+        results = sam_model(image_np, bboxes=sam_bboxes)
+        res = results[0]
 
-    best_result = None
-    best_score = -1.0
+        if not (hasattr(res, "masks") and res.masks is not None):
+            return [{"error": "No mask generated."}] * len(sam_bboxes) if is_batch else {"error": "No mask generated."}
 
-    for i, mask in enumerate(masks):
-        contour = mask_to_polygon(mask)
-        if contour is None:
-            continue
+        masks = res.masks.data.cpu().numpy()  # (N, H, W)
+        confidences = res.boxes.conf.cpu().numpy() if hasattr(res.boxes, "conf") else np.zeros(len(masks))
 
-        score = float(confidences[i]) if i < len(confidences) else 0.0
-        mask_pixels = int(mask.sum())
-
-        # --- hard constraints ---
-        if user_bbox is not None:
-            ratio = _predicted_bbox_area_ratio(contour, user_bbox)
-            if ratio < 0.20:          # bbox smaller than 20% of drawn box
+        output = []
+        for i in range(len(masks)):
+            mask = masks[i]
+            score = float(confidences[i]) if i < len(confidences) else 0.0
+            contour = mask_to_polygon(mask)
+            if contour is None:
+                output.append({"error": "No valid mask polygon."})
                 continue
-            # Also require bbox dimensions within ±20% of user box
+
+            mask_pixels = int(mask.sum())
+            user_bbox = sam_bboxes[i]
+
+            # hard constraints per bbox
+            ratio = _predicted_bbox_area_ratio(contour, user_bbox)
+            if ratio < 0.20:
+                output.append({"error": "Mask too small relative to box."})
+                continue
             ux, uy, ux2, uy2 = user_bbox
             uw, uh = ux2 - ux, uy2 - uy
             px, py, px2, py2 = _bbox_of_contour(contour)
             pw, ph = px2 - px, py2 - py
             if pw < 0.5 * uw or ph < 0.5 * uh:
+                output.append({"error": "Mask dimensions too small."})
                 continue
             if pw > 1.5 * uw or ph > 1.5 * uh:
+                output.append({"error": "Mask dimensions too large."})
                 continue
 
-        if points is not None:
-            if not _check_points(contour, positive_pts, negative_pts):
-                continue
+            output.append({"segmentation": contour, "score": score})
 
-        # --- ranking: prefer larger masks among passing candidates ---
-        if mask_pixels > best_score:
-            best_score = mask_pixels
-            best_result = {
-                "segmentation": contour,
-                "score": score,
-                "mask_pixels": mask_pixels,
-            }
+        return output if is_batch else output[0]
 
-    if best_result is None:
-        hints = []
-        if user_bbox:
-            hints.append("Try drawing a tighter or larger box around the object.")
-        if positive_pts or negative_pts:
-            hints.append("Try repositioning positive/negative points.")
-        hint = " " + " ".join(hints) if hints else ""
-        return {"error": f"No SAM mask matches the given constraints.{hint}"}
-
-    return {
-        "segmentation": best_result["segmentation"],
-        "score": best_result["score"],
-    }
+    else:
+        return {"error": "No prompts provided."}
 
 
 def main():

@@ -202,3 +202,52 @@ class SAMUtils:
             "segmentation": result["segmentation"],
             "score": result["score"],
         }
+
+    def apply_sam_predictions_batch(self, image, bboxes):
+        """
+        Segment multiple bounding boxes in a single subprocess call.
+
+        Parameters
+        ----------
+        image : QImage
+        bboxes : list[list[float]]
+            List of [x1, y1, x2, y2] boxes.
+
+        Returns
+        -------
+        list[dict] | None
+            Each dict: {"segmentation": [...], "score": float}
+            or {"error": str} if that box failed.
+        """
+        if not self.current_sam_model:
+            print("No SAM model selected.")
+            return None
+        if not bboxes:
+            return []
+
+        try:
+            tmp_path = self._save_image_temp(image)
+            request = {
+                "image_path": tmp_path,
+                "model_name": self.current_sam_model,
+                "bboxes": [list(b) for b in bboxes],
+            }
+            result = self._send_request(request)
+        except Exception:
+            traceback.print_exc()
+            return None
+        finally:
+            try:
+                os.unlink(tmp_path)
+            except OSError:
+                pass
+
+        if "error" in result:
+            print(f"SAM worker error: {result['error']}")
+            return None
+
+        if isinstance(result, list):
+            return result
+
+        # Fallback: single result wrapped in list
+        return [result]

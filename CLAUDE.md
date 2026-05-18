@@ -129,11 +129,52 @@ See [Runtime View](docs/arc42/06_runtime_view.md#multi-dimensional-image-loading
 
 ## Development Workflow
 
-1. **Test manually** - No automated tests, run full application to verify
-2. **Test on Windows/macOS** if possible
-3. **Support dark mode** - Use both stylesheets, check rendering
-4. **Consider memory** - Large images and stacks can exhaust RAM
-5. **Follow PyQt5 patterns** - Use signals/slots, existing widget styles
+**CRITICAL: Always use feature branches — NEVER commit directly to master.**
+
+| Step | Action | Notes |
+|------|--------|-------|
+| 1 | Create branch: `git checkout -b feature/short-description` | Before any changes |
+| 2 | Implement feature | Follow patterns below |
+| 3 | Run manual tests | See Testing Checklist |
+| 4 | Update arc42 docs if behavior changed | `docs/arc42/` — see Documentation section |
+| 5 | **Run senior reviewer agent** | `.claude/agents/senior-reviewer.md` — mandatory quality gate before every PR |
+| 6 | Commit: `feat: Description` or `fix: Description` | Clear, descriptive messages |
+| 7 | Push & create PR | `git push origin feature/branch` |
+
+### Testing Checklist (Manual — No Automated Tests)
+
+Before opening a PR, verify at minimum:
+
+1. **Launch the app** — no import errors, main window renders
+2. **Golden path** — perform the new feature's primary workflow end-to-end
+3. **Edge cases** — empty state, cancel/escape, large images, missing model files
+4. **Dark mode** — toggle and check rendering of new UI elements
+5. **Save/load roundtrip** — if the feature touches `.iap` project files, save, close, reopen, verify state restored
+6. **Adjacent features** — verify no regression in SAM, annotation tools, export formats
+7. **Subprocess features** — if touching `sam_worker.py` or `dino_worker.py`, verify inference still works (model loads, returns masks/boxes)
+
+### arc42 Documentation Update Rules
+
+When a change affects behavior documented in `docs/arc42/`, update the docs in the same PR:
+
+| Change Type | Update Target |
+|-------------|---------------|
+| New component/module | `05_building_block_view.md` — add to component table |
+| Changed runtime behavior | `06_runtime_view.md` — update workflow description |
+| New UI pattern or concept | `08_crosscutting_concepts.md` — add section |
+| Architecture decision | `09_architecture_decisions.md` — record ADR |
+| New domain term | `12_glossary.md` — add definition |
+
+### Quality Gate — Senior Reviewer
+
+Before every PR, run the senior reviewer agent (`.claude/agents/senior-reviewer.md`).
+
+This is **mandatory** — the agent performs an independent end-of-implementation review:
+- Reads the actual diff, not commit messages
+- Ranks issues P0 (blocks merge) / P1 (should fix) / P2 (nit)
+- Checks CLAUDE.md compliance (feature branches, coordinate systems, `is_loading_project` guards, DINO config persistence, subprocess isolation)
+
+Address all P0s before merging. Address P1s unless there's explicit justification.
 
 ## Known Constraints
 

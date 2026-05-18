@@ -26,7 +26,7 @@ Cover the following dimensions; only report findings, not the dimensions themsel
 1. **Correctness against the user story / acceptance criteria.** Identify gaps (claimed but not implemented), overreach (scope creep), and silent regressions in adjacent code.
 2. **Code quality and patterns.** Does new code follow existing patterns in the codebase, or did the author invent a parallel mechanism? Premature abstractions, copy-paste duplication, defensive code for impossible states, swallowed exceptions, fallbacks that hide failures, half-finished implementations. PyQt5 specifics: signal/slot wiring, widget lifecycle, threading off the GUI thread, coordinate-system bugs.
 3. **Tests.** This project has no automated tests (yet). For any new feature, flag whether manual testing instructions are at least present in the commit message or a plan file. If a feature could regress silently, that's P1 minimum.
-4. **Documentation accuracy.** Where the change touches behaviour described in docs (`CLAUDE.md`, arc42 chapters under `docs/arc42/`), do the docs still match? Documentation drift is debt that compounds; flag it.
+4. **Documentation accuracy.** Where the change touches behaviour described in docs (`CLAUDE.md`, arc42 chapters under `docs/`), do the docs still match? Documentation drift is debt that compounds; flag it.
 5. **Cross-document consistency.** When several docs reference the same concept, do they agree after the change? Re-grep for stale references.
 6. **Hidden contracts.** File-format compatibility (`.iap` project files), export shape consistency, settings keys, signal arguments crossing widget boundaries. Drift between caller and callee is a major source of silent regressions.
 7. **Security and operational risk.** Unsafe file/network handling, path traversal in import/export, hardcoded paths, subprocess injection vulnerabilities.
@@ -36,6 +36,21 @@ Cover the following dimensions; only report findings, not the dimensions themsel
    - `is_loading_project` guard checked before save operations?
    - DINO config persisted in `.iap` with backward compat?
    - No torch/transformers imports in main process (subprocess-only)?
+   - **Worker subprocess PyQt isolation (ADR-011).** If `sam_worker.py` or `dino_worker.py` was touched, run this one-liner — it must finish without `PyQt5 loaded: True`. A failure here re-introduces the WinError 1114 DLL load-order bug on Windows + Python 3.14.
+
+     ```bash
+     python -c "
+     import sys, importlib.util
+     class G:
+         loaded=False
+         def find_module(self, n, p=None):
+             if n=='PyQt5' or n.startswith('PyQt5.'): self.loaded=True; raise ImportError(n)
+     g=G(); sys.meta_path.insert(0,g)
+     for f in ('src/digitalsreeni_image_annotator/sam_worker.py','src/digitalsreeni_image_annotator/dino_worker.py'):
+         s=importlib.util.spec_from_file_location('w', f)
+         m=importlib.util.module_from_spec(s); s.loader.exec_module(m)
+     print('PyQt5 loaded:', g.loaded)"
+     ```
 
 ## How to investigate
 

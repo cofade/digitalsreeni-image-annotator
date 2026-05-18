@@ -471,11 +471,21 @@ class ImageAnnotator(QMainWindow):
 
         # Restore DINO configuration if present. Classes were created above
         # via add_class(), so the threshold table already has rows for them;
-        # we just push the saved values into the existing widgets.
+        # we just push the saved values into the existing widgets. Filter
+        # out any keys that reference classes no longer in the project
+        # (hand-edited .iap, class deleted between sessions) so stale state
+        # doesn't get round-tripped on the next save.
         dino_cfg = project_data.get("dino_config", {})
+        valid_classes = set(self.class_mapping.keys())
+
         phrases = dino_cfg.get("phrases", {})
         if phrases:
-            self.dino_phrase_panel.set_phrases(phrases)
+            kept = {k: v for k, v in phrases.items() if k in valid_classes}
+            for orphan in phrases.keys() - kept.keys():
+                print(f"  Skipped saved DINO phrases for unknown class "
+                      f"'{orphan}' — class is not in the current project.")
+            self.dino_phrase_panel.set_phrases(kept)
+
         for cls_name, thr in dino_cfg.get("thresholds", {}).items():
             ok = self.dino_class_table.set_thresholds(
                 cls_name,
@@ -484,9 +494,6 @@ class ImageAnnotator(QMainWindow):
                 thr.get("nms", 0.50),
             )
             if not ok:
-                # Saved thresholds reference a class that no longer exists
-                # (e.g. hand-edited .iap or deleted class). Surface it instead
-                # of silently dropping the values.
                 print(f"  Skipped saved DINO thresholds for unknown class "
                       f"'{cls_name}' — class is not in the current project.")
 
@@ -3088,6 +3095,11 @@ class ImageAnnotator(QMainWindow):
             image_name = img_info["file_name"]
             image_path = self.image_paths.get(image_name)
             if not image_path or not os.path.exists(image_path):
+                # Multi-dimensional image slices live in self.image_slices,
+                # not self.image_paths — batch detection on stacks isn't
+                # supported yet. Surface the skip rather than dropping silently.
+                print(f"  Skipping '{image_name}' (no resolvable file path; "
+                      f"multi-dimensional slices aren't supported in batch).")
                 continue
 
             # Load image as QImage for DINO + SAM

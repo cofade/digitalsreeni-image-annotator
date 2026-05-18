@@ -132,19 +132,10 @@ class DINOUtils:
             print(f"Unknown DINO model: {model_name}")
             return None
 
-        # Convert relative paths to absolute from project root
-        if not os.path.isabs(model_path):
-            # Try relative to the package directory, then cwd
-            abs_from_pkg = os.path.join(
-                os.path.dirname(os.path.dirname(os.path.abspath(__file__))),
-                model_path
-            )
-            if os.path.exists(abs_from_pkg):
-                model_path = abs_from_pkg
-            else:
-                abs_from_cwd = os.path.join(os.getcwd(), model_path)
-                if os.path.exists(abs_from_cwd):
-                    model_path = abs_from_cwd
+        # Both branches (preset and custom) now produce absolute paths:
+        # GDINO_MODEL_PATHS is built from models_base_dir(); the custom
+        # path comes from QFileDialog.getExistingDirectory which is always
+        # absolute. No further normalisation needed.
 
         tmp_path = None
         try:

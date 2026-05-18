@@ -477,12 +477,18 @@ class ImageAnnotator(QMainWindow):
         if phrases:
             self.dino_phrase_panel.set_phrases(phrases)
         for cls_name, thr in dino_cfg.get("thresholds", {}).items():
-            self.dino_class_table.set_thresholds(
+            ok = self.dino_class_table.set_thresholds(
                 cls_name,
                 thr.get("box", 0.25),
                 thr.get("txt", 0.25),
                 thr.get("nms", 0.50),
             )
+            if not ok:
+                # Saved thresholds reference a class that no longer exists
+                # (e.g. hand-edited .iap or deleted class). Surface it instead
+                # of silently dropping the values.
+                print(f"  Skipped saved DINO thresholds for unknown class "
+                      f"'{cls_name}' — class is not in the current project.")
 
         # Update UI
         self.update_ui()
@@ -2887,6 +2893,19 @@ class ImageAnnotator(QMainWindow):
         if model_path and os.path.exists(model_path):
             return True
 
+        # huggingface_hub is the only way to fetch the weights. Surface the
+        # actionable install hint if it's missing rather than the generic
+        # "Could not download" message.
+        try:
+            import huggingface_hub  # noqa: F401
+        except ImportError:
+            QMessageBox.critical(
+                self, "Missing Dependency",
+                f"Cannot download {model_name}: the huggingface_hub package "
+                "is not installed.\n\nRun:\n    pip install huggingface_hub",
+            )
+            return False
+
         self.lbl_dino_status.setText(f"Downloading {model_name}...")
         QApplication.processEvents()
         try:
@@ -3136,17 +3155,22 @@ class ImageAnnotator(QMainWindow):
             if "error" in s:
                 continue
             class_name = r["class_name"]
-            # Auto-create the class if DINO returned a label we don't know about
-            # (matches single-image accept_dino_results behaviour).
+            # DINO only returns labels that came from class_configs (which the
+            # parent built from the class table), so this should never trigger.
+            # Skip with a warning rather than auto-creating a class mid-batch
+            # (which would fan out auto_save() per new class).
             if class_name not in self.class_mapping:
-                self.add_class(class_name)
+                print(f"  Skipping DINO result for unknown class '{class_name}'")
+                continue
+            existing = target.get(class_name, [])
+            number = max((a.get("number", 0) for a in existing), default=0) + 1
             ann = {
                 "segmentation": s["segmentation"],
-                "category_id": self.class_mapping.get(class_name, 0),
+                "category_id": self.class_mapping[class_name],
                 "category_name": class_name,
                 "score": r["score"],
                 "source": "dino",
-                "number": len(target.get(class_name, [])) + 1,
+                "number": number,
             }
             target.setdefault(class_name, []).append(ann)
 
@@ -3201,11 +3225,15 @@ class ImageAnnotator(QMainWindow):
 
         for ann in self.image_label.temp_annotations:
             class_name = ann["category_name"]
+            # DINO only returns labels from class_configs (built from the
+            # class table), so unknown classes should never reach this point.
+            # Skip with a warning rather than auto-creating mid-accept.
             if class_name not in self.class_mapping:
-                self.add_class(class_name)
+                print(f"  Skipping DINO result for unknown class '{class_name}'")
+                continue
             new_ann = {
                 "segmentation": ann["segmentation"],
-                "category_id": self.class_mapping.get(class_name, 0),
+                "category_id": self.class_mapping[class_name],
                 "category_name": class_name,
                 "score": ann.get("score", 0.0),
                 "source": "dino",

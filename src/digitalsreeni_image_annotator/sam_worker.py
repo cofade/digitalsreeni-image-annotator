@@ -22,17 +22,22 @@ import cv2
 import numpy as np
 from PIL import Image
 
-# Run as a script (not -m), so the package isn't on sys.path by default.
-# Add the src/ parent so we can import the shared model-path helper.
-_PKG_PARENT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-if _PKG_PARENT not in sys.path:
-    sys.path.insert(0, _PKG_PARENT)
-from digitalsreeni_image_annotator.utils import models_base_dir
+
+# IMPORTANT: do not import from the digitalsreeni_image_annotator package.
+# The package __init__.py imports PyQt5 transitively (via annotator_window),
+# which would trigger the WinError 1114 DLL load-order bug ADR-011 exists to
+# prevent. Inlined helper below mirrors utils.models_base_dir(); keep in sync.
+def _models_base_dir() -> str:
+    pkg_anchor = os.path.dirname(os.path.dirname(os.path.dirname(
+        os.path.abspath(__file__))))
+    if "site-packages" not in pkg_anchor.replace(os.sep, "/"):
+        return os.path.join(pkg_anchor, "models")
+    return os.path.join(os.getcwd(), "models")
 
 
 # SAM weights live under <models_base>/sam/, parallel to the DINO models
 # directories (e.g. <models_base>/grounding-dino-base/).
-SAM_MODELS_DIR = os.path.join(models_base_dir(), "sam")
+SAM_MODELS_DIR = os.path.join(_models_base_dir(), "sam")
 
 MODELS = {
     "SAM 2 tiny": os.path.join(SAM_MODELS_DIR, "sam2_t.pt"),

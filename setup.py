@@ -30,7 +30,7 @@ setup(
     python_requires=">=3.10",
     install_requires=[
         "PyQt5>=5.15.0",
-        "numpy>=2.4.0",  # Python 3.14 requires numpy 2.4+
+        "numpy>=2.0.0",  # pip resolves 2.4+ on Py3.14, 2.2.x on Py3.10 (last 3.10-compatible)
         "Pillow>=10.0.0",
         "tifffile>=2023.0.0",
         "czifile>=2019.7.2",

@@ -26,15 +26,15 @@ Python 3.10+ | PyQt5 5.15.11 | Ultralytics 8.3.27 (SAM 2) | NumPy | OpenCV | Sha
 
 ## Documentation
 
-For detailed architecture and design information, see **[docs/arc42/](docs/arc42/)**:
+For detailed architecture and design information, see **[docs/](docs/)**:
 
-- **[Building Block View](docs/arc42/05_building_block_view.md)** - Components, data model, class responsibilities
-- **[Runtime View](docs/arc42/06_runtime_view.md)** - Workflows and key scenarios
-- **[Cross-cutting Concepts](docs/arc42/08_crosscutting_concepts.md)** - Coordinate systems, conversions, patterns
-- **[Architecture Decisions](docs/arc42/09_architecture_decisions.md)** - Why we made key choices
-- **[Glossary](docs/arc42/12_glossary.md)** - Terms, acronyms, data structures
+- **[Building Block View](docs/05_building_block_view.md)** - Components, data model, class responsibilities
+- **[Runtime View](docs/06_runtime_view.md)** - Workflows and key scenarios
+- **[Cross-cutting Concepts](docs/08_crosscutting_concepts.md)** - Coordinate systems, conversions, patterns
+- **[Architecture Decisions](docs/09_architecture_decisions.md)** - Why we made key choices
+- **[Glossary](docs/12_glossary.md)** - Terms, acronyms, data structures
 
-See [docs/arc42/README.md](docs/arc42/README.md) for full documentation index.
+See [docs/README.md](docs/README.md) for full documentation index.
 
 ## Project Structure
 
@@ -58,7 +58,7 @@ src/digitalsreeni_image_annotator/
 | `ImageLabel` | image_label.py | Image display, zoom/pan, annotation interaction |
 | `SAMUtils` | sam_utils.py | Load SAM models, run inference |
 
-See [Building Block View](docs/arc42/05_building_block_view.md) for detailed class documentation.
+See [Building Block View](docs/05_building_block_view.md) for detailed class documentation.
 
 ## Common Development Tasks
 
@@ -117,7 +117,7 @@ def save_project(self):
 - **Annotations stored**: Image coordinates (unzoomed, absolute pixels)
 - Account for `zoom_factor`, `offset_x`, `offset_y`
 
-See [Cross-cutting Concepts](docs/arc42/08_crosscutting_concepts.md#coordinate-systems) for details.
+See [Cross-cutting Concepts](docs/08_crosscutting_concepts.md#coordinate-systems) for details.
 
 ### Multi-dimensional Images
 - User assigns dimensions (T, Z, C, H, W) via dialog
@@ -125,7 +125,7 @@ See [Cross-cutting Concepts](docs/arc42/08_crosscutting_concepts.md#coordinate-s
 - Each slice annotated independently
 - Stored in `image_slices` dict
 
-See [Runtime View](docs/arc42/06_runtime_view.md#multi-dimensional-image-loading) for workflow.
+See [Runtime View](docs/06_runtime_view.md#multi-dimensional-image-loading) for workflow.
 
 ## Development Workflow
 
@@ -136,7 +136,7 @@ See [Runtime View](docs/arc42/06_runtime_view.md#multi-dimensional-image-loading
 | 1 | Create branch: `git checkout -b feature/short-description` | Before any changes |
 | 2 | Implement feature | Follow patterns below |
 | 3 | Run manual tests | See Testing Checklist |
-| 4 | Update arc42 docs if behavior changed | `docs/arc42/` — see Documentation section |
+| 4 | Update arc42 docs if behavior changed | `docs/` — see Documentation section |
 | 5 | **Run senior reviewer agent** | `.claude/agents/senior-reviewer.md` — mandatory quality gate before every PR |
 | 6 | Commit: `feat: Description` or `fix: Description` | Clear, descriptive messages |
 | 7 | Push & create PR | `git push origin feature/branch` |
@@ -155,7 +155,7 @@ Before opening a PR, verify at minimum:
 
 ### arc42 Documentation Update Rules
 
-When a change affects behavior documented in `docs/arc42/`, update the docs in the same PR:
+When a change affects behavior documented in `docs/`, update the docs in the same PR:
 
 | Change Type | Update Target |
 |-------------|---------------|
@@ -184,7 +184,7 @@ Address all P0s before merging. Address P1s unless there's explicit justificatio
 - SAM 2 large crashes on limited RAM
 - YOLO training not supported for multi-dimensional images
 
-See [Risks and Technical Debt](docs/arc42/11_risks_and_technical_debt.md) for full list.
+See [Risks and Technical Debt](docs/11_risks_and_technical_debt.md) for full list.
 
 ## Keyboard Shortcuts
 

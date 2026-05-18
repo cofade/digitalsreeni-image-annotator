@@ -103,12 +103,17 @@ class SAMUtils:
             if v:
                 env[possible] = v
                 break
+        # Force the worker to write UTF-8 so cp1252 (Windows) doesn't choke
+        # on non-ASCII bytes from torch/transformers warnings.
+        env["PYTHONIOENCODING"] = "utf-8"
 
         proc = subprocess.run(
             [sys.executable, self._worker_script],
             input=json.dumps(request) + "\n",
             capture_output=True,
             text=True,
+            encoding="utf-8",
+            errors="replace",
             env=env,
         )
 

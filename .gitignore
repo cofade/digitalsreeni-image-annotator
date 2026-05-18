@@ -1,12 +1,14 @@
-sam2_b.pt
-sam2_l.pt
-sam2_s.pt
-sam2_t.pt
-sam2.1_b.pt
-sam2.1_l.pt
-sam2.1_s.pt
-sam2.1_t.pt
+# Model weights and downloaded assets
+models/
+*.pt
+*.pth
+*.onnx
+*.safetensors
 
+# User project files
+*.iap
+
+# Local tooling
 .claude
 .venv
 
@@ -39,3 +41,22 @@ wheels/
 htmlcov/
 .tox/
 .nox/
+
+# IDE / editor
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# OS metadata
+.DS_Store
+Thumbs.db
+desktop.ini
+
+# Logs
+*.log
+
+# Environment / secrets
+.env
+.env.local
+.env.*.local

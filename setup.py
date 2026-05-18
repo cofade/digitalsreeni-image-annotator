@@ -41,7 +41,11 @@ setup(
         "plotly>=5.0.0",
         "shapely>=2.0.0",
         "pystackreg>=0.2.7",
-        "pydicom>=2.3.0"
+        "pydicom>=2.3.0",
+        "torch>=2.0.0",
+        "torchvision>=0.15.0",
+        "transformers>=4.40.0",
+        "huggingface_hub>=0.20.0"
     ],
     entry_points={
         "console_scripts": [

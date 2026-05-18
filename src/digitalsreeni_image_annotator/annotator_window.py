@@ -2567,19 +2567,13 @@ class ImageAnnotator(QMainWindow):
         dino_widget = QWidget()
         dino_layout = QVBoxLayout(dino_widget)
 
-        dino_model_layout = QHBoxLayout()
         self.dino_model_selector = QComboBox()
         self.dino_model_selector.addItem("Pick a DINO Model")
         self.dino_model_selector.addItem("grounding-dino-base")
         self.dino_model_selector.addItem("grounding-dino-tiny")
         self.dino_model_selector.addItem("Custom / fine-tuned (browse)")
         self.dino_model_selector.currentTextChanged.connect(self._on_dino_model_changed)
-        dino_model_layout.addWidget(self.dino_model_selector, 1)
-        self.btn_load_dino = QPushButton("Load")
-        self.btn_load_dino.setFixedWidth(50)
-        self.btn_load_dino.clicked.connect(self.load_dino_models)
-        dino_model_layout.addWidget(self.btn_load_dino)
-        dino_layout.addLayout(dino_model_layout)
+        dino_layout.addWidget(self.dino_model_selector)
 
         # Custom model browse row (hidden by default)
         self.dino_browse_row = QWidget()
@@ -2834,66 +2828,92 @@ class ImageAnnotator(QMainWindow):
 
     # --- DINO / LLM-Assisted Detection Methods ---
 
+    def _resolve_dino_model_path(self, model_name: str) -> str | None:
+        """Return the absolute path for a preset DINO model, or None if unknown."""
+        from .dino_utils import GDINO_MODEL_PATHS
+        model_path = GDINO_MODEL_PATHS.get(model_name)
+        if not model_path:
+            return None
+        if os.path.isabs(model_path):
+            return model_path
+        abs_from_pkg = os.path.join(
+            os.path.dirname(os.path.dirname(os.path.abspath(__file__))),
+            model_path,
+        )
+        if os.path.exists(abs_from_pkg):
+            return abs_from_pkg
+        abs_from_cwd = os.path.join(os.getcwd(), model_path)
+        if os.path.exists(abs_from_cwd):
+            return abs_from_cwd
+        # Default to the package-relative path; download will land here.
+        return abs_from_pkg
+
     def _on_dino_model_changed(self, text):
-        """Show/hide custom model browse row based on selection."""
+        """Selection → ready state. Downloads happen lazily on first Detect."""
         self.dino_browse_row.setVisible(text == "Custom / fine-tuned (browse)")
 
-    def load_dino_models(self):
-        model_name = self.dino_model_selector.currentText()
-        if model_name == "Pick a DINO Model":
+        if text == "Pick a DINO Model":
             self.dino_model_loaded = False
             self.lbl_dino_status.setText("No DINO model loaded")
             self.btn_detect_single.setEnabled(False)
             self.btn_detect_batch.setEnabled(False)
             return
 
-        if model_name == "Custom / fine-tuned (browse)":
-            if not self.dino_custom_model_path or not os.path.exists(self.dino_custom_model_path):
-                QMessageBox.warning(self, "No Model Path",
-                                    "Please browse to a custom model folder first.")
-                return
-            model_path = self.dino_custom_model_path
-        else:
-            from .dino_utils import GDINO_MODEL_PATHS
-            model_path = GDINO_MODEL_PATHS.get(model_name)
-            if model_path and not os.path.isabs(model_path):
-                abs_from_pkg = os.path.join(
-                    os.path.dirname(os.path.dirname(os.path.abspath(__file__))),
-                    model_path
+        if text == "Custom / fine-tuned (browse)":
+            if self.dino_custom_model_path and os.path.exists(self.dino_custom_model_path):
+                self.dino_model_loaded = True
+                self.lbl_dino_status.setText(
+                    f"Ready: {os.path.basename(self.dino_custom_model_path)}"
                 )
-                if os.path.exists(abs_from_pkg):
-                    model_path = abs_from_pkg
-                else:
-                    abs_from_cwd = os.path.join(os.getcwd(), model_path)
-                    if os.path.exists(abs_from_cwd):
-                        model_path = abs_from_cwd
-
-        # Check path exists; if not, offer to download
-        if model_path and not os.path.exists(model_path):
-            reply = QMessageBox.question(
-                self, "Model Not Found",
-                f"Model not found at:\n{model_path}\n\nDownload from Hugging Face Hub?",
-                QMessageBox.Yes | QMessageBox.No
-            )
-            if reply == QMessageBox.Yes:
-                downloaded = self.dino_utils.download_model(model_name)
-                if not downloaded:
-                    return
-                model_path = downloaded
+                self.btn_detect_single.setEnabled(True)
+                self.btn_detect_batch.setEnabled(True)
             else:
-                return
+                self.dino_model_loaded = False
+                self.lbl_dino_status.setText("Browse for a custom model folder")
+                self.btn_detect_single.setEnabled(False)
+                self.btn_detect_batch.setEnabled(False)
+            return
 
+        # Standard preset (grounding-dino-base/tiny)
         self.dino_model_loaded = True
-        self.lbl_dino_status.setText(f"Loaded: {model_name}")
         self.btn_detect_single.setEnabled(True)
         self.btn_detect_batch.setEnabled(True)
-        print(f"DINO model ready: {model_name}")
+        model_path = self._resolve_dino_model_path(text)
+        if model_path and os.path.exists(model_path):
+            self.lbl_dino_status.setText(f"Ready: {text}")
+        else:
+            self.lbl_dino_status.setText(f"{text} — will download on first detection")
+
+    def _ensure_dino_model_downloaded(self, model_name: str) -> bool:
+        """If the preset model isn't on disk yet, download it. Returns success."""
+        if model_name in ("Pick a DINO Model", "Custom / fine-tuned (browse)"):
+            return True  # Custom path is validated elsewhere; no download for it.
+        model_path = self._resolve_dino_model_path(model_name)
+        if model_path and os.path.exists(model_path):
+            return True
+
+        self.lbl_dino_status.setText(f"Downloading {model_name}...")
+        QApplication.processEvents()
+        try:
+            downloaded = self.dino_utils.download_model(model_name)
+        except Exception as e:
+            QMessageBox.critical(self, "Download Failed", f"{model_name}:\n{e}")
+            return False
+        if not downloaded:
+            QMessageBox.critical(
+                self, "Download Failed",
+                f"Could not download {model_name} from Hugging Face Hub.",
+            )
+            return False
+        return True
 
     def browse_dino_model(self):
         path = QFileDialog.getExistingDirectory(self, "Select DINO Model Folder")
         if path:
             self.dino_custom_model_path = path
             self.lbl_dino_custom.setText(os.path.basename(path))
+            # Refresh ready state now that a path is set.
+            self._on_dino_model_changed(self.dino_model_selector.currentText())
 
     def on_dino_class_row_changed(self):
         name = self.dino_class_table.selected_class_name()
@@ -2916,7 +2936,7 @@ class ImageAnnotator(QMainWindow):
     def run_dino_detection_single(self):
         if not self.dino_model_loaded:
             QMessageBox.warning(self, "No DINO Model",
-                                "Please load a DINO model first.")
+                                "Please pick a DINO model first.")
             return
         if not self.current_image or self.current_image.isNull():
             QMessageBox.warning(self, "No Image",
@@ -2932,6 +2952,12 @@ class ImageAnnotator(QMainWindow):
 
         self.btn_detect_single.setEnabled(False)
         self.btn_detect_batch.setEnabled(False)
+
+        if not self._ensure_dino_model_downloaded(model_name):
+            self.btn_detect_single.setEnabled(True)
+            self.btn_detect_batch.setEnabled(True)
+            return
+
         self.lbl_dino_status.setText("Detecting...")
         QApplication.processEvents()
 
@@ -2983,7 +3009,6 @@ class ImageAnnotator(QMainWindow):
                 continue
             temp_annotations.append({
                 "segmentation": s["segmentation"],
-                "bbox": r["bbox"],
                 "category_name": r["class_name"],
                 "score": r["score"],
                 "source": "dino",
@@ -2991,6 +3016,8 @@ class ImageAnnotator(QMainWindow):
             })
 
         self.image_label.temp_annotations = temp_annotations
+        # Focus the canvas so Enter/Esc accept/reject without an extra click.
+        self.image_label.setFocus()
         self.image_label.update()
         self.lbl_dino_status.setText(
             f"Loaded: {model_name}  |  {len(temp_annotations)} mask(s) ready"
@@ -3000,7 +3027,7 @@ class ImageAnnotator(QMainWindow):
     def run_dino_detection_batch(self):
         if not self.dino_model_loaded:
             QMessageBox.warning(self, "No DINO Model",
-                                "Please load a DINO model first.")
+                                "Please pick a DINO model first.")
             return
         if not self.all_images:
             QMessageBox.warning(self, "No Images",
@@ -3012,6 +3039,9 @@ class ImageAnnotator(QMainWindow):
         if not class_configs:
             QMessageBox.warning(self, "No Classes",
                                 "Please add at least one class with phrases.")
+            return
+
+        if not self._ensure_dino_model_downloaded(model_name):
             return
 
         auto_accept = self.dino_batch_mode.currentText() == "Auto-accept all detections"
@@ -3086,7 +3116,6 @@ class ImageAnnotator(QMainWindow):
             class_name = r["class_name"]
             ann = {
                 "segmentation": s["segmentation"],
-                "bbox": r["bbox"],
                 "category_id": self.class_mapping.get(class_name, 0),
                 "category_name": class_name,
                 "score": r["score"],
@@ -3105,7 +3134,6 @@ class ImageAnnotator(QMainWindow):
             if "error" not in s:
                 valid.append({
                     "segmentation": s["segmentation"],
-                    "bbox": r["bbox"],
                     "category_name": r["class_name"],
                     "score": r["score"],
                     "source": "dino",
@@ -3128,6 +3156,7 @@ class ImageAnnotator(QMainWindow):
                 self.switch_image(item)
                 break
         self.image_label.temp_annotations = self.dino_batch_results.get(first, [])
+        self.image_label.setFocus()
         self.image_label.update()
         self.lbl_dino_status.setText(
             f"Review: {first}  ({len(self.image_label.temp_annotations)} detections)"
@@ -3138,24 +3167,22 @@ class ImageAnnotator(QMainWindow):
         if not self.image_label.temp_annotations:
             return
         image_name = self.current_slice or self.image_file_name
-        if image_name not in self.all_annotations:
-            self.all_annotations[image_name] = {}
 
         for ann in self.image_label.temp_annotations:
             class_name = ann["category_name"]
-            # Ensure class exists
             if class_name not in self.class_mapping:
                 self.add_class(class_name)
             new_ann = {
                 "segmentation": ann["segmentation"],
-                "bbox": ann.get("bbox"),
                 "category_id": self.class_mapping.get(class_name, 0),
                 "category_name": class_name,
                 "score": ann.get("score", 0.0),
                 "source": "dino",
-                "number": len(self.all_annotations[image_name].get(class_name, [])) + 1,
             }
-            self.all_annotations[image_name].setdefault(class_name, []).append(new_ann)
+            # Append to the live image_label dict; save_current_annotations()
+            # below syncs it into self.all_annotations. add_annotation_to_list
+            # assigns the per-class "number" used for display.
+            self.image_label.annotations.setdefault(class_name, []).append(new_ann)
             self.add_annotation_to_list(new_ann)
 
         self.image_label.temp_annotations = []

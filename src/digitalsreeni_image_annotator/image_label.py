@@ -356,10 +356,10 @@ class ImageLabel(QLabel):
             painter.setPen(QPen(color, 2 / self.zoom_factor, Qt.DashLine))
             painter.setBrush(QBrush(color))
 
-            if "bbox" in annotation:
-                x, y, w, h = annotation["bbox"]
-                painter.drawRect(QRectF(x, y, w, h))
-            elif "segmentation" in annotation:
+            # Prefer segmentation polygon over bbox when both are present
+            # (DINO+SAM temp annotations carry both — the polygon is the mask).
+            points = None
+            if "segmentation" in annotation:
                 points = [
                     QPointF(float(x), float(y))
                     for x, y in zip(
@@ -368,17 +368,20 @@ class ImageLabel(QLabel):
                     )
                 ]
                 painter.drawPolygon(QPolygonF(points))
+            elif "bbox" in annotation:
+                x, y, w, h = annotation["bbox"]
+                painter.drawRect(QRectF(x, y, w, h))
 
             # Draw label and score
             painter.setFont(QFont("Arial", int(12 / self.zoom_factor)))
             label = f"{annotation['category_name']} {annotation['score']:.2f}"
-            if "bbox" in annotation:
-                x, y, _, _ = annotation["bbox"]
-                painter.drawText(QPointF(x, y - 5), label)
-            elif "segmentation" in annotation:
+            if points is not None:
                 centroid = self.calculate_centroid(points)
                 if centroid:
                     painter.drawText(centroid, label)
+            elif "bbox" in annotation:
+                x, y, _, _ = annotation["bbox"]
+                painter.drawText(QPointF(x, y - 5), label)
 
         painter.restore()
 

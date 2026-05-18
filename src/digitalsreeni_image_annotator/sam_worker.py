@@ -23,15 +23,23 @@ import numpy as np
 from PIL import Image
 
 
+# SAM weights live under <project_root>/models/sam/, parallel to the
+# DINO models directory (e.g. models/grounding-dino-base/).
+SAM_MODELS_DIR = os.path.join(
+    os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))),
+    "models",
+    "sam",
+)
+
 MODELS = {
-    "SAM 2 tiny": "sam2_t.pt",
-    "SAM 2 small": "sam2_s.pt",
-    "SAM 2 base": "sam2_b.pt",
-    "SAM 2 large": "sam2_l.pt",
-    "SAM 2.1 tiny": "sam2.1_t.pt",
-    "SAM 2.1 small": "sam2.1_s.pt",
-    "SAM 2.1 base": "sam2.1_b.pt",
-    "SAM 2.1 large": "sam2.1_l.pt",
+    "SAM 2 tiny": os.path.join(SAM_MODELS_DIR, "sam2_t.pt"),
+    "SAM 2 small": os.path.join(SAM_MODELS_DIR, "sam2_s.pt"),
+    "SAM 2 base": os.path.join(SAM_MODELS_DIR, "sam2_b.pt"),
+    "SAM 2 large": os.path.join(SAM_MODELS_DIR, "sam2_l.pt"),
+    "SAM 2.1 tiny": os.path.join(SAM_MODELS_DIR, "sam2.1_t.pt"),
+    "SAM 2.1 small": os.path.join(SAM_MODELS_DIR, "sam2.1_s.pt"),
+    "SAM 2.1 base": os.path.join(SAM_MODELS_DIR, "sam2.1_b.pt"),
+    "SAM 2.1 large": os.path.join(SAM_MODELS_DIR, "sam2.1_l.pt"),
 }
 
 
@@ -170,6 +178,7 @@ def run_sam(
     _log_device()
 
     model_file = MODELS[model_name]
+    os.makedirs(os.path.dirname(model_file), exist_ok=True)
     sam_model = SAM(model_file)
     image_np = load_image(image_path)
 

@@ -36,21 +36,7 @@ Cover the following dimensions; only report findings, not the dimensions themsel
    - `is_loading_project` guard checked before save operations?
    - DINO config persisted in `.iap` with backward compat?
    - No torch/transformers imports in main process (subprocess-only)?
-   - **Worker subprocess PyQt isolation (ADR-011).** If `sam_worker.py` or `dino_worker.py` was touched, run this one-liner — it must finish without `PyQt5 loaded: True`. A failure here re-introduces the WinError 1114 DLL load-order bug on Windows + Python 3.14.
-
-     ```bash
-     python -c "
-     import sys, importlib.util
-     class G:
-         loaded=False
-         def find_module(self, n, p=None):
-             if n=='PyQt5' or n.startswith('PyQt5.'): self.loaded=True; raise ImportError(n)
-     g=G(); sys.meta_path.insert(0,g)
-     for f in ('src/digitalsreeni_image_annotator/sam_worker.py','src/digitalsreeni_image_annotator/dino_worker.py'):
-         s=importlib.util.spec_from_file_location('w', f)
-         m=importlib.util.module_from_spec(s); s.loader.exec_module(m)
-     print('PyQt5 loaded:', g.loaded)"
-     ```
+   - **Worker subprocess PyQt isolation (ADR-011).** If `sam_worker.py` or `dino_worker.py` was touched, run `python tools/check_worker_isolation.py`. Exit code 0 means both workers can be imported without pulling PyQt5 into the interpreter; non-zero means the WinError 1114 DLL load-order bug has been re-introduced. The script uses `importlib.abc.MetaPathFinder.find_spec` (the modern API) plus a `sys.modules` sweep to catch leaks even if a finder is bypassed. Negative-test verified.
 
 ## How to investigate
 

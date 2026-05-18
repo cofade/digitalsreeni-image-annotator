@@ -3094,12 +3094,16 @@ class ImageAnnotator(QMainWindow):
 
             image_name = img_info["file_name"]
             image_path = self.image_paths.get(image_name)
-            if not image_path or not os.path.exists(image_path):
+            if not image_path:
                 # Multi-dimensional image slices live in self.image_slices,
                 # not self.image_paths — batch detection on stacks isn't
                 # supported yet. Surface the skip rather than dropping silently.
-                print(f"  Skipping '{image_name}' (no resolvable file path; "
-                      f"multi-dimensional slices aren't supported in batch).")
+                print(f"  Skipping '{image_name}': no entry in image_paths "
+                      "(multi-dimensional slices aren't supported in batch).")
+                continue
+            if not os.path.exists(image_path):
+                print(f"  Skipping '{image_name}': file missing on disk "
+                      f"({image_path}).")
                 continue
 
             # Load image as QImage for DINO + SAM

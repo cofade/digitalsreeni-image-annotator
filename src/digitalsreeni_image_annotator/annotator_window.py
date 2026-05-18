@@ -193,12 +193,13 @@ class ImageAnnotator(QMainWindow):
         self.current_sam_model = None
         self.sam_utils = SAMUtils()
 
-        # Initialize DINO utils for LLM-assisted detection
+        # Initialize DINO utils for LLM-assisted detection.
+        # Phrases and thresholds are owned by the widgets (PhraseEditorPanel
+        # and ClassThresholdTable); the project save/load reads/writes them
+        # through the widget APIs, not through a shadow dict on self.
         self.dino_utils = DINOUtils()
         self.dino_model_loaded = False
         self.dino_custom_model_path = None
-        self.dino_phrases = {}   # {class_name: [phrase, ...]}
-        self.dino_thresholds = {}  # {class_name: {"box": 0.25, "txt": 0.25, "nms": 0.50}}
 
         # Debounce timer for SAM points: wait 1s after last click before inference
         self.sam_inference_timer = QTimer(self)
@@ -468,12 +469,20 @@ class ImageAnnotator(QMainWindow):
             else:
                 self.add_images_to_list([image_path])
 
-        # Restore DINO configuration if present
+        # Restore DINO configuration if present. Classes were created above
+        # via add_class(), so the threshold table already has rows for them;
+        # we just push the saved values into the existing widgets.
         dino_cfg = project_data.get("dino_config", {})
-        self.dino_phrases = dino_cfg.get("phrases", {})
-        self.dino_thresholds = dino_cfg.get("thresholds", {})
-        if self.dino_phrases:
-            self.dino_phrase_panel.set_phrases(self.dino_phrases)
+        phrases = dino_cfg.get("phrases", {})
+        if phrases:
+            self.dino_phrase_panel.set_phrases(phrases)
+        for cls_name, thr in dino_cfg.get("thresholds", {}).items():
+            self.dino_class_table.set_thresholds(
+                cls_name,
+                thr.get("box", 0.25),
+                thr.get("txt", 0.25),
+                thr.get("nms", 0.50),
+            )
 
         # Update UI
         self.update_ui()
@@ -802,10 +811,10 @@ class ImageAnnotator(QMainWindow):
             "last_modified": datetime.now().isoformat(),
         }
 
-        # Persist DINO configuration
+        # Persist DINO configuration by snapshotting the widgets that own it.
         dino_cfg = {
-            "phrases": dict(self.dino_phrases) if self.dino_phrases else {},
-            "thresholds": dict(self.dino_thresholds) if self.dino_thresholds else {},
+            "phrases": self.dino_phrase_panel.get_all_phrases(),
+            "thresholds": self.dino_class_table.get_thresholds_dict(),
         }
         if dino_cfg["phrases"] or dino_cfg["thresholds"]:
             project_data["dino_config"] = dino_cfg
@@ -2829,24 +2838,10 @@ class ImageAnnotator(QMainWindow):
     # --- DINO / LLM-Assisted Detection Methods ---
 
     def _resolve_dino_model_path(self, model_name: str) -> str | None:
-        """Return the absolute path for a preset DINO model, or None if unknown."""
+        """Return the canonical local path for a preset DINO model, or None if unknown."""
         from .dino_utils import GDINO_MODEL_PATHS
-        model_path = GDINO_MODEL_PATHS.get(model_name)
-        if not model_path:
-            return None
-        if os.path.isabs(model_path):
-            return model_path
-        abs_from_pkg = os.path.join(
-            os.path.dirname(os.path.dirname(os.path.abspath(__file__))),
-            model_path,
-        )
-        if os.path.exists(abs_from_pkg):
-            return abs_from_pkg
-        abs_from_cwd = os.path.join(os.getcwd(), model_path)
-        if os.path.exists(abs_from_cwd):
-            return abs_from_cwd
-        # Default to the package-relative path; download will land here.
-        return abs_from_pkg
+        # GDINO_MODEL_PATHS now returns absolute paths from models_base_dir().
+        return GDINO_MODEL_PATHS.get(model_name)
 
     def _on_dino_model_changed(self, text):
         """Selection → ready state. Downloads happen lazily on first Detect."""
@@ -2937,6 +2932,13 @@ class ImageAnnotator(QMainWindow):
         if not self.dino_model_loaded:
             QMessageBox.warning(self, "No DINO Model",
                                 "Please pick a DINO model first.")
+            return
+        if not self.sam_utils.current_sam_model:
+            QMessageBox.warning(
+                self, "No SAM Model",
+                "DINO produces bounding boxes; SAM is needed to convert them "
+                "into segmentation masks. Please pick a SAM model first.",
+            )
             return
         if not self.current_image or self.current_image.isNull():
             QMessageBox.warning(self, "No Image",
@@ -3029,6 +3031,13 @@ class ImageAnnotator(QMainWindow):
             QMessageBox.warning(self, "No DINO Model",
                                 "Please pick a DINO model first.")
             return
+        if not self.sam_utils.current_sam_model:
+            QMessageBox.warning(
+                self, "No SAM Model",
+                "DINO produces bounding boxes; SAM is needed to convert them "
+                "into segmentation masks. Please pick a SAM model first.",
+            )
+            return
         if not self.all_images:
             QMessageBox.warning(self, "No Images",
                                 "Please load images first.")
@@ -3106,23 +3115,45 @@ class ImageAnnotator(QMainWindow):
             self._show_dino_batch_review()
 
     def _commit_dino_results(self, image_name, dino_results, sam_results):
-        """Commit DINO+SAM results directly to annotations."""
-        if image_name not in self.all_annotations:
-            self.all_annotations[image_name] = {}
+        """Commit DINO+SAM results to annotations for a single image.
+
+        If image_name is the currently-displayed image, route through
+        image_label.annotations so the canvas reflects the change and the
+        next save_current_annotations() doesn't overwrite the additions.
+        Otherwise write directly to the project-level cache.
+        """
+        current_image = self.current_slice or self.image_file_name
+        is_current = image_name == current_image
+
+        if is_current:
+            target = self.image_label.annotations
+        else:
+            if image_name not in self.all_annotations:
+                self.all_annotations[image_name] = {}
+            target = self.all_annotations[image_name]
 
         for r, s in zip(dino_results, sam_results):
             if "error" in s:
                 continue
             class_name = r["class_name"]
+            # Auto-create the class if DINO returned a label we don't know about
+            # (matches single-image accept_dino_results behaviour).
+            if class_name not in self.class_mapping:
+                self.add_class(class_name)
             ann = {
                 "segmentation": s["segmentation"],
                 "category_id": self.class_mapping.get(class_name, 0),
                 "category_name": class_name,
                 "score": r["score"],
                 "source": "dino",
-                "number": len(self.all_annotations[image_name].get(class_name, [])) + 1,
+                "number": len(target.get(class_name, [])) + 1,
             }
-            self.all_annotations[image_name].setdefault(class_name, []).append(ann)
+            target.setdefault(class_name, []).append(ann)
+
+        if is_current:
+            # Sync image_label.annotations -> all_annotations[current] for save.
+            self.save_current_annotations()
+            self.image_label.update()
 
     def _store_dino_batch_results(self, image_name, dino_results, sam_results):
         """Store results for batch review mode."""
@@ -3426,10 +3457,8 @@ class ImageAnnotator(QMainWindow):
         self.class_mapping.clear()
 
         # Reset DINO state
-        self.dino_phrases.clear()
-        self.dino_thresholds.clear()
-        self.dino_class_table.setRowCount(0)
-        self.dino_phrase_panel.set_active_class(None)
+        self.dino_class_table.clear_classes()
+        self.dino_phrase_panel.clear()
         self.dino_model_loaded = False
         self.dino_custom_model_path = None
         self.dino_model_selector.setCurrentIndex(0)

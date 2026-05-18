@@ -22,14 +22,17 @@ import cv2
 import numpy as np
 from PIL import Image
 
+# Run as a script (not -m), so the package isn't on sys.path by default.
+# Add the src/ parent so we can import the shared model-path helper.
+_PKG_PARENT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+if _PKG_PARENT not in sys.path:
+    sys.path.insert(0, _PKG_PARENT)
+from digitalsreeni_image_annotator.utils import models_base_dir
 
-# SAM weights live under <project_root>/models/sam/, parallel to the
-# DINO models directory (e.g. models/grounding-dino-base/).
-SAM_MODELS_DIR = os.path.join(
-    os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))),
-    "models",
-    "sam",
-)
+
+# SAM weights live under <models_base>/sam/, parallel to the DINO models
+# directories (e.g. <models_base>/grounding-dino-base/).
+SAM_MODELS_DIR = os.path.join(models_base_dir(), "sam")
 
 MODELS = {
     "SAM 2 tiny": os.path.join(SAM_MODELS_DIR, "sam2_t.pt"),

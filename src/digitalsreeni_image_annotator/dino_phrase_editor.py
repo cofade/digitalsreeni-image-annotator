@@ -107,6 +107,31 @@ class ClassThresholdTable(QTableWidget):
             })
         return configs
 
+    def get_thresholds_dict(self) -> dict[str, dict[str, float]]:
+        """Return {class_name: {"box": ..., "txt": ..., "nms": ...}} for project save."""
+        return {
+            cfg["name"]: {
+                "box": cfg["box_thr"],
+                "txt": cfg["txt_thr"],
+                "nms": cfg["nms_thr"],
+            }
+            for cfg in self.get_class_configs()
+        }
+
+    def set_thresholds(self, name: str, box: float, txt: float, nms: float) -> bool:
+        """Push saved threshold values into an existing class row. Returns False if class not found."""
+        for r in range(self.rowCount()):
+            if self.item(r, _COL_NAME).text() == name:
+                self.cellWidget(r, _COL_BOX).setValue(box)
+                self.cellWidget(r, _COL_TXT).setValue(txt)
+                self.cellWidget(r, _COL_NMS).setValue(nms)
+                return True
+        return False
+
+    def clear_classes(self):
+        """Remove all rows. Used by clear_all / new project."""
+        self.setRowCount(0)
+
     def get_class_names(self) -> list[str]:
         return [self.item(r, _COL_NAME).text()
                 for r in range(self.rowCount())]
@@ -248,3 +273,10 @@ class PhraseEditorPanel(QWidget):
         self._phrases = {k: list(v) for k, v in phrases.items()}
         if self._active_class:
             self._refresh_list()
+
+    def clear(self):
+        """Wipe all stored phrases. Used by clear_all / new project."""
+        self._phrases.clear()
+        self._active_class = None
+        self.phrase_list.clear()
+        self.setVisible(False)

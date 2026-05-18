@@ -16,6 +16,7 @@ from pathlib import Path
 from PyQt5.QtGui import QImage
 
 from .sam_utils import _qimage_to_numpy
+from .utils import models_base_dir
 
 
 GDINO_MODEL_NAMES = [
@@ -23,9 +24,17 @@ GDINO_MODEL_NAMES = [
     "grounding-dino-tiny",
 ]
 
+
+def _gdino_local_path(model_name: str) -> str:
+    """Canonical local install path for a Grounding DINO model."""
+    return os.path.join(models_base_dir(), model_name)
+
+
+# Kept for backwards compatibility / external callers. Computed lazily via
+# the helper so it always agrees with sam_worker / annotator_window.
 GDINO_MODEL_PATHS = {
-    "grounding-dino-base": "models/grounding-dino-base",
-    "grounding-dino-tiny": "models/grounding-dino-tiny",
+    "grounding-dino-base": _gdino_local_path("grounding-dino-base"),
+    "grounding-dino-tiny": _gdino_local_path("grounding-dino-tiny"),
 }
 
 GDINO_REPO_IDS = {
@@ -165,8 +174,8 @@ class DINOUtils:
 
     def download_model(self, model_name: str):
         """
-        Download model from Hugging Face Hub if not present locally.
-        Returns the local path.
+        Download model from Hugging Face Hub into the canonical local path.
+        Returns the absolute local path on success, or None on error.
         """
         try:
             from huggingface_hub import snapshot_download
@@ -174,19 +183,17 @@ class DINOUtils:
             print("huggingface_hub not installed. Cannot download models.")
             return None
 
-        local_path = GDINO_MODEL_PATHS.get(model_name)
         repo_id = GDINO_REPO_IDS.get(model_name)
         if not repo_id:
             print(f"No repo ID for model: {model_name}")
             return None
 
-        if local_path and os.path.exists(local_path):
+        local_path = GDINO_MODEL_PATHS.get(model_name) or _gdino_local_path(model_name)
+        if os.path.exists(local_path):
             print(f"Model already exists at {local_path}")
             return local_path
 
-        if not local_path:
-            local_path = f"models/{model_name.replace('/', '_')}"
-
+        os.makedirs(os.path.dirname(local_path), exist_ok=True)
         print(f"Downloading {repo_id} -> {local_path} ...")
         snapshot_download(repo_id, local_dir=local_path)
         print(f"Done. Model at {local_path}")

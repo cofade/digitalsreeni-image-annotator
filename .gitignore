@@ -8,8 +8,11 @@ models/
 # User project files
 *.iap
 
-# Local tooling
-.claude
+# Local tooling — .claude is mostly local state, but the senior-reviewer
+# agent definition under .claude/agents/ is tracked (referenced by
+# CLAUDE.md as a mandatory quality gate), so un-ignore that subtree.
+.claude/*
+!.claude/agents/
 .venv
 
 # Python cache and build artifacts

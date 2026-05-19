@@ -13,7 +13,7 @@ import tempfile
 import traceback
 from pathlib import Path
 
-from PyQt5.QtGui import QImage
+from PyQt6.QtGui import QImage
 
 from .sam_utils import _qimage_to_numpy
 from .utils import models_base_dir

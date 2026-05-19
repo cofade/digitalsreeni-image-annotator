@@ -9,11 +9,19 @@ import cv2
 import numpy as np
 import shapely
 from czifile import CziFile
-from PyQt5.QtCore import Qt, QThread, QTimer, pyqtSignal
-from PyQt5.QtGui import QColor, QFont, QIcon, QImage, QKeySequence, QPalette, QPixmap
-from PyQt5.QtWidgets import (
-    QAbstractItemView,
+from PyQt6.QtCore import Qt, QThread, QTimer, pyqtSignal
+from PyQt6.QtGui import (
     QAction,
+    QColor,
+    QFont,
+    QIcon,
+    QImage,
+    QKeySequence,
+    QPalette,
+    QPixmap,
+)
+from PyQt6.QtWidgets import (
+    QAbstractItemView,
     QApplication,
     QButtonGroup,
     QCheckBox,
@@ -527,11 +535,11 @@ class ImageAnnotator(QMainWindow):
             self,
             "Missing Images",
             message,
-            QMessageBox.Yes | QMessageBox.No,
-            QMessageBox.Yes,
+            QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
+            QMessageBox.StandardButton.Yes,
         )
 
-        if reply == QMessageBox.Yes:
+        if reply == QMessageBox.StandardButton.Yes:
             self.load_missing_images(missing_images)
         else:
             self.remove_missing_images(missing_images)
@@ -574,11 +582,11 @@ class ImageAnnotator(QMainWindow):
             self,
             "Load Missing Images",
             message,
-            QMessageBox.Yes | QMessageBox.No,
-            QMessageBox.Yes,
+            QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
+            QMessageBox.StandardButton.Yes,
         )
 
-        if reply == QMessageBox.Yes:
+        if reply == QMessageBox.StandardButton.Yes:
             self.load_missing_images(missing_images)
 
     def load_missing_images(self, missing_images):
@@ -649,13 +657,13 @@ class ImageAnnotator(QMainWindow):
                 self,
                 "Close Project",
                 "Do you want to save the current project before closing?",
-                QMessageBox.Yes | QMessageBox.No | QMessageBox.Cancel,
+                QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No | QMessageBox.StandardButton.Cancel,
             )
 
-            if reply == QMessageBox.Yes:
+            if reply == QMessageBox.StandardButton.Yes:
                 self.remove_all_temp_annotations()  # Remove temp annotations before saving
                 self.save_project(show_message=False)  # Save without showing a message
-            elif reply == QMessageBox.Cancel:
+            elif reply == QMessageBox.StandardButton.Cancel:
                 return  # User cancelled the operation
 
         # Clear all data
@@ -683,10 +691,10 @@ class ImageAnnotator(QMainWindow):
             self,
             "Delete Class",
             f"Are you sure you want to delete the class '{class_name}'?",
-            QMessageBox.Yes | QMessageBox.No,
-            QMessageBox.No,
+            QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
+            QMessageBox.StandardButton.No,
         )
-        if reply == QMessageBox.Yes:
+        if reply == QMessageBox.StandardButton.Yes:
             self.delete_class(
                 class_name
             )  # Sreeni note: Implement this method to handle class deletion
@@ -745,11 +753,11 @@ class ImageAnnotator(QMainWindow):
                 f"The project structure requires all images to be in an 'images' subdirectory. "
                 f"{len(images_to_copy)} images need to be copied to the correct location. "
                 f"Do you want to copy these images?",
-                QMessageBox.Yes | QMessageBox.No,
-                QMessageBox.Yes,
+                QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
+                QMessageBox.StandardButton.Yes,
             )
 
-            if reply == QMessageBox.Yes:
+            if reply == QMessageBox.StandardButton.Yes:
                 for file_name, src_path, dst_path in images_to_copy:
                     try:
                         shutil.copy2(src_path, dst_path)
@@ -888,10 +896,10 @@ class ImageAnnotator(QMainWindow):
                 self,
                 "No Project",
                 "You need to save the project before auto-saving. Would you like to save now?",
-                QMessageBox.Yes | QMessageBox.No,
-                QMessageBox.Yes,
+                QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
+                QMessageBox.StandardButton.Yes,
             )
-            if reply == QMessageBox.Yes:
+            if reply == QMessageBox.StandardButton.Yes:
                 self.save_project()
             else:
                 return
@@ -916,7 +924,7 @@ class ImageAnnotator(QMainWindow):
 
         dialog = ProjectDetailsDialog(self, stats_dialog)
 
-        if dialog.exec_() == QDialog.Accepted:
+        if dialog.exec_() == QDialog.DialogCode.Accepted:
             if dialog.were_changes_made():
                 self.project_notes = dialog.get_notes()
                 self.save_project(show_message=False)
@@ -981,7 +989,7 @@ class ImageAnnotator(QMainWindow):
         # Set the current tool
         self.image_label.current_tool = "sam_magic_wand"
         self.image_label.sam_magic_wand_active = True
-        self.image_label.setCursor(Qt.CrossCursor)
+        self.image_label.setCursor(Qt.CursorShape.CrossCursor)
 
         # Update UI based on the current tool
         self.update_ui_for_current_tool()
@@ -1004,7 +1012,7 @@ class ImageAnnotator(QMainWindow):
         self.image_label.sam_magic_wand_active = False
         self.sam_magic_wand_button.setChecked(False)
         self.sam_magic_wand_button.setEnabled(False)  # Disable the button
-        self.image_label.setCursor(Qt.ArrowCursor)
+        self.image_label.setCursor(Qt.CursorShape.ArrowCursor)
 
         # Clear any SAM-related temporary data
         self.image_label.sam_bbox = None
@@ -1041,10 +1049,10 @@ class ImageAnnotator(QMainWindow):
                 )
                 self.sam_magic_wand_button.setChecked(False)
                 return
-            self.image_label.setCursor(Qt.CrossCursor)
+            self.image_label.setCursor(Qt.CursorShape.CrossCursor)
             self.image_label.sam_magic_wand_active = True
         else:
-            self.image_label.setCursor(Qt.ArrowCursor)
+            self.image_label.setCursor(Qt.CursorShape.ArrowCursor)
             self.image_label.sam_magic_wand_active = False
             self.image_label.sam_bbox = None
 
@@ -1246,14 +1254,14 @@ class ImageAnnotator(QMainWindow):
                 self,
                 "Unsaved Changes",
                 "You have unsaved changes. Do you want to save them before closing?",
-                QMessageBox.Yes | QMessageBox.No | QMessageBox.Cancel,
+                QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No | QMessageBox.StandardButton.Cancel,
             )
-            if reply == QMessageBox.Yes:
+            if reply == QMessageBox.StandardButton.Yes:
                 if self.image_label.temp_paint_mask is not None:
                     self.image_label.commit_paint_annotation()
                 if self.image_label.temp_eraser_mask is not None:
                     self.image_label.commit_eraser_changes()
-            elif reply == QMessageBox.Cancel:
+            elif reply == QMessageBox.StandardButton.Cancel:
                 event.ignore()
                 return
 
@@ -1275,14 +1283,14 @@ class ImageAnnotator(QMainWindow):
                 self,
                 "Unsaved Changes",
                 "You have unsaved changes. Do you want to save them?",
-                QMessageBox.Yes | QMessageBox.No | QMessageBox.Cancel,
+                QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No | QMessageBox.StandardButton.Cancel,
             )
-            if reply == QMessageBox.Yes:
+            if reply == QMessageBox.StandardButton.Yes:
                 if self.image_label.temp_paint_mask is not None:
                     self.image_label.commit_paint_annotation()
                 if self.image_label.temp_eraser_mask is not None:
                     self.image_label.commit_eraser_changes()
-            elif reply == QMessageBox.Cancel:
+            elif reply == QMessageBox.StandardButton.Cancel:
                 return
             else:
                 self.image_label.discard_paint_annotation()
@@ -1411,7 +1419,7 @@ class ImageAnnotator(QMainWindow):
     def activate_current_slice(self):
         if self.current_slice:
             # Ensure the current slice is selected in the slice list
-            items = self.slice_list.findItems(self.current_slice, Qt.MatchExactly)
+            items = self.slice_list.findItems(self.current_slice, Qt.MatchFlag.MatchExactly)
             if items:
                 self.slice_list.setCurrentItem(items[0])
 
@@ -1524,7 +1532,7 @@ class ImageAnnotator(QMainWindow):
                 progress = QProgressDialog(
                     "Assigning dimensions...", "Cancel", 0, 100, self
                 )
-                progress.setWindowModality(Qt.WindowModal)
+                progress.setWindowModality(Qt.WindowModality.WindowModal)
                 progress.setMinimumDuration(0)
                 progress.setValue(10)
                 QApplication.processEvents()
@@ -1533,9 +1541,8 @@ class ImageAnnotator(QMainWindow):
                     dialog = DimensionDialog(
                         image_array.shape, file_name, self, default_dimensions
                     )
-                    dialog.setWindowFlags(
-                        dialog.windowFlags() & ~Qt.WindowContextHelpButtonHint
-                    )
+                    # Qt6 no longer shows the "?" help button by default;
+                    # the old WindowContextHelpButtonHint clear is gone.
                     progress.setValue(50)
                     QApplication.processEvents()
                     if dialog.exec_():
@@ -1598,7 +1605,7 @@ class ImageAnnotator(QMainWindow):
 
         # Create and show progress dialog
         progress = QProgressDialog("Loading slices...", "Cancel", 0, 100, self)
-        progress.setWindowModality(Qt.WindowModal)
+        progress.setWindowModality(Qt.WindowModality.WindowModal)
         progress.setMinimumDuration(0)  # Show immediately
 
         # Handle 2D images
@@ -1736,19 +1743,19 @@ class ImageAnnotator(QMainWindow):
 
         self.image_label.update()
 
-        items = self.slice_list.findItems(slice_name, Qt.MatchExactly)
+        items = self.slice_list.findItems(slice_name, Qt.MatchFlag.MatchExactly)
         if items:
             self.slice_list.setCurrentItem(items[0])
 
     def array_to_qimage(self, array):
         if array.ndim == 2:
             height, width = array.shape
-            return QImage(array.data, width, height, width, QImage.Format_Grayscale8)
+            return QImage(array.data, width, height, width, QImage.Format.Format_Grayscale8)
         elif array.ndim == 3 and array.shape[2] == 3:
             height, width, _ = array.shape
             bytes_per_line = 3 * width
             return QImage(
-                array.data, width, height, bytes_per_line, QImage.Format_RGB888
+                array.data, width, height, bytes_per_line, QImage.Format.Format_RGB888
             )
         else:
             raise ValueError(
@@ -1760,16 +1767,16 @@ class ImageAnnotator(QMainWindow):
         for slice_name, _ in self.slices:
             item = QListWidgetItem(slice_name)
             if slice_name in self.all_annotations:
-                item.setForeground(QColor(Qt.green))
+                item.setForeground(QColor(Qt.GlobalColor.green))
             else:
                 item.setForeground(
-                    QColor(Qt.black) if not self.dark_mode else QColor(Qt.white)
+                    QColor(Qt.GlobalColor.black) if not self.dark_mode else QColor(Qt.GlobalColor.white)
                 )
             self.slice_list.addItem(item)
 
         # Select the current slice
         if self.current_slice:
-            items = self.slice_list.findItems(self.current_slice, Qt.MatchExactly)
+            items = self.slice_list.findItems(self.current_slice, Qt.MatchFlag.MatchExactly)
             if items:
                 self.slice_list.setCurrentItem(items[0])
 
@@ -1789,9 +1796,9 @@ class ImageAnnotator(QMainWindow):
             super().keyPressEvent(event)
             return
 
-        if event.key() == Qt.Key_F2:
+        if event.key() == Qt.Key.Key_F2:
             self.launch_snake_game()
-        elif event.key() == Qt.Key_Delete:
+        elif event.key() == Qt.Key.Key_Delete:
             # Handle deletions
             if self.class_list.hasFocus() and self.class_list.currentItem():
                 self.delete_class(self.class_list.currentItem())
@@ -1801,14 +1808,14 @@ class ImageAnnotator(QMainWindow):
                 self.delete_selected_annotations()
             elif self.image_list.hasFocus() and self.image_list.currentItem():
                 self.delete_selected_image()
-        elif event.key() == Qt.Key_Up or event.key() == Qt.Key_Down:
+        elif event.key() == Qt.Key.Key_Up or event.key() == Qt.Key.Key_Down:
             # Handle slice navigation
             if self.slice_list.hasFocus():
                 current_row = self.slice_list.currentRow()
-                if event.key() == Qt.Key_Up and current_row > 0:
+                if event.key() == Qt.Key.Key_Up and current_row > 0:
                     self.slice_list.setCurrentRow(current_row - 1)
                 elif (
-                    event.key() == Qt.Key_Down
+                    event.key() == Qt.Key.Key_Down
                     and current_row < self.slice_list.count() - 1
                 ):
                     self.slice_list.setCurrentRow(current_row + 1)
@@ -1816,13 +1823,13 @@ class ImageAnnotator(QMainWindow):
             else:
                 # Pass the event to the parent for default handling
                 super().keyPressEvent(event)
-        elif event.key() == Qt.Key_Return or event.key() == Qt.Key_Enter:
+        elif event.key() == Qt.Key.Key_Return or event.key() == Qt.Key.Key_Enter:
             # Handle accepting visible temporary classes
             if self.has_visible_temp_classes():
                 self.accept_visible_temp_classes()
             else:
                 super().keyPressEvent(event)
-        elif event.key() == Qt.Key_Escape:
+        elif event.key() == Qt.Key.Key_Escape:
             # Handle rejecting visible temporary classes
             if self.has_visible_temp_classes():
                 self.reject_visible_temp_classes()
@@ -1835,7 +1842,7 @@ class ImageAnnotator(QMainWindow):
     def has_visible_temp_classes(self):
         for i in range(self.class_list.count()):
             item = self.class_list.item(i)
-            if item.text().startswith("Temp-") and item.checkState() == Qt.Checked:
+            if item.text().startswith("Temp-") and item.checkState() == Qt.CheckState.Checked:
                 return True
         return False
 
@@ -1944,11 +1951,11 @@ class ImageAnnotator(QMainWindow):
                 self,
                 "Missing Images",
                 message,
-                QMessageBox.Yes | QMessageBox.No,
-                QMessageBox.No,
+                QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
+                QMessageBox.StandardButton.No,
             )
 
-            if reply == QMessageBox.No:
+            if reply == QMessageBox.StandardButton.No:
                 print("Import cancelled due to missing images")
                 QMessageBox.information(
                     self,
@@ -2188,13 +2195,13 @@ class ImageAnnotator(QMainWindow):
             if not class_name.startswith(
                 "Temp-"
             ):  # Only show non-temporary annotations
-                color = self.image_label.class_colors.get(class_name, QColor(Qt.white))
+                color = self.image_label.class_colors.get(class_name, QColor(Qt.GlobalColor.white))
                 for annotation in class_annotations:
                     number = annotation.get("number", 0)
                     area = calculate_area(annotation)
                     item_text = f"{class_name} - {number:<3} Area: {area:.2f}"
                     item = QListWidgetItem(item_text)
-                    item.setData(Qt.UserRole, annotation)
+                    item.setData(Qt.ItemDataRole.UserRole, annotation)
                     item.setForeground(color)
                     self.annotation_list.addItem(item)
 
@@ -2247,14 +2254,14 @@ class ImageAnnotator(QMainWindow):
     def update_annotation_list_colors(self, class_name=None, color=None):
         for i in range(self.annotation_list.count()):
             item = self.annotation_list.item(i)
-            annotation = item.data(Qt.UserRole)
+            annotation = item.data(Qt.ItemDataRole.UserRole)
             # Update only the item for the specific class if class_name is provided
             if class_name is None or annotation["category_name"] == class_name:
                 item_color = (
                     color
                     if class_name
                     else self.image_label.class_colors.get(
-                        annotation["category_name"], QColor(Qt.white)
+                        annotation["category_name"], QColor(Qt.GlobalColor.white)
                     )
                 )
                 item.setForeground(item_color)
@@ -2300,7 +2307,7 @@ class ImageAnnotator(QMainWindow):
     def setup_class_list(self):
         """Set up the class list widget."""
         self.class_list = QListWidget()
-        self.class_list.setContextMenuPolicy(Qt.CustomContextMenu)
+        self.class_list.setContextMenuPolicy(Qt.ContextMenuPolicy.CustomContextMenu)
         self.class_list.customContextMenuRequested.connect(self.show_class_context_menu)
         self.class_list.itemClicked.connect(self.on_class_selected)
         self.sidebar_layout.addWidget(QLabel("Classes:"))
@@ -2317,7 +2324,7 @@ class ImageAnnotator(QMainWindow):
         manual_layout.setSpacing(5)
 
         manual_label = QLabel("Manual Tools")
-        manual_label.setAlignment(Qt.AlignCenter)
+        manual_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
         manual_layout.addWidget(manual_label)
 
         manual_buttons_layout = QHBoxLayout()
@@ -2340,7 +2347,7 @@ class ImageAnnotator(QMainWindow):
         automated_layout.setSpacing(5)
 
         automated_label = QLabel("Automated Tools")
-        automated_label.setAlignment(Qt.AlignCenter)
+        automated_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
         automated_layout.addWidget(automated_label)
 
         automated_buttons_layout = QHBoxLayout()
@@ -2368,7 +2375,7 @@ class ImageAnnotator(QMainWindow):
     def setup_annotation_list(self):
         """Set up the annotation list widget."""
         self.annotation_list = QListWidget()
-        self.annotation_list.setSelectionMode(QAbstractItemView.ExtendedSelection)
+        self.annotation_list.setSelectionMode(QAbstractItemView.SelectionMode.ExtendedSelection)
         self.annotation_list.itemSelectionChanged.connect(
             self.update_highlighted_annotations
         )
@@ -2380,17 +2387,17 @@ class ImageAnnotator(QMainWindow):
         project_menu = menu_bar.addMenu("&Project")
 
         new_project_action = QAction("&New Project", self)
-        new_project_action.setShortcut(QKeySequence.New)
+        new_project_action.setShortcut(QKeySequence.StandardKey.New)
         new_project_action.triggered.connect(self.new_project)
         project_menu.addAction(new_project_action)
 
         open_project_action = QAction("&Open Project", self)
-        open_project_action.setShortcut(QKeySequence.Open)
+        open_project_action.setShortcut(QKeySequence.StandardKey.Open)
         open_project_action.triggered.connect(self.open_project)
         project_menu.addAction(open_project_action)
 
         save_project_action = QAction("&Save Project", self)
-        save_project_action.setShortcut(QKeySequence.Save)
+        save_project_action.setShortcut(QKeySequence.StandardKey.Save)
         save_project_action.triggered.connect(self.save_project)
         project_menu.addAction(save_project_action)
 
@@ -2476,7 +2483,7 @@ class ImageAnnotator(QMainWindow):
         help_menu = menu_bar.addMenu("&Help")
 
         help_action = QAction("&Show Help", self)
-        help_action.setShortcut(QKeySequence.HelpContents)
+        help_action.setShortcut(QKeySequence.StandardKey.HelpContents)
         help_action.triggered.connect(self.show_help)
         help_menu.addAction(help_action)
 
@@ -2493,7 +2500,7 @@ class ImageAnnotator(QMainWindow):
         def create_section_header(text):
             label = QLabel(text)
             label.setProperty("class", "section-header")
-            label.setAlignment(Qt.AlignLeft)
+            label.setAlignment(Qt.AlignmentFlag.AlignLeft)
             return label
 
         # Import functionality
@@ -2521,7 +2528,7 @@ class ImageAnnotator(QMainWindow):
 
         # Class list (without the "Classes" header)
         self.class_list = QListWidget()
-        self.class_list.setContextMenuPolicy(Qt.CustomContextMenu)
+        self.class_list.setContextMenuPolicy(Qt.ContextMenuPolicy.CustomContextMenu)
         self.class_list.customContextMenuRequested.connect(self.show_class_context_menu)
         self.class_list.itemClicked.connect(self.on_class_selected)
         self.sidebar_layout.addWidget(self.class_list)
@@ -2668,7 +2675,7 @@ class ImageAnnotator(QMainWindow):
         # Annotations list subsection
         annotation_layout.addWidget(QLabel("Annotations"))
         self.annotation_list = QListWidget()
-        self.annotation_list.setSelectionMode(QAbstractItemView.ExtendedSelection)
+        self.annotation_list.setSelectionMode(QAbstractItemView.SelectionMode.ExtendedSelection)
         self.annotation_list.itemSelectionChanged.connect(
             self.update_highlighted_annotations
         )
@@ -2731,11 +2738,11 @@ class ImageAnnotator(QMainWindow):
             self.image_label.current_tool = "sam_box"
             self.image_label.sam_box_active = True
             self.image_label.sam_points_active = False
-            self.image_label.setCursor(Qt.CrossCursor)
+            self.image_label.setCursor(Qt.CursorShape.CrossCursor)
         else:
             self.image_label.current_tool = None
             self.image_label.sam_box_active = False
-            self.image_label.setCursor(Qt.ArrowCursor)
+            self.image_label.setCursor(Qt.CursorShape.ArrowCursor)
         self.update_ui_for_current_tool()
 
     def toggle_sam_points(self):
@@ -2744,14 +2751,14 @@ class ImageAnnotator(QMainWindow):
             self.image_label.current_tool = "sam_points"
             self.image_label.sam_points_active = True
             self.image_label.sam_box_active = False
-            self.image_label.setCursor(Qt.CrossCursor)
+            self.image_label.setCursor(Qt.CursorShape.CrossCursor)
             self.image_label.sam_positive_points = []
             self.image_label.sam_negative_points = []
         else:
             self.sam_inference_timer.stop()
             self.image_label.current_tool = None
             self.image_label.sam_points_active = False
-            self.image_label.setCursor(Qt.ArrowCursor)
+            self.image_label.setCursor(Qt.CursorShape.ArrowCursor)
             self.image_label.sam_positive_points = []
             self.image_label.sam_negative_points = []
         self.update_ui_for_current_tool()
@@ -2809,8 +2816,8 @@ class ImageAnnotator(QMainWindow):
                 area = calculate_area(annotation)
                 item_text = f"{class_name} - {number:<3} Area: {area:.2f}"
                 item = QListWidgetItem(item_text)
-                item.setData(Qt.UserRole, annotation)
-                color = self.image_label.class_colors.get(class_name, QColor(Qt.white))
+                item.setData(Qt.ItemDataRole.UserRole, annotation)
+                color = self.image_label.class_colors.get(class_name, QColor(Qt.GlobalColor.white))
                 item.setForeground(color)
                 self.annotation_list.addItem(item)
 
@@ -3083,7 +3090,7 @@ class ImageAnnotator(QMainWindow):
         total = len(self.all_images)
 
         progress = QProgressDialog("Running LLM Detection...", "Cancel", 0, total, self)
-        progress.setWindowModality(Qt.WindowModal)
+        progress.setWindowModality(Qt.WindowModality.WindowModal)
         progress.setMinimumDuration(0)
 
         for idx, img_info in enumerate(self.all_images):
@@ -3110,7 +3117,7 @@ class ImageAnnotator(QMainWindow):
             from PIL import Image as PILImage
             pil_img = PILImage.open(image_path).convert("RGB")
             qimage = QImage(pil_img.tobytes(), pil_img.width, pil_img.height,
-                            pil_img.width * 3, QImage.Format_RGB888)
+                            pil_img.width * 3, QImage.Format.Format_RGB888)
 
             try:
                 results = self.dino_utils.detect(
@@ -3354,20 +3361,20 @@ class ImageAnnotator(QMainWindow):
 
         self.scroll_area = QScrollArea()
         self.scroll_area.setWidgetResizable(True)
-        self.scroll_area.setHorizontalScrollBarPolicy(Qt.ScrollBarAsNeeded)
-        self.scroll_area.setVerticalScrollBarPolicy(Qt.ScrollBarAsNeeded)
+        self.scroll_area.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAsNeeded)
+        self.scroll_area.setVerticalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAsNeeded)
 
         # Use the already initialized image_label
-        self.image_label.setAlignment(Qt.AlignCenter)
+        self.image_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
         self.scroll_area.setWidget(self.image_label)
 
         self.image_layout.addWidget(self.scroll_area)
 
-        self.zoom_slider = QSlider(Qt.Horizontal)
+        self.zoom_slider = QSlider(Qt.Orientation.Horizontal)
         self.zoom_slider.setMinimum(10)
         self.zoom_slider.setMaximum(500)
         self.zoom_slider.setValue(100)
-        self.zoom_slider.setTickPosition(QSlider.TicksBelow)
+        self.zoom_slider.setTickPosition(QSlider.TickPosition.TicksBelow)
         self.zoom_slider.setTickInterval(50)
         self.zoom_slider.valueChanged.connect(self.zoom_image)
         self.image_layout.addWidget(self.zoom_slider)
@@ -3388,7 +3395,7 @@ class ImageAnnotator(QMainWindow):
         self.image_list.currentRowChanged.connect(
             lambda row: self.switch_image(self.image_list.currentItem())
         )
-        self.image_list.setContextMenuPolicy(Qt.CustomContextMenu)
+        self.image_list.setContextMenuPolicy(Qt.ContextMenuPolicy.CustomContextMenu)
         self.image_list.customContextMenuRequested.connect(self.show_image_context_menu)
         self.image_list_layout.addWidget(self.image_list)
 
@@ -3399,7 +3406,7 @@ class ImageAnnotator(QMainWindow):
     ##########    ### Tools  ########## I love useful image processing tools :)
     def open_dataset_splitter(self):
         self.dataset_splitter = DatasetSplitterTool(self)
-        self.dataset_splitter.setWindowModality(Qt.ApplicationModal)
+        self.dataset_splitter.setWindowModality(Qt.WindowModality.ApplicationModal)
         self.dataset_splitter.show_centered(self)
 
     def show_annotation_statistics(self):
@@ -3470,7 +3477,7 @@ class ImageAnnotator(QMainWindow):
                 "Clear All",
                 "Are you sure you want to clear all images and annotations? This action cannot be undone.",
             )
-            if reply != QMessageBox.Yes:
+            if reply != QMessageBox.StandardButton.Yes:
                 return
 
         # Clear images
@@ -3534,7 +3541,7 @@ class ImageAnnotator(QMainWindow):
         self.image_label.drawing_sam_bbox = False
         self.image_label.temp_sam_prediction = None
 
-        self.image_label.setCursor(Qt.ArrowCursor)  # Reset cursor to default
+        self.image_label.setCursor(Qt.CursorShape.ArrowCursor)  # Reset cursor to default
         self.sam_model_selector.setCurrentIndex(0)  # Reset to "Pick a SAM Model"
         self.current_sam_model = None  # Reset the current SAM model
 
@@ -3572,7 +3579,7 @@ class ImageAnnotator(QMainWindow):
 
     def show_question(self, title, message):
         return QMessageBox.question(
-            self, title, message, QMessageBox.Yes | QMessageBox.No, QMessageBox.No
+            self, title, message, QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No, QMessageBox.StandardButton.No
         )
 
     def show_image_context_menu(self, position):
@@ -3641,11 +3648,11 @@ class ImageAnnotator(QMainWindow):
             "Redefine Dimensions",
             "Redefining dimensions will cause all associated annotations to be lost. "
             "Do you want to continue?",
-            QMessageBox.Yes | QMessageBox.No,
-            QMessageBox.No,
+            QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
+            QMessageBox.StandardButton.No,
         )
 
-        if reply == QMessageBox.Yes:
+        if reply == QMessageBox.StandardButton.Yes:
             # Remove existing annotations for this file
             base_name = os.path.splitext(file_name)[0]
 
@@ -3867,7 +3874,7 @@ class ImageAnnotator(QMainWindow):
             # Reload the current image if it exists, otherwise load the first image
             if self.image_file_name and self.image_file_name in self.all_annotations:
                 self.switch_image(
-                    self.image_list.findItems(self.image_file_name, Qt.MatchExactly)[0]
+                    self.image_list.findItems(self.image_file_name, Qt.MatchFlag.MatchExactly)[0]
                 )
             elif self.all_images:
                 self.switch_image(self.image_list.item(0))
@@ -3883,7 +3890,7 @@ class ImageAnnotator(QMainWindow):
     def update_highlighted_annotations(self):
         selected_items = self.annotation_list.selectedItems()
         self.image_label.highlighted_annotations = [
-            item.data(Qt.UserRole) for item in selected_items
+            item.data(Qt.ItemDataRole.UserRole) for item in selected_items
         ]
         self.image_label.update()  # Force a redraw of the image label
 
@@ -3911,14 +3918,14 @@ class ImageAnnotator(QMainWindow):
             self,
             "Delete Annotations",
             f"Are you sure you want to delete {len(selected_items)} annotation(s)?",
-            QMessageBox.Yes | QMessageBox.No,
-            QMessageBox.No,
+            QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
+            QMessageBox.StandardButton.No,
         )
-        if reply == QMessageBox.Yes:
+        if reply == QMessageBox.StandardButton.Yes:
             # Create a list of annotations to remove
             annotations_to_remove = []
             for item in selected_items:
-                annotation = item.data(Qt.UserRole)
+                annotation = item.data(Qt.ItemDataRole.UserRole)
                 annotations_to_remove.append((annotation["category_name"], annotation))
 
             # Remove annotations from image_label.annotations
@@ -3968,9 +3975,9 @@ class ImageAnnotator(QMainWindow):
             )
             return
 
-        class_name = selected_items[0].data(Qt.UserRole)["category_name"]
+        class_name = selected_items[0].data(Qt.ItemDataRole.UserRole)["category_name"]
         if not all(
-            item.data(Qt.UserRole)["category_name"] == class_name
+            item.data(Qt.ItemDataRole.UserRole)["category_name"] == class_name
             for item in selected_items
         ):
             QMessageBox.warning(
@@ -3983,7 +3990,7 @@ class ImageAnnotator(QMainWindow):
         polygons = []
         original_annotations = []
         for item in selected_items:
-            annotation = item.data(Qt.UserRole)
+            annotation = item.data(Qt.ItemDataRole.UserRole)
             original_annotations.append(annotation)
             if "segmentation" in annotation:
                 points = zip(
@@ -4058,11 +4065,11 @@ class ImageAnnotator(QMainWindow):
         msg_box = QMessageBox(self)
         msg_box.setWindowTitle("Merge Annotations")
         msg_box.setText("Do you want to keep the original annotations?")
-        msg_box.setIcon(QMessageBox.Question)
+        msg_box.setIcon(QMessageBox.Icon.Question)
 
-        keep_button = msg_box.addButton("Keep", QMessageBox.YesRole)
-        delete_button = msg_box.addButton("Delete", QMessageBox.NoRole)
-        cancel_button = msg_box.addButton("Cancel", QMessageBox.RejectRole)
+        keep_button = msg_box.addButton("Keep", QMessageBox.ButtonRole.YesRole)
+        delete_button = msg_box.addButton("Delete", QMessageBox.ButtonRole.NoRole)
+        cancel_button = msg_box.addButton("Cancel", QMessageBox.ButtonRole.RejectRole)
 
         msg_box.setDefaultButton(cancel_button)
         msg_box.setEscapeButton(cancel_button)
@@ -4102,11 +4109,11 @@ class ImageAnnotator(QMainWindow):
                 "Delete Image",
                 f"Are you sure you want to delete the image '{file_name}'?\n\n"
                 "This will remove the image and all its associated annotations.",
-                QMessageBox.Yes | QMessageBox.No,
-                QMessageBox.No,
+                QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
+                QMessageBox.StandardButton.No,
             )
 
-            if reply == QMessageBox.Yes:
+            if reply == QMessageBox.StandardButton.Yes:
                 # Remove from all data structures
                 self.image_list.takeItem(self.image_list.row(current_item))
                 self.image_paths.pop(file_name, None)
@@ -4242,11 +4249,11 @@ class ImageAnnotator(QMainWindow):
             item.setIcon(QIcon(pixmap))
 
             # Set visibility state
-            item.setData(Qt.UserRole, True)
+            item.setData(Qt.ItemDataRole.UserRole, True)
 
             # Set checkbox
-            item.setFlags(item.flags() | Qt.ItemIsUserCheckable)
-            item.setCheckState(Qt.Checked)
+            item.setFlags(item.flags() | Qt.ItemFlag.ItemIsUserCheckable)
+            item.setCheckState(Qt.CheckState.Checked)
 
             self.class_list.addItem(item)
 
@@ -4283,18 +4290,18 @@ class ImageAnnotator(QMainWindow):
 
             # Store the visibility state
             item.setData(
-                Qt.UserRole, self.image_label.class_visibility.get(class_name, True)
+                Qt.ItemDataRole.UserRole, self.image_label.class_visibility.get(class_name, True)
             )
 
             # Set checkbox
-            item.setFlags(item.flags() | Qt.ItemIsUserCheckable)
-            item.setCheckState(Qt.Checked if item.data(Qt.UserRole) else Qt.Unchecked)
+            item.setFlags(item.flags() | Qt.ItemFlag.ItemIsUserCheckable)
+            item.setCheckState(Qt.CheckState.Checked if item.data(Qt.ItemDataRole.UserRole) else Qt.CheckState.Unchecked)
 
             self.class_list.addItem(item)
 
         # Re-select the current class if it exists
         if self.current_class:
-            items = self.class_list.findItems(self.current_class, Qt.MatchExactly)
+            items = self.class_list.findItems(self.current_class, Qt.MatchFlag.MatchExactly)
             if items:
                 self.class_list.setCurrentItem(items[0])
         elif self.class_list.count() > 0:
@@ -4313,9 +4320,9 @@ class ImageAnnotator(QMainWindow):
 
     def toggle_class_visibility(self, item):
         class_name = item.text()
-        is_visible = item.checkState() == Qt.Checked
+        is_visible = item.checkState() == Qt.CheckState.Checked
         self.image_label.set_class_visibility(class_name, is_visible)
-        item.setData(Qt.UserRole, is_visible)
+        item.setData(Qt.ItemDataRole.UserRole, is_visible)
         self.image_label.update()
 
     def change_annotation_class(self):
@@ -4337,12 +4344,12 @@ class ImageAnnotator(QMainWindow):
             class_combo.addItem(class_name)
         layout.addWidget(class_combo)
 
-        button_box = QDialogButtonBox(QDialogButtonBox.Ok | QDialogButtonBox.Cancel)
+        button_box = QDialogButtonBox(QDialogButtonBox.StandardButton.Ok | QDialogButtonBox.StandardButton.Cancel)
         button_box.accepted.connect(class_dialog.accept)
         button_box.rejected.connect(class_dialog.reject)
         layout.addWidget(button_box)
 
-        if class_dialog.exec_() == QDialog.Accepted:
+        if class_dialog.exec_() == QDialog.DialogCode.Accepted:
             new_class = class_combo.currentText()
             current_name = self.current_slice or self.image_file_name
 
@@ -4356,7 +4363,7 @@ class ImageAnnotator(QMainWindow):
             )
 
             for item in selected_items:
-                annotation = item.data(Qt.UserRole)
+                annotation = item.data(Qt.ItemDataRole.UserRole)
                 old_class = annotation["category_name"]
 
                 # Remove from old class
@@ -4454,7 +4461,7 @@ class ImageAnnotator(QMainWindow):
         self.update_ui_for_current_tool()
 
     def wheelEvent(self, event):
-        if event.modifiers() == Qt.ControlModifier:
+        if event.modifiers() == Qt.KeyboardModifier.ControlModifier:
             delta = event.angleDelta().y()
             if self.image_label.current_tool == "paint_brush":
                 self.paint_brush_size = max(1, self.paint_brush_size + delta // 120)
@@ -4495,9 +4502,9 @@ class ImageAnnotator(QMainWindow):
             self.image_label.current_tool == "sam_magic_wand"
             and self.sam_magic_wand_button.isEnabled()
         ):
-            self.image_label.setCursor(Qt.CrossCursor)
+            self.image_label.setCursor(Qt.CursorShape.CrossCursor)
         else:
-            self.image_label.setCursor(Qt.ArrowCursor)
+            self.image_label.setCursor(Qt.CursorShape.ArrowCursor)
 
     def on_class_selected(self, current=None, previous=None):
         if not self.image_label.check_unsaved_changes():
@@ -4551,7 +4558,7 @@ class ImageAnnotator(QMainWindow):
 
     def change_class_color(self, item):
         class_name = item.text()
-        current_color = self.image_label.class_colors.get(class_name, QColor(Qt.white))
+        current_color = self.image_label.class_colors.get(class_name, QColor(Qt.GlobalColor.white))
         color = QColorDialog.getColor(
             current_color, self, f"Select Color for {class_name}"
         )
@@ -4641,11 +4648,11 @@ class ImageAnnotator(QMainWindow):
             "Delete Class",
             f"Are you sure you want to delete the class '{class_name}'?\n\n"
             "This will remove all annotations associated with this class.",
-            QMessageBox.Yes | QMessageBox.No,
-            QMessageBox.No,
+            QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
+            QMessageBox.StandardButton.No,
         )
 
-        if reply == QMessageBox.Yes:
+        if reply == QMessageBox.StandardButton.Yes:
             # Proceed with deletion
             # Remove class color
             self.image_label.class_colors.pop(class_name, None)
@@ -4774,13 +4781,13 @@ class ImageAnnotator(QMainWindow):
             self.auto_save()  # Auto-save after adding a polygon annotation
 
     def highlight_annotation(self, item):
-        self.image_label.highlighted_annotation = item.data(Qt.UserRole)
+        self.image_label.highlighted_annotation = item.data(Qt.ItemDataRole.UserRole)
         self.image_label.update()
 
     def delete_annotation(self):
         current_item = self.annotation_list.currentItem()
         if current_item:
-            annotation = current_item.data(Qt.UserRole)
+            annotation = current_item.data(Qt.ItemDataRole.UserRole)
             category_name = annotation["category_name"]
             self.image_label.annotations[category_name].remove(annotation)
             self.annotation_list.takeItem(self.annotation_list.row(current_item))
@@ -4789,7 +4796,7 @@ class ImageAnnotator(QMainWindow):
 
     def add_annotation_to_list(self, annotation):
         class_name = annotation["category_name"]
-        color = self.image_label.class_colors.get(class_name, QColor(Qt.white))
+        color = self.image_label.class_colors.get(class_name, QColor(Qt.GlobalColor.white))
         annotations = self.image_label.annotations.get(class_name, [])
         number = max([ann.get("number", 0) for ann in annotations] + [0]) + 1
         annotation["number"] = number
@@ -4797,7 +4804,7 @@ class ImageAnnotator(QMainWindow):
         item_text = f"{class_name} - {number:<3} Area: {area:.2f}"
 
         item = QListWidgetItem(item_text)
-        item.setData(Qt.UserRole, annotation)
+        item.setData(Qt.ItemDataRole.UserRole, annotation)
         item.setForeground(color)
         self.annotation_list.addItem(item)
 
@@ -4926,14 +4933,14 @@ class ImageAnnotator(QMainWindow):
     def highlight_annotation_in_list(self, annotation):
         for i in range(self.annotation_list.count()):
             item = self.annotation_list.item(i)
-            if item.data(Qt.UserRole) == annotation:
+            if item.data(Qt.ItemDataRole.UserRole) == annotation:
                 self.annotation_list.setCurrentItem(item)
                 break
 
     def select_annotation_in_list(self, annotation):
         for i in range(self.annotation_list.count()):
             item = self.annotation_list.item(i)
-            if item.data(Qt.UserRole) == annotation:
+            if item.data(Qt.ItemDataRole.UserRole) == annotation:
                 self.annotation_list.setCurrentItem(item)
                 break
 
@@ -5081,7 +5088,7 @@ class ImageAnnotator(QMainWindow):
             self.initialize_yolo_trainer()
 
         dialog = LoadPredictionModelDialog(self)
-        if dialog.exec_() == QDialog.Accepted:
+        if dialog.exec_() == QDialog.DialogCode.Accepted:
             model_path = dialog.model_path
             yaml_path = dialog.yaml_path
             if model_path and yaml_path:
@@ -5143,14 +5150,14 @@ class ImageAnnotator(QMainWindow):
         layout.addWidget(imgsz_label)
         layout.addWidget(imgsz_input)
 
-        button_box = QDialogButtonBox(QDialogButtonBox.Ok | QDialogButtonBox.Cancel)
+        button_box = QDialogButtonBox(QDialogButtonBox.StandardButton.Ok | QDialogButtonBox.StandardButton.Cancel)
         button_box.accepted.connect(dialog.accept)
         button_box.rejected.connect(dialog.reject)
         layout.addWidget(button_box)
 
         dialog.setLayout(layout)
 
-        if dialog.exec_() == QDialog.Accepted:
+        if dialog.exec_() == QDialog.DialogCode.Accepted:
             epochs = int(epochs_input.text())
             imgsz = int(imgsz_input.text())
             self.start_training(epochs, imgsz)
@@ -5244,16 +5251,16 @@ class ImageAnnotator(QMainWindow):
         layout.addWidget(conf_label)
         layout.addWidget(conf_input)
 
-        button_box = QDialogButtonBox(QDialogButtonBox.Cancel)
+        button_box = QDialogButtonBox(QDialogButtonBox.StandardButton.Cancel)
         predict_button = QPushButton("Predict")
-        button_box.addButton(predict_button, QDialogButtonBox.AcceptRole)
+        button_box.addButton(predict_button, QDialogButtonBox.ButtonRole.AcceptRole)
         button_box.accepted.connect(dialog.accept)
         button_box.rejected.connect(dialog.reject)
         layout.addWidget(button_box)
 
         dialog.setLayout(layout)
 
-        if dialog.exec_() == QDialog.Accepted:
+        if dialog.exec_() == QDialog.DialogCode.Accepted:
             selected_images = [item.text() for item in image_list.selectedItems()]
             conf = conf_input.value()
             self.yolo_trainer.set_conf_threshold(conf)
@@ -5394,8 +5401,8 @@ class ImageAnnotator(QMainWindow):
     def accept_visible_temp_classes(self):
         visible_temp_classes = [
             item.text()
-            for item in self.class_list.findItems("Temp-*", Qt.MatchWildcard)
-            if item.checkState() == Qt.Checked
+            for item in self.class_list.findItems("Temp-*", Qt.MatchFlag.MatchWildcard)
+            if item.checkState() == Qt.CheckState.Checked
         ]
 
         for temp_class_name in visible_temp_classes:
@@ -5455,8 +5462,8 @@ class ImageAnnotator(QMainWindow):
     def reject_visible_temp_classes(self):
         visible_temp_classes = [
             item.text()
-            for item in self.class_list.findItems("Temp-*", Qt.MatchWildcard)
-            if item.checkState() == Qt.Checked
+            for item in self.class_list.findItems("Temp-*", Qt.MatchFlag.MatchWildcard)
+            if item.checkState() == Qt.CheckState.Checked
         ]
 
         for temp_class_name in visible_temp_classes:
@@ -5469,9 +5476,9 @@ class ImageAnnotator(QMainWindow):
         self.image_label.update()
 
     def is_class_visible(self, class_name):
-        items = self.class_list.findItems(class_name, Qt.MatchExactly)
+        items = self.class_list.findItems(class_name, Qt.MatchFlag.MatchExactly)
         if items:
-            return items[0].checkState() == Qt.Checked
+            return items[0].checkState() == Qt.CheckState.Checked
         return False
 
     def check_temp_annotations(self):
@@ -5485,10 +5492,10 @@ class ImageAnnotator(QMainWindow):
                 self,
                 "Temporary Annotations",
                 "There are temporary annotations that will be discarded. Do you want to continue?",
-                QMessageBox.Yes | QMessageBox.No,
-                QMessageBox.No,
+                QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
+                QMessageBox.StandardButton.No,
             )
-            if reply == QMessageBox.Yes:
+            if reply == QMessageBox.StandardButton.Yes:
                 for temp_class in temp_classes:
                     del self.image_label.annotations[temp_class]
                     del self.image_label.class_colors[temp_class]

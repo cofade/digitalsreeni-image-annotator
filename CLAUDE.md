@@ -2,7 +2,7 @@
 
 This file provides guidance to Claude Code (claude.ai/code) when working with code in this repository.
 
-DigitalSreeni Image Annotator - PyQt5 desktop app for image annotation with SAM 2 integration and multi-dimensional image support.
+DigitalSreeni Image Annotator - PyQt6 desktop app for image annotation with SAM 2 integration and multi-dimensional image support.
 
 **Fork of**: https://github.com/bnsreenu/digitalsreeni-image-annotator
 
@@ -20,9 +20,9 @@ python -m src.digitalsreeni_image_annotator.main
 
 ## Tech Stack
 
-Python 3.10+ | PyQt5 5.15.11 | Ultralytics 8.3.27 (SAM 2) | NumPy | OpenCV | Shapely
+Python 3.10+ | PyQt6 6.7+ | Ultralytics 8.3.27 (SAM 2) | NumPy | OpenCV | Shapely
 
-**No automated tests exist** - all testing is manual.
+**Test suite**: `tests/` (pytest + pytest-qt). 65 tests pass on PyQt6.
 
 ## Documentation
 
@@ -99,8 +99,8 @@ prediction = self.sam_utils.apply_sam_points(
 ## Important Notes
 
 ### Platform Support
-- ✅ Windows, macOS fully supported
-- ⚠️ Linux has XCB issues, limited testing
+- ✅ Windows, macOS, Linux supported (PyQt6 native integration improved over PyQt5)
+- Linux runtime needs libxcb-cursor0 (Qt6 requires this; was optional under Qt5)
 
 ### Critical: Project Loading
 **Always check `is_loading_project` flag before saving!** Autosave during load corrupts files (v0.8.12 fix).

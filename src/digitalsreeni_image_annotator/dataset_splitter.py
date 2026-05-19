@@ -2,9 +2,9 @@ import os
 import json
 import shutil
 import random
-from PyQt5.QtWidgets import (QDialog, QVBoxLayout, QHBoxLayout, QPushButton, QFileDialog, 
+from PyQt6.QtWidgets import (QDialog, QVBoxLayout, QHBoxLayout, QPushButton, QFileDialog, 
                              QLabel, QSpinBox, QRadioButton, QButtonGroup, QMessageBox, QComboBox)
-from PyQt5.QtCore import Qt
+from PyQt6.QtCore import Qt
 import yaml
 from PIL import Image
 
@@ -13,7 +13,7 @@ class DatasetSplitterTool(QDialog):
         super().__init__(parent)
         self.setWindowTitle("Dataset Splitter")
         self.setGeometry(100, 100, 500, 300)
-        self.setWindowFlags(self.windowFlags() | Qt.Window)
+        self.setWindowFlags(self.windowFlags() | Qt.WindowType.Window)
         self.initUI()
 
     def initUI(self):

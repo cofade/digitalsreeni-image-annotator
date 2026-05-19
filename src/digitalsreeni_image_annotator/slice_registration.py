@@ -1,7 +1,7 @@
-from PyQt5.QtWidgets import (QDialog, QVBoxLayout, QHBoxLayout, QPushButton, QFileDialog, 
+from PyQt6.QtWidgets import (QDialog, QVBoxLayout, QHBoxLayout, QPushButton, QFileDialog, 
                             QLabel, QComboBox, QMessageBox, QProgressDialog, QRadioButton,
                             QButtonGroup, QSpinBox, QApplication, QGroupBox, QDoubleSpinBox)
-from PyQt5.QtCore import Qt
+from PyQt6.QtCore import Qt
 from pystackreg import StackReg
 from skimage import io
 import tifffile
@@ -14,8 +14,8 @@ class SliceRegistrationTool(QDialog):
         super().__init__(parent)
         self.setWindowTitle("Slice Registration")
         self.setGeometry(100, 100, 600, 400)
-        self.setWindowFlags(self.windowFlags() | Qt.Window)
-        self.setWindowModality(Qt.ApplicationModal)  # Add modal behavior
+        self.setWindowFlags(self.windowFlags() | Qt.WindowType.Window)
+        self.setWindowModality(Qt.WindowModality.ApplicationModal)  # Add modal behavior
         
         # Initialize variables first
         self.input_path = ""
@@ -193,7 +193,7 @@ class SliceRegistrationTool(QDialog):
                     self,
                     "Select Directory with Images",
                     "",
-                    QFileDialog.ShowDirsOnly | QFileDialog.DontResolveSymlinks
+                    QFileDialog.Option.ShowDirsOnly | QFileDialog.Option.DontResolveSymlinks
                 )
             else:
                 path, _ = QFileDialog.getOpenFileName(
@@ -201,7 +201,7 @@ class SliceRegistrationTool(QDialog):
                     "Select TIFF Stack",
                     "",
                     "TIFF Files (*.tif *.tiff)",
-                    options=QFileDialog.Options()
+                    options=QFileDialog.Option(0)
                 )
             
             if path:
@@ -219,7 +219,7 @@ class SliceRegistrationTool(QDialog):
                 self,
                 "Select Output Directory",
                 "",
-                QFileDialog.ShowDirsOnly | QFileDialog.DontResolveSymlinks
+                QFileDialog.Option.ShowDirsOnly | QFileDialog.Option.DontResolveSymlinks
             )
             
             if directory:
@@ -242,7 +242,7 @@ class SliceRegistrationTool(QDialog):
             progress.setLabelText("Loading images...")
             progress.setMinimum(0)
             progress.setMaximum(100)
-            progress.setWindowModality(Qt.WindowModal)
+            progress.setWindowModality(Qt.WindowModality.WindowModal)
             progress.setMinimumWidth(400)
             progress.show()
             QApplication.processEvents()

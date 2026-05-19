@@ -1,7 +1,7 @@
-from PyQt5.QtWidgets import (QDialog, QVBoxLayout, QTextEdit, QPushButton, QLabel, 
+from PyQt6.QtWidgets import (QDialog, QVBoxLayout, QTextEdit, QPushButton, QLabel, 
                              QDialogButtonBox, QScrollArea, QWidget)
-from PyQt5.QtCore import Qt
-from PyQt5.QtGui import QFont
+from PyQt6.QtCore import Qt
+from PyQt6.QtGui import QFont
 import os
 from datetime import datetime
 
@@ -87,7 +87,7 @@ class ProjectDetailsDialog(QDialog):
                 else:
                     formatted_stats.append(f"<p>{line}</p>")
             stats_label = QLabel("".join(formatted_stats))
-            stats_label.setTextFormat(Qt.RichText)
+            stats_label.setTextFormat(Qt.TextFormat.RichText)
             stats_label.setWordWrap(True)
             scroll_layout.addWidget(stats_label)
 
@@ -101,7 +101,7 @@ class ProjectDetailsDialog(QDialog):
         layout.addWidget(self.notes_edit)
 
         # Buttons
-        button_box = QDialogButtonBox(QDialogButtonBox.Ok | QDialogButtonBox.Cancel)
+        button_box = QDialogButtonBox(QDialogButtonBox.StandardButton.Ok | QDialogButtonBox.StandardButton.Cancel)
         button_box.accepted.connect(self.accept)
         button_box.rejected.connect(self.reject)
         layout.addWidget(button_box)

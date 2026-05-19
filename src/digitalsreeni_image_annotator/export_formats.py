@@ -1,5 +1,5 @@
 import json
-from PyQt5.QtGui import QImage
+from PyQt6.QtGui import QImage
 from .utils import calculate_area, calculate_bbox
 import yaml
 import os

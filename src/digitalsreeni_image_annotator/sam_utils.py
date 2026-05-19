@@ -15,7 +15,7 @@ from pathlib import Path
 
 import numpy as np
 from PIL import Image
-from PyQt5.QtGui import QImage
+from PyQt6.QtGui import QImage
 
 
 MODEL_NAMES = [
@@ -47,22 +47,22 @@ def _qimage_to_numpy(qimage):
     height = qimage.height()
     fmt = qimage.format()
 
-    if fmt == QImage.Format_Grayscale8:
+    if fmt == QImage.Format.Format_Grayscale8:
         buffer = qimage.constBits().asarray(height * width)
         img = np.frombuffer(buffer, np.uint8).reshape((height, width))
         return np.stack((img,) * 3, -1)
 
-    if fmt in (QImage.Format_RGB32, QImage.Format_ARGB32, QImage.Format_ARGB32_Premultiplied):
+    if fmt in (QImage.Format.Format_RGB32, QImage.Format.Format_ARGB32, QImage.Format.Format_ARGB32_Premultiplied):
         buffer = qimage.constBits().asarray(height * width * 4)
         img = np.frombuffer(buffer, np.uint8).reshape((height, width, 4))
         return img[:, :, :3]
 
-    if fmt == QImage.Format_RGB888:
+    if fmt == QImage.Format.Format_RGB888:
         buffer = qimage.constBits().asarray(height * width * 3)
         return np.frombuffer(buffer, np.uint8).reshape((height, width, 3))
 
     # Fallback
-    converted = qimage.convertToFormat(QImage.Format_RGB32)
+    converted = qimage.convertToFormat(QImage.Format.Format_RGB32)
     buffer = converted.constBits().asarray(height * width * 4)
     img = np.frombuffer(buffer, np.uint8).reshape((height, width, 4))
     return img[:, :, :3]

@@ -1,7 +1,7 @@
-from PyQt5.QtWidgets import (QDialog, QVBoxLayout, QHBoxLayout, QLineEdit, QPushButton, 
+from PyQt6.QtWidgets import (QDialog, QVBoxLayout, QHBoxLayout, QLineEdit, QPushButton, 
                              QDateEdit, QLabel, QListWidget, QDialogButtonBox, QFormLayout,
                              QFileDialog, QMessageBox)
-from PyQt5.QtCore import Qt, QDate
+from PyQt6.QtCore import Qt, QDate
 import os
 import json
 from datetime import datetime
@@ -57,7 +57,7 @@ class ProjectSearchDialog(QDialog):
         layout.addWidget(self.results_list)
 
         # Buttons
-        button_box = QDialogButtonBox(QDialogButtonBox.Close)
+        button_box = QDialogButtonBox(QDialogButtonBox.StandardButton.Close)
         button_box.rejected.connect(self.reject)
         layout.addWidget(button_box)
 

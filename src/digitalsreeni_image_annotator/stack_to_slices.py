@@ -1,9 +1,9 @@
 import os
 import numpy as np
-from PyQt5.QtWidgets import (QDialog, QVBoxLayout, QHBoxLayout, QPushButton, 
+from PyQt6.QtWidgets import (QDialog, QVBoxLayout, QHBoxLayout, QPushButton, 
                              QFileDialog, QLabel, QMessageBox, QComboBox, QGridLayout, QWidget,
                              QProgressDialog, QApplication)
-from PyQt5.QtCore import Qt
+from PyQt6.QtCore import Qt
 from tifffile import TiffFile
 from czifile import CziFile
 from PIL import Image
@@ -49,8 +49,8 @@ class StackToSlicesDialog(QDialog):
         super().__init__(parent)
         self.setWindowTitle("Stack to Slices")
         self.setGeometry(100, 100, 400, 200)
-        self.setWindowFlags(self.windowFlags() | Qt.Window)
-        self.setWindowModality(Qt.ApplicationModal)
+        self.setWindowFlags(self.windowFlags() | Qt.WindowType.Window)
+        self.setWindowModality(Qt.WindowModality.ApplicationModal)
         self.dimensions = None
         self.initUI()
 
@@ -98,7 +98,7 @@ class StackToSlicesDialog(QDialog):
 
     def get_dimensions(self, shape):
         dialog = DimensionDialog(shape, os.path.basename(self.file_name), self)
-        dialog.setWindowModality(Qt.ApplicationModal)
+        dialog.setWindowModality(Qt.WindowModality.ApplicationModal)
         if dialog.exec_():
             self.dimensions = dialog.get_dimensions()
             self.convert_button.setEnabled(True)
@@ -133,7 +133,7 @@ class StackToSlicesDialog(QDialog):
         total_slices = np.prod([image_array.shape[i] for i in slice_indices])
         
         progress = QProgressDialog("Saving slices...", "Cancel", 0, total_slices, self)
-        progress.setWindowModality(Qt.WindowModal)
+        progress.setWindowModality(Qt.WindowModality.WindowModal)
         progress.setWindowTitle("Progress")
         progress.setMinimumDuration(0)
         progress.setValue(0)

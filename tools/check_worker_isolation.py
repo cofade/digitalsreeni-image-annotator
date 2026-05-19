@@ -33,7 +33,7 @@ WORKERS = [
 
 
 class _PyQt5Tripwire(importlib.abc.MetaPathFinder):
-    """Raise on any attempt to import PyQt5 or a PyQt5 submodule."""
+    """Raise on any attempt to import PyQt6 or a PyQt5 submodule."""
 
     def __init__(self):
         self.tripped = False

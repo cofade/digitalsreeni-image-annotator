@@ -1,9 +1,9 @@
 import os
 import numpy as np
-from PyQt5.QtWidgets import (QDialog, QVBoxLayout, QHBoxLayout, QPushButton, QFileDialog, 
+from PyQt6.QtWidgets import (QDialog, QVBoxLayout, QHBoxLayout, QPushButton, QFileDialog, 
                             QLabel, QComboBox, QMessageBox, QProgressDialog, QRadioButton,
                             QButtonGroup, QGroupBox, QDoubleSpinBox, QApplication)
-from PyQt5.QtCore import Qt
+from PyQt6.QtCore import Qt
 from scipy.interpolate import RegularGridInterpolator
 from skimage import io
 import tifffile
@@ -13,8 +13,8 @@ class StackInterpolator(QDialog):
         super().__init__(parent)
         self.setWindowTitle("Stack Interpolator")
         self.setGeometry(100, 100, 600, 400)
-        self.setWindowFlags(self.windowFlags() | Qt.Window)
-        self.setWindowModality(Qt.ApplicationModal)  # Added window modality
+        self.setWindowFlags(self.windowFlags() | Qt.WindowType.Window)
+        self.setWindowModality(Qt.WindowModality.ApplicationModal)  # Added window modality
         
         # Initialize variables
         self.input_path = ""
@@ -166,7 +166,7 @@ class StackInterpolator(QDialog):
                     self,
                     "Select Directory with Images",
                     "",
-                    QFileDialog.ShowDirsOnly | QFileDialog.DontResolveSymlinks
+                    QFileDialog.Option.ShowDirsOnly | QFileDialog.Option.DontResolveSymlinks
                 )
             else:
                 path, _ = QFileDialog.getOpenFileName(
@@ -174,7 +174,7 @@ class StackInterpolator(QDialog):
                     "Select TIFF Stack",
                     "",
                     "TIFF Files (*.tif *.tiff)",
-                    options=QFileDialog.Options()
+                    options=QFileDialog.Option(0)
                 )
             
             if path:
@@ -192,7 +192,7 @@ class StackInterpolator(QDialog):
                 self,
                 "Select Output Directory",
                 "",
-                QFileDialog.ShowDirsOnly | QFileDialog.DontResolveSymlinks
+                QFileDialog.Option.ShowDirsOnly | QFileDialog.Option.DontResolveSymlinks
             )
             
             if directory:
@@ -207,7 +207,7 @@ class StackInterpolator(QDialog):
     def load_images(self):
         try:
             progress = QProgressDialog("Loading images...", "Cancel", 0, 100, self)
-            progress.setWindowModality(Qt.WindowModal)
+            progress.setWindowModality(Qt.WindowModality.WindowModal)
             progress.show()
             QApplication.processEvents()
     
@@ -274,7 +274,7 @@ class StackInterpolator(QDialog):
         try:
             # Create progress dialog
             progress = QProgressDialog("Processing...", "Cancel", 0, 100, self)
-            progress.setWindowModality(Qt.WindowModal)
+            progress.setWindowModality(Qt.WindowModality.WindowModal)
             progress.setWindowTitle("Interpolation Progress")
             progress.setMinimumDuration(0)
             progress.setMinimumWidth(400)

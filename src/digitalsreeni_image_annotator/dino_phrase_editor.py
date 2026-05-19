@@ -6,9 +6,9 @@ Reusable widgets for LLM-assisted DINO detection:
 Ported from annotation_tool_v4.py and adapted for integration.
 """
 
-from PyQt5.QtCore import Qt
-from PyQt5.QtGui import QColor
-from PyQt5.QtWidgets import (
+from PyQt6.QtCore import Qt
+from PyQt6.QtGui import QColor
+from PyQt6.QtWidgets import (
     QAbstractItemView,
     QDoubleSpinBox,
     QHeaderView,
@@ -48,12 +48,12 @@ class ClassThresholdTable(QTableWidget):
         self.setHorizontalHeaderLabels(
             ["Class", "Box thr", "Txt thr", "NMS thr"])
         self.horizontalHeader().setSectionResizeMode(
-            _COL_NAME, QHeaderView.Stretch)
+            _COL_NAME, QHeaderView.ResizeMode.Stretch)
         for col in (_COL_BOX, _COL_TXT, _COL_NMS):
             self.horizontalHeader().setSectionResizeMode(
-                col, QHeaderView.ResizeToContents)
-        self.setSelectionBehavior(QAbstractItemView.SelectRows)
-        self.setEditTriggers(QAbstractItemView.NoEditTriggers)
+                col, QHeaderView.ResizeMode.ResizeToContents)
+        self.setSelectionBehavior(QAbstractItemView.SelectionBehavior.SelectRows)
+        self.setEditTriggers(QAbstractItemView.EditTrigger.NoEditTriggers)
         self.verticalHeader().setVisible(False)
         self.setMaximumHeight(160)
         self.setStyleSheet(

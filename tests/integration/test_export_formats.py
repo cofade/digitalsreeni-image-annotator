@@ -10,7 +10,7 @@ import os
 import tempfile
 import shutil
 from pathlib import Path
-from PyQt5.QtGui import QImage
+from PyQt6.QtGui import QImage
 from src.digitalsreeni_image_annotator.export_formats import (
     export_coco_json,
     export_yolo_v5plus,
@@ -30,7 +30,7 @@ def temp_output_dir():
 @pytest.fixture
 def sample_image():
     """Create a sample QImage for testing."""
-    image = QImage(100, 100, QImage.Format_RGB32)
+    image = QImage(100, 100, QImage.Format.Format_RGB32)
     image.fill(0xFFFFFFFF)  # White background
     return image
 

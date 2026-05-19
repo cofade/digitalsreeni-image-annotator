@@ -1,23 +1,12 @@
 # Architecture Decisions
 
-## ADR-001: Use PyQt5 Instead of PyQt6
+## ADR-001: GUI Framework Choice
 
-**Status**: Accepted
+**Status**: Superseded by [ADR-014](#adr-014-migrate-from-pyqt5-to-pyqt6)
 
-**Context**: Need a mature, cross-platform GUI framework with rich widgets
+**Original decision (historical)**: Use PyQt5 5.15.11. Chosen because the upstream project used PyQt5, PyQt5's ecosystem was more mature at the time, and migration carried risk.
 
-**Decision**: Use PyQt5 5.15.11
-
-**Rationale**:
-- Mature ecosystem with extensive documentation
-- Better backwards compatibility
-- Proven stability on Windows/macOS
-- Original project used PyQt5
-
-**Consequences**:
-- ✅ Stable, well-tested
-- ✅ Large community support
-- ⚠️ PyQt6 is newer but would require migration
+**Superseding decision**: The project migrated to PyQt6 6.7+ in the same PR that introduced in-process AI inference. See [ADR-014](#adr-014-migrate-from-pyqt5-to-pyqt6) for the rationale (mainly: PyQt6 eliminated the WinError 1114 DLL load-order conflict that motivated ADR-011, unblocking the subprocess removal in ADR-013).
 
 ---
 
@@ -285,17 +274,55 @@ Migrating the GUI from PyQt5 to PyQt6 (same PR) eliminates the DLL conflict — 
 
 **Consequences**:
 - ✅ Each inference is ~1-2 s faster on Windows; less dramatic on macOS/Linux but still smoother.
-- ✅ Cached model survives between calls — opening a DINO model once costs once.
+- ✅ Cached model survives between calls — opening a DINO model once costs once. The DINO model stays on its compute device (CPU or CUDA) for its full lifetime; the old worker shuffled CPU↔GPU per call, defeating the caching gain on PCIe. Call `DINOUtils.unload()` / `SAMUtils.unload()` to free GPU memory explicitly.
 - ✅ UI stays responsive during batch DINO+SAM runs (the calling thread's `QEventLoop` still processes events).
 - ✅ One source of truth per model — no more keeping `sam_utils.py` and `sam_worker.py` aligned.
+- ✅ Exceptions from the inference worker (model load failures, CUDA errors) propagate out of `_run_sync` rather than being printed and silently turned into `None`. The `change_sam_model` error path in `annotator_window.py` actually catches now.
 - ⚠️ A crash in torch (CUDA OOM, segfault) now takes the app down where the subprocess used to absorb it. Mitigation: inference is wrapped in `try/except` at the `_run_sync` boundary; the user sees an error dialog instead of a frozen UI.
-- ⚠️ Model RAM stays resident until the user closes the app (or hits a future "Unload" menu item, scaffolded as `SAMUtils.unload()` / `DINOUtils.unload()`).
-- ⚠️ Re-entrancy: because the calling thread keeps processing UI events during the wait, a user click on an un-disabled button can re-enter inference. Call sites that already disable buttons (batch DINO, model dropdown) are safe; single-click SAM relies on the SAM tool's own state flags. Acceptable for now; revisit if users hit it.
+- ⚠️ Model RAM stays resident until the user closes the app (or invokes the `unload()` method).
+- ⚠️ Re-entrancy is a real hazard, addressed with belt-and-braces:
+   - `_run_sync` sets a module-level `_inference_in_flight` flag and raises `InferenceBusyError` if re-entered. Same-thread re-entry can happen because the calling thread pumps its event loop while waiting (a timer fire, a click on an un-disabled widget, etc.). A `QMutex` would not help — same-thread re-acquisition deadlocks on a non-recursive mutex and is meaningless on a recursive one.
+   - The known re-entry vector — the SAM debounce timer firing during an in-flight inference — is guarded at the call site: `apply_sam_prediction` in `annotator_window.py` carries its own `_sam_inference_in_flight` flag and skips. Batch DINO already disables its trigger buttons.
+   - The two-layer design is intentional: the call-site flag handles the common case quietly; the `_run_sync` flag is the safety net that surfaces unknown re-entry vectors as a real exception rather than corrupting the model with concurrent `.forward()` calls (torch / ultralytics / transformers model objects are not thread-safe).
 
 **Related**:
 - Implementation: `sam_utils.py`, `dino_utils.py` (both refactored in the same PR that retires ADR-011).
 - Smoke test: `tools/check_pyqt6_torch_coexistence.py` (gate that gated this whole change).
 - Supersedes: [ADR-011](#adr-011-run-torch-based-workers-in-isolated-subprocesses).
+
+---
+
+## ADR-014: Migrate from PyQt5 to PyQt6
+
+**Status**: Accepted
+
+**Context**: The project shipped on PyQt5 5.15+ (ADR-001) from inception. Two pressures combined to motivate a migration:
+1. The PyQt5 + Torch DLL load-order conflict on Windows + Python 3.14 (ADR-011) forced an entire subprocess isolation layer (`sam_worker.py`, `dino_worker.py`, `check_worker_isolation.py`) that added ~1-2 s latency per inference. The conflict only manifests on PyQt5 — Qt6's packaging reshuffle eliminates it.
+2. PyQt5 is in maintenance mode. PyQt6 is the actively developed line, gets new Qt6.x features, and has better Linux native integration (XCB plugin paths in particular).
+
+**Decision**: Migrate the GUI binding from PyQt5 (`>=5.15.0`) to PyQt6 (`>=6.7.0`). Land in a single PR alongside the subprocess-removal work (ADR-013), gated behind `tools/check_pyqt6_torch_coexistence.py` to confirm the DLL conflict is actually gone on Windows + Python 3.14.
+
+**Rationale**:
+- Two coupled changes share most of their cost (touching every file that imports PyQt5) so doing them in one PR avoids paying the migration tax twice.
+- Most PyQt5→PyQt6 differences are enum namespacing (`Qt.AlignCenter` → `Qt.AlignmentFlag.AlignCenter`) and module relocations (`QAction` moves from `QtWidgets` to `QtGui`) — mechanical, codemod-able. The behavioural risk is in event APIs (`event.pos()` → `event.position()`, returning `QPointF` not `QPoint`) and a handful of removed widgets (`QDesktopWidget` → `QGuiApplication.primaryScreen()`).
+- The existing test suite (65 pytest-qt tests, mostly exercising coordinate transforms) serves as the regression safety net.
+
+**Consequences**:
+- ✅ Subprocess workers retired; inference is in-process with cached models (see [ADR-013](#adr-013-in-process-inference-with-qthread-wrapping)).
+- ✅ Cleaner Linux story — `libxcb-cursor0` is required by Qt 6 (was optional under Qt 5), but the platform plugin path mess is gone.
+- ✅ Long support runway: PyQt6 is the maintained binding.
+- ⚠️ One-time migration cost: ~30 files touched, enum namespacing across `annotator_window.py` (300+ references), `event.pos()` → `event.position()` rewrite in `image_label.py`.
+- ⚠️ PyQt6 is GPLv3 / commercial like PyQt5. Switching to PySide6 (LGPL) was considered and rejected to stay close to the existing `pyqtSignal`/`pyqtSlot` API.
+- ⚠️ `app.exec_()` deprecated alias still works; lingering call sites are P2 cleanup.
+
+**Verification**:
+- `tools/check_pyqt6_torch_coexistence.py` imports PyQt6 → torch → torchvision → transformers → ultralytics in that order. Run before merging on the Windows + Python 3.14 target.
+- 65 tests pass on the new binding under `QT_QPA_PLATFORM=offscreen`.
+- Full app constructs and renders headlessly; snake-game easter egg validates the `QDesktopWidget` → `QGuiApplication.primaryScreen()` replacement.
+
+**Related**:
+- Supersedes: [ADR-001](#adr-001-gui-framework-choice).
+- Unblocks: [ADR-013](#adr-013-in-process-inference-with-qthread-wrapping).
 
 ---
 

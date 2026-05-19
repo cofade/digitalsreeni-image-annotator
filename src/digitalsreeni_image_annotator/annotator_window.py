@@ -214,6 +214,11 @@ class ImageAnnotator(QMainWindow):
         self.sam_inference_timer.setSingleShot(True)
         self.sam_inference_timer.timeout.connect(self.apply_sam_prediction)
 
+        # Guards against re-entrant `apply_sam_prediction` calls — the
+        # debounce timer can fire while an earlier inference is still
+        # pumping inside _run_sync. See apply_sam_prediction().
+        self._sam_inference_in_flight = False
+
         # Create sam_magic_wand_button
         self.sam_magic_wand_button = QPushButton("Magic Wand")
         self.sam_magic_wand_button.setCheckable(True)
@@ -1064,56 +1069,67 @@ class ImageAnnotator(QMainWindow):
         self.sam_inference_timer.start(1000)
 
     def apply_sam_prediction(self):
-        if self.image_label.current_tool == "sam_box":
-            if self.image_label.sam_bbox is None:
-                print("SAM bbox is None")
-                return
-            x1, y1, x2, y2 = self.image_label.sam_bbox
-            bbox = [min(x1, x2), min(y1, y2), max(x1, x2), max(y1, y2)]
-            prediction = self.sam_utils.apply_sam_prediction(self.current_image, bbox)
-            self.image_label.sam_bbox = None
-        elif self.image_label.current_tool == "sam_points":
-            # Always use all points!
-            pos_points = self.image_label.sam_positive_points
-            neg_points = self.image_label.sam_negative_points
-            print(
-                f"[SAM-POINTS] Predicting with {len(pos_points)} positive points: {pos_points} "
-                f"and {len(neg_points)} negative points: {neg_points}"
-            )
-            if not pos_points:
-                print("No positive points for SAM-points")
-                return
-            prediction = self.sam_utils.apply_sam_points(
-                self.current_image,
-                pos_points,
-                neg_points,
-            )
-        else:
+        # Re-entry guard: if a previous SAM call is still in flight, the
+        # event-loop pump inside _run_sync can deliver this timer fire
+        # before the first call returns. Bail and rely on the user
+        # clicking again (which restarts the debounce) to issue a fresh
+        # inference with the up-to-date point set.
+        if self._sam_inference_in_flight:
             return
+        self._sam_inference_in_flight = True
+        try:
+            if self.image_label.current_tool == "sam_box":
+                if self.image_label.sam_bbox is None:
+                    print("SAM bbox is None")
+                    return
+                x1, y1, x2, y2 = self.image_label.sam_bbox
+                bbox = [min(x1, x2), min(y1, y2), max(x1, x2), max(y1, y2)]
+                prediction = self.sam_utils.apply_sam_prediction(self.current_image, bbox)
+                self.image_label.sam_bbox = None
+            elif self.image_label.current_tool == "sam_points":
+                # Always use all points!
+                pos_points = self.image_label.sam_positive_points
+                neg_points = self.image_label.sam_negative_points
+                print(
+                    f"[SAM-POINTS] Predicting with {len(pos_points)} positive points: {pos_points} "
+                    f"and {len(neg_points)} negative points: {neg_points}"
+                )
+                if not pos_points:
+                    print("No positive points for SAM-points")
+                    return
+                prediction = self.sam_utils.apply_sam_points(
+                    self.current_image,
+                    pos_points,
+                    neg_points,
+                )
+            else:
+                return
 
-        if prediction:
-            temp_annotation = {
-                "segmentation": prediction["segmentation"],
-                "category_id": self.class_mapping[self.current_class],
-                "category_name": self.current_class,
-                "score": prediction["score"],
-            }
-            self.image_label.temp_sam_prediction = temp_annotation
-            self.image_label.update()
-        elif prediction is None:
-            QMessageBox.information(
-                self,
-                "SAM",
-                "No mask matches the given constraints. "
-                "Try adjusting the box or point positions."
-            )
-        else:
-            print("Failed to generate prediction")
+            if prediction:
+                temp_annotation = {
+                    "segmentation": prediction["segmentation"],
+                    "category_id": self.class_mapping[self.current_class],
+                    "category_name": self.current_class,
+                    "score": prediction["score"],
+                }
+                self.image_label.temp_sam_prediction = temp_annotation
+                self.image_label.update()
+            elif prediction is None:
+                QMessageBox.information(
+                    self,
+                    "SAM",
+                    "No mask matches the given constraints. "
+                    "Try adjusting the box or point positions."
+                )
+            else:
+                print("Failed to generate prediction")
 
-        # Only clear box/points for box mode, not for points mode!
-        if self.image_label.current_tool == "sam_box":
-            self.image_label.sam_bbox = None
-            self.image_label.update()
+            # Only clear box/points for box mode, not for points mode!
+            if self.image_label.current_tool == "sam_box":
+                self.image_label.sam_bbox = None
+                self.image_label.update()
+        finally:
+            self._sam_inference_in_flight = False
 
     def accept_sam_prediction(self):
         if self.image_label.temp_sam_prediction:

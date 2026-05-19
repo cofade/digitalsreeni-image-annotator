@@ -20,7 +20,7 @@
      │
      ├─> Show Main Window
      │
-     └─> Enter Event Loop (app.exec_())
+     └─> Enter Event Loop (app.exec())
 ```
 
 ## Annotation Creation - Manual Polygon

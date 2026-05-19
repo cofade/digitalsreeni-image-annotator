@@ -3,11 +3,11 @@ Grounding DINO utilities — runs HF Transformers DINO in-process.
 
 History
 -------
-The previous version delegated to ``dino_worker.py`` over subprocess to
-dodge the same Windows + Python 3.14 + PyQt5 DLL conflict that motivated
-the SAM worker (ADR-011). With PyQt6 in place the conflict is gone and
-we run inference directly — saves a process spawn per detection call
-and lets the model stay resident in memory between calls.
+Earlier versions delegated to a ``dino_worker.py`` subprocess to dodge
+the same Windows + Python 3.14 + PyQt5 DLL conflict that motivated the
+SAM worker (the now-superseded ADR-011). With PyQt6 in place (ADR-014)
+the conflict is gone and we run inference directly — saves a process
+spawn per call and lets the model stay resident on its compute device.
 
 Threading model
 ---------------
@@ -143,8 +143,10 @@ class DINOUtils(QObject):
             print(f"Unknown DINO model: {model_name}")
             return None
 
-        # Marshal to numpy on the calling thread so the worker doesn't
-        # touch the QImage (Qt objects are not designed to cross threads).
+        # Marshal to numpy on the calling thread, with the array
+        # already copied off the QImage buffer (see _qimage_to_numpy
+        # — the .copy() there is what actually makes this safe). The
+        # worker thread then operates on memory it fully owns.
         image_np = _qimage_to_numpy(image)
 
         return _run_sync(
@@ -164,14 +166,12 @@ class DINOUtils(QObject):
     ):
         # We're already on a worker thread (called via _run_sync). Load
         # the model directly here when needed — calling _run_sync from
-        # within would deadlock against the outer QEventLoop.
+        # within would deadlock against the outer QEventLoop. Don't
+        # swallow load errors: let them propagate so _InferenceThread
+        # captures them and _run_sync re-raises to the caller, which
+        # can show a real error dialog instead of "No detections."
         if self._loaded_model_path != model_path or self._model is None:
-            try:
-                self._load_model_blocking(model_path)
-            except Exception:
-                import traceback
-                traceback.print_exc()
-                return None
+            self._load_model_blocking(model_path)
 
         import torch
         from PIL import Image as PILImage
@@ -181,21 +181,18 @@ class DINOUtils(QObject):
         device = self._device or "cpu"
 
         all_boxes, all_scores, all_labels = [], [], []
-        # Ensure model is on the active device for this call (cheap if
-        # already there) — guards against an earlier off-load.
-        self._model.to(device)
-
+        # Model lives on `device` permanently after the first load
+        # (set in _load_model_blocking). Earlier code shuffled it
+        # CPU↔GPU on every call, defeating the in-process caching
+        # win documented in ADR-013 — moving a 1.9 GB DINO base
+        # over PCIe costs hundreds of ms per call. unload() is
+        # the explicit way to free GPU memory when the user wants to.
         for cfg in class_configs:
             boxes, scores, labels = self._run_for_class(image_pil, cfg, device)
             if len(boxes):
                 all_boxes.append(boxes)
                 all_scores.append(scores)
                 all_labels.extend(labels)
-
-        # Off-load to CPU between batch calls; harmless if device is CPU.
-        self._model.to("cpu")
-        if device == "cuda":
-            torch.cuda.empty_cache()
 
         if not all_boxes:
             return []

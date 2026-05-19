@@ -156,7 +156,7 @@ Before opening a PR, verify at minimum:
 4. **Dark mode** — toggle and check rendering of new UI elements
 5. **Save/load roundtrip** — if the feature touches `.iap` project files, save, close, reopen, verify state restored
 6. **Adjacent features** — verify no regression in SAM, annotation tools, export formats
-7. **Subprocess features** — if touching `sam_worker.py` or `dino_worker.py`, verify inference still works (model loads, returns masks/boxes)
+7. **Inference features** — if touching `sam_utils.py` or `dino_utils.py`, verify the model loads end-to-end (no silent load failure), returns masks/boxes, and the UI stays responsive during inference (timers, redraws, progress dialog cancels keep firing — see ADR-013)
 
 ### arc42 Documentation Update Rules
 
@@ -177,7 +177,7 @@ Before every PR, run the senior reviewer agent (`.claude/agents/senior-reviewer.
 This is **mandatory** — the agent performs an independent end-of-implementation review:
 - Reads the actual diff, not commit messages
 - Ranks issues P0 (blocks merge) / P1 (should fix) / P2 (nit)
-- Checks CLAUDE.md compliance (feature branches, coordinate systems, `is_loading_project` guards, DINO config persistence, subprocess isolation)
+- Checks CLAUDE.md compliance (feature branches, coordinate systems, `is_loading_project` guards, DINO config persistence, in-process inference re-entrancy guards)
 
 **Run it in the foreground** — never `run_in_background: true`. The review is a blocking quality gate: the next steps (address P0s, push, open PR) depend on its findings. Launch the agent and wait for the result before doing anything else, then iterate until clean.
 

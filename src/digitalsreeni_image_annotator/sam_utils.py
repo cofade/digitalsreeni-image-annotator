@@ -3,11 +3,12 @@ SAM 2 utilities — runs Ultralytics SAM in-process.
 
 History
 -------
-The previous version delegated to ``sam_worker.py`` over subprocess to
-dodge ``WinError 1114`` on Windows + Python 3.14 + PyQt5 (ADR-011).
-Migrating to PyQt6 eliminates that DLL load-order conflict, so we run
-the model directly in this process — saves a ~1-2 s spawn per call
-and lets us keep the model in memory across calls.
+Earlier versions delegated to a ``sam_worker.py`` subprocess to dodge
+``WinError 1114`` on Windows + Python 3.14 + PyQt5 (the now-superseded
+ADR-011). Migrating to PyQt6 (ADR-014) eliminated that DLL load-order
+conflict, so we run the model directly here — saves a ~1-2 s spawn
+per call and lets us keep the model resident. See ADR-013 for the
+threading and re-entrancy story.
 
 Threading model
 ---------------
@@ -66,7 +67,16 @@ SAM_MODELS_DIR = os.path.join(models_base_dir(), "sam")
 
 
 def _qimage_to_numpy(qimage: QImage) -> np.ndarray:
-    """QImage → RGB numpy array."""
+    """QImage → RGB numpy array. Returned array is a fresh copy.
+
+    The naive ``np.frombuffer(qimage.constBits().asarray(N))`` aliases
+    the QImage's pixel buffer. That's a problem in two ways: (1) the
+    returned array is invalidated if the QImage is mutated or freed,
+    and (2) we hand the array across a thread boundary to the
+    inference worker, where Qt's threading rules make any read from
+    the QImage memory dicey. Always ``.copy()`` so the worker thread
+    owns its own buffer for the duration of the call.
+    """
     width = qimage.width()
     height = qimage.height()
     fmt = qimage.format()
@@ -74,7 +84,7 @@ def _qimage_to_numpy(qimage: QImage) -> np.ndarray:
     if fmt == QImage.Format.Format_Grayscale8:
         buffer = qimage.constBits().asarray(height * width)
         img = np.frombuffer(buffer, np.uint8).reshape((height, width))
-        return np.stack((img,) * 3, -1)
+        return np.stack((img,) * 3, -1)  # np.stack already returns a copy
 
     if fmt in (
         QImage.Format.Format_RGB32,
@@ -83,17 +93,20 @@ def _qimage_to_numpy(qimage: QImage) -> np.ndarray:
     ):
         buffer = qimage.constBits().asarray(height * width * 4)
         img = np.frombuffer(buffer, np.uint8).reshape((height, width, 4))
-        return img[:, :, :3]
+        return img[:, :, :3].copy()
 
     if fmt == QImage.Format.Format_RGB888:
         buffer = qimage.constBits().asarray(height * width * 3)
-        return np.frombuffer(buffer, np.uint8).reshape((height, width, 3))
+        img = np.frombuffer(buffer, np.uint8).reshape((height, width, 3))
+        return img.copy()
 
-    # Fallback: convert via Qt
+    # Fallback: convert via Qt. ``converted`` is a local QImage that
+    # goes out of scope at function return, so we MUST copy before
+    # the buffer is freed.
     converted = qimage.convertToFormat(QImage.Format.Format_RGB32)
     buffer = converted.constBits().asarray(height * width * 4)
     img = np.frombuffer(buffer, np.uint8).reshape((height, width, 4))
-    return img[:, :, :3]
+    return img[:, :, :3].copy()
 
 
 # ── geometry helpers ────────────────────────────────────────────────────────
@@ -169,14 +182,19 @@ def _bbox_constraints_ok(contour, user_bbox) -> bool:
 # ── threading scaffolding ──────────────────────────────────────────────────
 
 class _InferenceThread(QThread):
-    """Runs a callable on a background thread and emits its return value.
+    """Runs a callable on a background thread.
+
+    Captures both the return value AND any exception raised, so
+    ``_run_sync`` can re-raise on the calling thread. Swallowing
+    exceptions inside the worker was the cause of silent
+    model-load failures (review P0).
 
     We use QThread (not QRunnable) because QRunnable's signal/slot
     story requires a separate QObject anyway and we want a minimal
     wrapper. Lifetime is bounded by the QEventLoop in _run_sync.
     """
 
-    finished_with_result = pyqtSignal(object)
+    finished_with_result = pyqtSignal()
 
     def __init__(self, fn, *args, **kwargs):
         super().__init__()
@@ -184,32 +202,69 @@ class _InferenceThread(QThread):
         self._args = args
         self._kwargs = kwargs
         self._result = None
+        self._exc: BaseException | None = None
 
     def run(self):
         try:
             self._result = self._fn(*self._args, **self._kwargs)
-        except Exception:
-            traceback.print_exc()
-            self._result = None
-        self.finished_with_result.emit(self._result)
+        except BaseException as exc:  # noqa: BLE001 - rebroadcast verbatim
+            # Capture rather than print — _run_sync will re-raise on the
+            # calling thread so try/except at the call site actually catches.
+            self._exc = exc
+        self.finished_with_result.emit()
+
+
+class InferenceBusyError(RuntimeError):
+    """Raised when ``_run_sync`` is re-entered before the first call returns.
+
+    See ``_run_sync`` for the full story. Callers that drive inference
+    from timers or user events should catch this and skip rather than
+    treating it as "no result found".
+    """
+
+
+# Module-level busy flag. ``_run_sync`` pumps the calling thread's
+# event loop while inference runs, so a timer fire or user click can
+# call back into ``_run_sync`` on the same thread before the first
+# call returns. Two concurrent ``model(...)`` calls would race on the
+# torch/ultralytics object (not thread-safe) and produce garbled
+# masks or CUDA errors. A QMutex won't help: it's the same thread
+# trying to re-acquire, which deadlocks a non-recursive mutex and is
+# meaningless for a recursive one. A simple flag with an explicit
+# exception is the honest fix — callers learn about the re-entry
+# instead of silently getting None back.
+_inference_in_flight = False
 
 
 def _run_sync(fn, *args, **kwargs):
     """Run fn on a worker thread; pump the calling thread's event loop
-    until done; return the result.
+    until done; return the result. Re-raises exceptions on the caller.
 
     Looks synchronous to callers but keeps the UI alive — timers,
     repaints and progress dialog cancels continue to fire during the
-    wait. Callers that need re-entry protection must disable the
-    relevant widgets before calling.
+    wait. Re-entry from the same thread (the only kind that can happen
+    here) raises :class:`InferenceBusyError` rather than corrupting
+    the model with concurrent forward passes.
     """
-    thread = _InferenceThread(fn, *args, **kwargs)
-    loop = QEventLoop()
-    thread.finished_with_result.connect(loop.quit)
-    thread.start()
-    loop.exec()
-    thread.wait()
-    return thread._result
+    global _inference_in_flight
+    if _inference_in_flight:
+        raise InferenceBusyError(
+            "Another SAM/DINO inference is still running. "
+            "Wait for it to finish or cancel before issuing a new call."
+        )
+    _inference_in_flight = True
+    try:
+        thread = _InferenceThread(fn, *args, **kwargs)
+        loop = QEventLoop()
+        thread.finished_with_result.connect(loop.quit)
+        thread.start()
+        loop.exec()
+        thread.wait()
+        if thread._exc is not None:
+            raise thread._exc
+        return thread._result
+    finally:
+        _inference_in_flight = False
 
 
 # ── public class ───────────────────────────────────────────────────────────
@@ -242,9 +297,12 @@ class SAMUtils(QObject):
             raise ValueError(f"Unknown SAM model: {model_name}")
 
         # Load on a worker thread to avoid stalling the UI on the
-        # ~1-3 s torch model-load. Behaves synchronously to callers.
-        self.current_sam_model = model_name
+        # ~1-3 s torch model-load. Behaves synchronously to callers and
+        # re-raises any load-time exception (network, corrupt weights,
+        # CUDA OOM) — only flip `current_sam_model` AFTER success so
+        # callers don't see a stale name on failure.
         _run_sync(self._load_model_blocking, model_name)
+        self.current_sam_model = model_name
         self.model_changed.emit(model_name)
         print(f"SAM model loaded: {model_name}")
 

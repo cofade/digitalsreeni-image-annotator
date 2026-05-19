@@ -179,6 +179,8 @@ This is **mandatory** — the agent performs an independent end-of-implementatio
 - Ranks issues P0 (blocks merge) / P1 (should fix) / P2 (nit)
 - Checks CLAUDE.md compliance (feature branches, coordinate systems, `is_loading_project` guards, DINO config persistence, subprocess isolation)
 
+**Run it in the foreground** — never `run_in_background: true`. The review is a blocking quality gate: the next steps (address P0s, push, open PR) depend on its findings. Launch the agent and wait for the result before doing anything else, then iterate until clean.
+
 Address all P0s before merging. Address P1s unless there's explicit justification.
 
 ## Known Constraints

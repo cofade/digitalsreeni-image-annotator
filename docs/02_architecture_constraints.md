@@ -27,7 +27,7 @@
 
 ### Linux-Specific Issues
 - PyQt5 XCB platform plugin conflicts
-- Workaround: Remove `QT_QPA_PLATFORM_PLUGIN_PATH` environment variable on startup (see [main.py](../../src/digitalsreeni_image_annotator/main.py:15-19))
+- Workaround: Remove `QT_QPA_PLATFORM_PLUGIN_PATH` environment variable on startup (see [main.py](../src/digitalsreeni_image_annotator/main.py:15-19))
 
 ## Conventions
 

@@ -95,6 +95,48 @@ sam_model: SAM                      # Ultralytics SAM instance
 - `qimage_to_numpy(qimage)`: Convert QImage to numpy array
 - `mask_to_polygon(mask)`: Convert SAM mask to polygon contours
 
+Inference does not run in-process. `SAMUtils._send_request()` spawns
+`sam_worker.py` as a subprocess (PyQt-free) and exchanges JSON over
+stdin/stdout. See [ADR-011](09_architecture_decisions.md#adr-011-run-torch-based-workers-in-isolated-subprocesses).
+
+### DINO Subsystem (Grounding DINO + SAM pipeline)
+
+LLM-assisted detection: the user gives free-form text phrases per class,
+Grounding DINO produces bounding boxes, and SAM 2 refines them into
+segmentation masks.
+
+| Module | Responsibility |
+|--------|----------------|
+| `dino_utils.py` | `DINOUtils` — parent-side façade. Resolves model paths via `models_base_dir()` and forwards detection requests to the worker. |
+| `dino_worker.py` | Standalone subprocess that loads `transformers.GroundingDinoForObjectDetection` and runs inference. No PyQt imports. |
+| `dino_phrase_editor.py` | Two widgets: `ClassThresholdTable` (per-class box/text/NMS thresholds) and `PhraseEditorPanel` (per-class phrase list). These widgets are the **single source of truth** for phrases and thresholds; project save/load reads/writes them via `get_all_phrases()` / `set_phrases()` and `get_thresholds_dict()` / `set_thresholds()`. |
+| `dino_merge_dialog.py` | Standalone dialog: merges accumulated DINO+SAM annotations across images into a training-ready COCO JSON. |
+
+**Detection request shape** (parent → worker):
+```python
+{
+  "image_path": "/abs/path/to/temp.png",
+  "class_configs": [
+    {"name": "drone", "phrases": ["drone", "quadcopter"],
+     "box_thr": 0.10, "txt_thr": 0.25, "nms_thr": 0.50},
+    ...
+  ],
+  "model_path": "/abs/path/to/models/grounding-dino-base"
+}
+```
+
+**Detection response shape** (worker → parent):
+```python
+{"results": [
+  {"class_name": "drone", "bbox": [x1, y1, x2, y2], "score": 0.93, "label": "drone"},
+  ...
+]}
+```
+
+DINO's xyxy boxes feed directly into `SAMUtils.apply_sam_predictions_batch()`,
+which returns segmentation polygons (xywh bbox is derived from the polygon at
+export time — see [Cross-cutting Concepts](08_crosscutting_concepts.md)).
+
 ## Level 3: Export/Import Subsystem
 
 ### Export Formats (export_formats.py)

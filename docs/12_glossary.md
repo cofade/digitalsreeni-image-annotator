@@ -17,14 +17,23 @@ Common Objects in Context - a standardized JSON format for object detection and 
 ### CZI File
 Carl Zeiss Image file format for multi-dimensional microscopy images. Contains metadata and multi-channel Z-stacks.
 
+### DINO / Grounding DINO
+"DINO" in this codebase refers specifically to **Grounding DINO** (IDEA-Research, 2023) — an open-set object detector that takes a natural-language phrase ("drone", "wing of an aircraft") and returns bounding boxes for matching regions of an image. Not to be confused with the self-supervised vision-only DINOv1/v2 backbones (similar name, different model). Models live under `models/grounding-dino-base/` and `models/grounding-dino-tiny/`.
+
 ### Multi-dimensional Image
 An image with more than 2 dimensions, typically from microscopy. Dimensions include T (time), Z (depth), C (channel), S (scene), H (height), W (width).
+
+### NMS (Non-Maximum Suppression)
+Post-processing step that removes redundant overlapping boxes. After Grounding DINO scores many candidate boxes, NMS keeps only the highest-scoring one per cluster — controlled per-class via the **NMS thr** column in the DINO panel (higher = more aggressive de-duplication).
 
 ### Paint Brush Tool
 Drawing tool that creates freeform annotations by painting a mask with adjustable brush size. Converted to polygon contours when finished.
 
 ### Pascal VOC
 Visual Object Classes dataset format. XML-based annotation format primarily for bounding boxes.
+
+### Phrase (DINO)
+A free-form text description used by Grounding DINO to find objects. Each annotation class has a list of phrases — for example a "drone" class might use phrases `["drone", "quadcopter", "octocopter", "helicopter"]`. The class name itself is always the first phrase and cannot be removed.
 
 ### Polygon / Segmentation
 A closed shape annotation defined by a list of vertex coordinates `[x1, y1, x2, y2, ...]`. Stored in annotation as `"segmentation"` key.
@@ -46,6 +55,9 @@ A 2D image extracted from a multi-dimensional image stack. Named with format `{f
 
 ### Stack
 A multi-dimensional image, typically a TIFF or CZI file with multiple 2D slices in Z-dimension (depth).
+
+### Subprocess Worker
+A standalone Python script (`sam_worker.py`, `dino_worker.py`) that runs ML model inference in its own process, communicating with the GUI parent via JSON over stdin/stdout. The split is required to avoid a Windows + Python 3.14 DLL load-order conflict between PyQt5 and PyTorch — see [ADR-011](09_architecture_decisions.md#adr-011-run-torch-based-workers-in-isolated-subprocesses).
 
 ### TIFF Stack
 Multi-page TIFF file containing multiple 2D images, often used for Z-stacks in microscopy.

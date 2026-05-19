@@ -1,13 +1,18 @@
-sam2_b.pt
-sam2_l.pt
-sam2_s.pt
-sam2_t.pt
-sam2.1_b.pt
-sam2.1_l.pt
-sam2.1_s.pt
-sam2.1_t.pt
+# Model weights and downloaded assets
+models/
+*.pt
+*.pth
+*.onnx
+*.safetensors
 
-.claude
+# User project files
+*.iap
+
+# Local tooling — .claude is mostly local state, but the senior-reviewer
+# agent definition under .claude/agents/ is tracked (referenced by
+# CLAUDE.md as a mandatory quality gate), so un-ignore that subtree.
+.claude/*
+!.claude/agents/
 .venv
 
 # Python cache and build artifacts
@@ -39,3 +44,22 @@ wheels/
 htmlcov/
 .tox/
 .nox/
+
+# IDE / editor
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# OS metadata
+.DS_Store
+Thumbs.db
+desktop.ini
+
+# Logs
+*.log
+
+# Environment / secrets
+.env
+.env.local
+.env.*.local

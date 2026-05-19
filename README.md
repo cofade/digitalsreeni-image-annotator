@@ -82,6 +82,23 @@ pip install digitalsreeni-image-annotator
 
 The application uses the Ultralytics library, so there's no need to separately install SAM2 or PyTorch, or download SAM2 models manually.
 
+### GPU acceleration (NVIDIA)
+
+The PyTorch wheel installed by default from PyPI is **CPU-only** on Windows. If you have an NVIDIA GPU, SAM and Grounding DINO will run dramatically faster on CUDA — reinstall PyTorch from the CUDA index:
+
+```bash
+pip uninstall -y torch torchvision
+pip install torch torchvision --index-url https://download.pytorch.org/whl/cu128
+```
+
+If `cu128` errors as "no matching distribution", try `cu124` instead. Verify the install picked up your GPU:
+
+```bash
+python -c "import torch; print(torch.cuda.is_available(), torch.cuda.get_device_name(0))"
+```
+
+You should see `True` and your GPU name. For other platforms or driver combinations, use the official selector at <https://pytorch.org/get-started/locally/>.
+
 ## Usage
 
 1. Run the DigitalSreeni Image Annotator application:

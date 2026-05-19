@@ -216,6 +216,55 @@
 
 ---
 
+## ADR-011: Run Torch-based Workers in Isolated Subprocesses
+
+**Status**: Accepted
+
+**Context**: Both SAM 2 (via Ultralytics) and Grounding DINO (via transformers) load PyTorch into the process. On Windows + Python 3.14, importing PyQt5 first and then loading PyTorch causes `WinError 1114` (DLL load order conflict between Qt and Torch native dependencies). The application is fundamentally PyQt5-based, so we cannot reorder these imports.
+
+**Decision**: Run each ML model in its own subprocess script that has no PyQt5 imports — `sam_worker.py` for SAM and `dino_worker.py` for DINO. The parent GUI process speaks to each worker over stdin/stdout with JSON requests and responses.
+
+**Rationale**:
+- The DLL conflict only manifests when both libraries are loaded in the same process. Splitting them across processes avoids the issue entirely.
+- Keeps the GUI responsive: heavy model loading doesn't block PyQt's event loop in the same address space.
+- Lets us swap or upgrade torch/transformers/ultralytics versions without worrying about Qt interactions.
+- The JSON-over-stdio protocol is simple, language-agnostic, and easy to debug — just inspect what the worker prints.
+
+**Consequences**:
+- ✅ Works reliably on Windows + Python 3.14 (the original motivating bug)
+- ✅ Worker scripts are PyQt-free; they can be tested independently
+- ⚠️ Per-inference subprocess spawn cost (~1-2 s startup + first model load)
+- ⚠️ Need UTF-8 forced on both ends of the pipe (`PYTHONIOENCODING=utf-8` in env, `encoding="utf-8", errors="replace"` on parent) — Windows cp1252 default crashes on non-ASCII bytes in torch warnings
+- ⚠️ Two near-identical worker scripts to maintain (`sam_worker.py` mirrors the pattern from `dino_worker.py`)
+
+**Related**:
+- Implementation: `sam_utils.py` / `sam_worker.py`, `dino_utils.py` / `dino_worker.py`
+- Original SAM-only version landed in #65 (Python 3.14 support)
+- DINO subprocess pattern landed alongside the DINO feature
+
+---
+
+## ADR-012: Lazy Model Load on Dropdown Selection
+
+**Status**: Accepted
+
+**Context**: Both SAM and DINO model weights are large (SAM 2 tiny ~80 MB up to large ~400 MB; Grounding DINO base ~1.9 GB) and may not exist on first run. An earlier DINO flow required an explicit "Load" button click that did the resolve-or-download dance synchronously before the user could detect anything.
+
+**Decision**: Selecting a model from the dropdown only updates state. Actual downloads happen on first use (first Detect call). UI feedback in the status label distinguishes "Ready: <model>" (weights present) from "<model> — will download on first detection".
+
+**Rationale**:
+- Matches the existing SAM behaviour (`change_sam_model` just stores the name; download happens in the worker).
+- Removes a redundant click — one fewer thing for users to discover.
+- Selecting a model the user picked by mistake is now free; only confirmed Detect triggers the (potentially heavy) download.
+
+**Consequences**:
+- ✅ Consistent UX between the SAM and DINO panels
+- ✅ Faster perceived startup; no spurious downloads from idle browsing
+- ⚠️ First Detect after selection blocks the UI while download runs (~1 min for DINO base); the status label shows progress but the dialog is otherwise unresponsive
+- ⚠️ No async download progress dialog — `huggingface_hub` prints to stdout
+
+---
+
 ## Decisions Under Consideration
 
 ### Consider pytest-qt for Utility Testing

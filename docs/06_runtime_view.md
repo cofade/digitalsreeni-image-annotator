@@ -132,6 +132,70 @@ User accepts prediction
     └─> Clear SAM state, reset to normal mode
 ```
 
+## LLM-Assisted Detection (Grounding DINO + SAM)
+
+End-to-end flow when the user clicks "Detect Current Image" in the DINO panel:
+
+```
+User clicks "Detect Current Image"
+    │
+    ├─> Preflight: dino_model_loaded? sam_model selected? image loaded?
+    │   (early return with QMessageBox if any check fails)
+    │
+    ├─> Resolve DINO model path via _resolve_dino_model_path()
+    │   │
+    │   ├─> Path exists → skip download
+    │   └─> Missing  → DINOUtils.download_model() pulls from HuggingFace Hub
+    │                  (huggingface_hub.snapshot_download into models/<name>/)
+    │
+    ├─> Build class_configs from widgets (single source of truth):
+    │   - phrases:    dino_phrase_panel.get_phrases_for(class_name)
+    │   - thresholds: dino_class_table.get_class_configs()
+    │
+    ├─> DINOUtils.detect(qimage, class_configs, model_name)
+    │   │
+    │   ├─> Save QImage to a temp PNG
+    │   ├─> Spawn dino_worker.py subprocess (PyQt-free)
+    │   ├─> Send JSON request over stdin
+    │   ├─> Worker loads GroundingDinoForObjectDetection
+    │   ├─> Worker runs inference per phrase, applies per-class NMS
+    │   └─> Returns [{class_name, bbox: [x1,y1,x2,y2], score, label}, ...]
+    │
+    ├─> Feed DINO bboxes into SAMUtils.apply_sam_predictions_batch()
+    │   │
+    │   ├─> Spawn sam_worker.py subprocess
+    │   └─> Returns one {segmentation: [...], score: ...} per bbox
+    │
+    ├─> Build temp_annotations (segmentation + class + score + source="dino")
+    │
+    ├─> image_label.temp_annotations = ...
+    ├─> image_label.setFocus()                ← so Enter/Esc work without clicking
+    └─> image_label.update()                  ← orange preview masks render
+
+User presses Enter
+    │
+    └─> accept_dino_results()
+        │
+        ├─> For each temp annotation:
+        │     - add_class(class_name) if new
+        │     - image_label.annotations.setdefault(class_name, []).append(ann)
+        │     - add_annotation_to_list(ann)   ← assigns per-class "number"
+        │
+        └─> save_current_annotations()        ← syncs to all_annotations
+
+User presses Esc
+    │
+    └─> reject_dino_results() → discard temp_annotations
+```
+
+**Batch mode** (`Detect All Images`) loops over every image. In "Review before
+accepting" the results land in `dino_batch_results[image_name]` and the GUI
+walks the user through them image-by-image. In "Auto-accept all detections"
+`_commit_dino_results()` writes directly to `all_annotations` for non-current
+images; for the currently-displayed image it routes through
+`image_label.annotations` so the canvas stays in sync and the next
+`save_current_annotations()` doesn't overwrite the additions.
+
 ## Project Save
 
 ```

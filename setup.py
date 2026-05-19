@@ -30,7 +30,7 @@ setup(
     python_requires=">=3.10",
     install_requires=[
         "PyQt5>=5.15.0",
-        "numpy>=2.4.0",  # Python 3.14 requires numpy 2.4+
+        "numpy>=2.0.0",  # pip resolves 2.4+ on Py3.14, 2.2.x on Py3.10 (last 3.10-compatible)
         "Pillow>=10.0.0",
         "tifffile>=2023.0.0",
         "czifile>=2019.7.2",
@@ -41,7 +41,11 @@ setup(
         "plotly>=5.0.0",
         "shapely>=2.0.0",
         "pystackreg>=0.2.7",
-        "pydicom>=2.3.0"
+        "pydicom>=2.3.0",
+        "torch>=2.2.0",
+        "torchvision>=0.17.0",
+        "transformers>=4.40.0",
+        "huggingface_hub>=0.20.0"
     ],
     entry_points={
         "console_scripts": [

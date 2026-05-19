@@ -317,7 +317,8 @@ class TestYOLOExport:
         self, temp_output_dir, sample_annotations, sample_class_mapping,
         sample_image_paths
     ):
-        """Test that YOLO export creates proper directory structure."""
+        """Test that YOLO export creates the documented images/labels x
+        train/val directory structure (see export_yolo_v5plus docstring)."""
         export_yolo_v5plus(
             sample_annotations,
             sample_class_mapping,
@@ -327,13 +328,14 @@ class TestYOLOExport:
             output_dir=temp_output_dir
         )
 
-        train_dir = os.path.join(temp_output_dir, 'train')
-        valid_dir = os.path.join(temp_output_dir, 'valid')
-
-        assert os.path.exists(train_dir)
-        assert os.path.exists(valid_dir)
-        assert os.path.isdir(train_dir)
-        assert os.path.isdir(valid_dir)
+        for sub in [
+            os.path.join('images', 'train'),
+            os.path.join('images', 'val'),
+            os.path.join('labels', 'train'),
+            os.path.join('labels', 'val'),
+        ]:
+            full = os.path.join(temp_output_dir, sub)
+            assert os.path.isdir(full), f"Expected directory not created: {sub}"
 
     def test_export_yolo_creates_yaml(
         self, temp_output_dir, sample_annotations, sample_class_mapping,
@@ -387,7 +389,8 @@ class TestPascalVOCExport:
         self, temp_output_dir, sample_annotations, sample_class_mapping,
         sample_image_paths
     ):
-        """Test that Pascal VOC export creates proper directory structure."""
+        """Test that Pascal VOC export creates the Annotations/ and images/
+        directories at the output root (see export_pascal_voc_bbox)."""
         export_pascal_voc_bbox(
             sample_annotations,
             sample_class_mapping,
@@ -398,10 +401,10 @@ class TestPascalVOCExport:
         )
 
         annotations_dir = os.path.join(temp_output_dir, 'Annotations')
-        images_dir = os.path.join(temp_output_dir, 'JPEGImages')
+        images_dir = os.path.join(temp_output_dir, 'images')
 
-        assert os.path.exists(annotations_dir)
-        assert os.path.exists(images_dir)
+        assert os.path.isdir(annotations_dir)
+        assert os.path.isdir(images_dir)
 
     def test_export_pascal_voc_creates_xml(
         self, temp_output_dir, sample_annotations, sample_class_mapping,

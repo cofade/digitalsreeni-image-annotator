@@ -2,6 +2,7 @@ import copy
 import json
 import os
 import shutil
+import traceback
 import warnings
 from datetime import datetime
 
@@ -82,7 +83,7 @@ from .import_formats import (
     import_yolo_v5plus,
     process_import_format,
 )
-from .sam_utils import SAMUtils
+from .sam_utils import InferenceBusyError, SAMUtils
 from .slice_registration import SliceRegistrationTool
 from .snake_game import SnakeGame
 from .soft_dark_stylesheet import soft_dark_stylesheet
@@ -1078,31 +1079,48 @@ class ImageAnnotator(QMainWindow):
             return
         self._sam_inference_in_flight = True
         try:
-            if self.image_label.current_tool == "sam_box":
-                if self.image_label.sam_bbox is None:
-                    print("SAM bbox is None")
+            try:
+                if self.image_label.current_tool == "sam_box":
+                    if self.image_label.sam_bbox is None:
+                        print("SAM bbox is None")
+                        return
+                    x1, y1, x2, y2 = self.image_label.sam_bbox
+                    bbox = [min(x1, x2), min(y1, y2), max(x1, x2), max(y1, y2)]
+                    prediction = self.sam_utils.apply_sam_prediction(self.current_image, bbox)
+                    self.image_label.sam_bbox = None
+                elif self.image_label.current_tool == "sam_points":
+                    # Always use all points!
+                    pos_points = self.image_label.sam_positive_points
+                    neg_points = self.image_label.sam_negative_points
+                    print(
+                        f"[SAM-POINTS] Predicting with {len(pos_points)} positive points: {pos_points} "
+                        f"and {len(neg_points)} negative points: {neg_points}"
+                    )
+                    if not pos_points:
+                        print("No positive points for SAM-points")
+                        return
+                    prediction = self.sam_utils.apply_sam_points(
+                        self.current_image,
+                        pos_points,
+                        neg_points,
+                    )
+                else:
                     return
-                x1, y1, x2, y2 = self.image_label.sam_bbox
-                bbox = [min(x1, x2), min(y1, y2), max(x1, x2), max(y1, y2)]
-                prediction = self.sam_utils.apply_sam_prediction(self.current_image, bbox)
-                self.image_label.sam_bbox = None
-            elif self.image_label.current_tool == "sam_points":
-                # Always use all points!
-                pos_points = self.image_label.sam_positive_points
-                neg_points = self.image_label.sam_negative_points
-                print(
-                    f"[SAM-POINTS] Predicting with {len(pos_points)} positive points: {pos_points} "
-                    f"and {len(neg_points)} negative points: {neg_points}"
+            except InferenceBusyError:
+                # Re-entry safety net from sam_utils. The call-site flag
+                # above should catch this first, but if a different
+                # caller drives inference concurrently we just skip —
+                # the user keeps interacting; their next click will
+                # restart the debounce.
+                return
+            except Exception as exc:
+                traceback.print_exc()
+                QMessageBox.critical(
+                    self,
+                    "SAM Error",
+                    f"SAM inference failed:\n\n{exc}\n\n"
+                    "See the log for details.",
                 )
-                if not pos_points:
-                    print("No positive points for SAM-points")
-                    return
-                prediction = self.sam_utils.apply_sam_points(
-                    self.current_image,
-                    pos_points,
-                    neg_points,
-                )
-            else:
                 return
 
             if prediction:
@@ -1152,14 +1170,6 @@ class ImageAnnotator(QMainWindow):
         self.slice_list.itemClicked.connect(self.switch_slice)
         self.image_list_layout.addWidget(QLabel("Slices:"))
         self.image_list_layout.addWidget(self.slice_list)
-
-    def qimage_to_numpy(self, qimage):
-        width = qimage.width()
-        height = qimage.height()
-        ptr = qimage.bits()
-        ptr.setsize(height * width * 4)
-        arr = np.frombuffer(ptr, np.uint8).reshape((height, width, 4))
-        return arr[:, :, :3]  # Slice off the alpha channel
 
     def open_images(self):
         file_names, _ = QFileDialog.getOpenFileNames(
@@ -2495,6 +2505,12 @@ class ImageAnnotator(QMainWindow):
         dicom_converter_action.triggered.connect(self.show_dicom_converter)
         tools_menu.addAction(dicom_converter_action)
 
+        tools_menu.addSeparator()
+
+        unload_models_action = QAction("Unload AI Models (Free GPU Memory)", self)
+        unload_models_action.triggered.connect(self.unload_ai_models)
+        tools_menu.addAction(unload_models_action)
+
         # Help Menu
         help_menu = menu_bar.addMenu("&Help")
 
@@ -2506,6 +2522,25 @@ class ImageAnnotator(QMainWindow):
     def change_font_size(self, size):
         self.current_font_size = size
         self.apply_theme_and_font()
+
+    def unload_ai_models(self):
+        """Drop cached SAM/DINO model objects to free GPU/CPU memory.
+
+        Useful on constrained GPUs (e.g. 8 GB) where SAM 2 base + DINO
+        base together exhaust VRAM. After unload, the next inference
+        call will re-load the model from disk (~1-3 s).
+        """
+        self.sam_utils.unload()
+        self.dino_utils.unload()
+        # Reset the dropdown to a neutral state so the user knows they
+        # need to re-pick the model.
+        self.sam_model_selector.setCurrentIndex(0)
+        QMessageBox.information(
+            self,
+            "Models Unloaded",
+            "SAM and DINO models have been unloaded from memory. "
+            "Re-select a SAM model to use AI tools again.",
+        )
 
     def setup_sidebar(self):
         self.sidebar = QWidget()
@@ -3040,11 +3075,19 @@ class ImageAnnotator(QMainWindow):
         self.lbl_dino_status.setText(f"{len(results)} detection(s). Running SAM...")
         QApplication.processEvents()
 
-        # Batch SAM segmentation
+        # Batch SAM segmentation. Wrap in try/except for the same reason
+        # as the DINO call above — sam_utils raises on model load
+        # failure / CUDA OOM / re-entry now, instead of returning None.
         bboxes = [r["bbox"] for r in results]
-        sam_results = self.sam_utils.apply_sam_predictions_batch(
-            self.current_image, bboxes
-        )
+        try:
+            sam_results = self.sam_utils.apply_sam_predictions_batch(
+                self.current_image, bboxes
+            )
+        except Exception as e:
+            traceback.print_exc()
+            QMessageBox.critical(self, "SAM Error", str(e))
+            self.lbl_dino_status.setText("SAM segmentation failed.")
+            return
 
         if sam_results is None:
             QMessageBox.warning(self, "SAM Error",
@@ -3149,7 +3192,11 @@ class ImageAnnotator(QMainWindow):
                 continue
 
             bboxes = [r["bbox"] for r in results]
-            sam_results = self.sam_utils.apply_sam_predictions_batch(qimage, bboxes)
+            try:
+                sam_results = self.sam_utils.apply_sam_predictions_batch(qimage, bboxes)
+            except Exception as e:
+                print(f"  SAM failed for {image_name}: {e}")
+                continue
             if sam_results is None:
                 continue
 
@@ -4285,8 +4332,6 @@ class ImageAnnotator(QMainWindow):
                 self.auto_save()
         except Exception as e:
             print(f"Error adding class: {e}")
-            import traceback
-
             traceback.print_exc()
 
     def update_class_item_color(self, item, color):

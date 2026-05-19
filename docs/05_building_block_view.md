@@ -80,20 +80,24 @@ sam_negative_points: list           # SAM negative points
 
 ### SAMUtils (sam_utils.py)
 
-**Responsibility**: SAM model loading and inference
+**Responsibility**: SAM model loading and inference (in-process).
 
-**Key Attributes**:
-```python
-sam_models: dict                    # Available SAM model variants
-current_sam_model: str              # Currently loaded model
-sam_model: SAM                      # Ultralytics SAM instance
-```
+**Key state** (on the `SAMUtils` instance):
+- `sam_models: dict` — available SAM model variants (class-level, exposed for the UI dropdown)
+- `current_sam_model: str | None` — name of the currently loaded model; `None` if unloaded
+- `_model: ultralytics.SAM | None` — the loaded model object (private)
 
-**Key Methods**:
-- `change_sam_model(model_name)`: Load SAM model
-- `apply_sam_points(image, positive_points, negative_points)`: Run inference
-- `qimage_to_numpy(qimage)`: Convert QImage to numpy array
-- `mask_to_polygon(mask)`: Convert SAM mask to polygon contours
+**Key public methods**:
+- `change_sam_model(model_name)` — load a SAM model. Blocks the calling thread (with the UI's event loop pumping) until weights are downloaded and the model is in memory. Raises on load failure.
+- `apply_sam_points(image, positive_points, negative_points)` — point-prompted segmentation.
+- `apply_sam_prediction(image, bbox)` — single bbox-prompted segmentation.
+- `apply_sam_predictions_batch(image, bboxes)` — multi-bbox segmentation in one model call (used by the DINO pipeline).
+- `unload()` — drop the cached model and free GPU/CPU memory. Wired to the Tools → "Unload AI Models" menu entry.
+
+**Module-level helpers** (not class methods):
+- `_qimage_to_numpy(qimage)` — convert a `QImage` to an owned numpy array (always copies; see ADR-013 on lifetime safety).
+- `_mask_to_polygon(mask)` — convert a SAM mask tensor into polygon contour vertices.
+- `_run_sync(fn, *args, **kwargs)` — run `fn` on a worker `QThread`, pump the calling thread's event loop until done, re-raise any exception. Serialises concurrent calls via the `_inference_in_flight` flag; re-entry raises `InferenceBusyError`.
 
 Inference runs in-process on a background `QThread`. `SAMUtils._run_sync()`
 spawns the thread, pumps the caller's event loop until done, and returns

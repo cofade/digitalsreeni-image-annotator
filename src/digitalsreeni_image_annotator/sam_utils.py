@@ -30,7 +30,6 @@ startup stays fast for users who never touch SAM.
 from __future__ import annotations
 
 import os
-import traceback
 
 import cv2
 import numpy as np
@@ -245,7 +244,20 @@ def _run_sync(fn, *args, **kwargs):
     wait. Re-entry from the same thread (the only kind that can happen
     here) raises :class:`InferenceBusyError` rather than corrupting
     the model with concurrent forward passes.
+
+    **Call from the GUI thread only.** The module-level
+    ``_inference_in_flight`` flag is not protected for cross-thread
+    access; if a future contributor drives inference from a non-GUI
+    worker thread (e.g. a background patching/training thread), the
+    flag becomes a true race. The assert below is a tripwire.
     """
+    from PyQt6.QtCore import QCoreApplication, QThread as _QThread
+    app = QCoreApplication.instance()
+    if app is not None:
+        assert _QThread.currentThread() is app.thread(), (
+            "_run_sync must be called from the GUI thread. "
+            "See ADR-013 — the re-entry guard is GUI-thread-local."
+        )
     global _inference_in_flight
     if _inference_in_flight:
         raise InferenceBusyError(
@@ -436,7 +448,10 @@ class SAMUtils(QObject):
         results = self._model(image_np, bboxes=bboxes)
         res = results[0]
         if not (hasattr(res, "masks") and res.masks is not None):
-            return [{"error": "No mask generated."}] * len(bboxes)
+            # Build a fresh dict per bbox so callers can mutate one
+            # entry without affecting the others (a `[d] * N` would
+            # alias the same dict N times).
+            return [{"error": "No mask generated."} for _ in bboxes]
 
         masks = res.masks.data.cpu().numpy()
         confidences = (

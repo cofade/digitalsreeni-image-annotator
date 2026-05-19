@@ -249,12 +249,14 @@ def _run_sync(fn, *args, **kwargs):
     ``_inference_in_flight`` flag is not protected for cross-thread
     access; if a future contributor drives inference from a non-GUI
     worker thread (e.g. a background patching/training thread), the
-    flag becomes a true race. The assert below is a tripwire.
+    flag becomes a true race. The check below is a tripwire — kept
+    as an explicit ``raise`` rather than ``assert`` so it survives
+    ``python -O``.
     """
     from PyQt6.QtCore import QCoreApplication, QThread as _QThread
     app = QCoreApplication.instance()
-    if app is not None:
-        assert _QThread.currentThread() is app.thread(), (
+    if app is not None and _QThread.currentThread() is not app.thread():
+        raise RuntimeError(
             "_run_sync must be called from the GUI thread. "
             "See ADR-013 — the re-entry guard is GUI-thread-local."
         )

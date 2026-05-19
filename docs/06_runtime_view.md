@@ -154,16 +154,17 @@ User clicks "Detect Current Image"
     │
     ├─> DINOUtils.detect(qimage, class_configs, model_name)
     │   │
-    │   ├─> Save QImage to a temp PNG
-    │   ├─> Spawn dino_worker.py subprocess (PyQt-free)
-    │   ├─> Send JSON request over stdin
-    │   ├─> Worker loads GroundingDinoForObjectDetection
-    │   ├─> Worker runs inference per phrase, applies per-class NMS
+    │   ├─> Convert QImage to numpy (on calling thread)
+    │   ├─> _run_sync: spawn QThread, pump caller's event loop while waiting
+    │   ├─> On the worker thread:
+    │   │     - Load (or reuse cached) GroundingDinoForObjectDetection
+    │   │     - Run inference per phrase, apply per-class NMS
+    │   │     - Apply cross-class NMS
     │   └─> Returns [{class_name, bbox: [x1,y1,x2,y2], score, label}, ...]
     │
     ├─> Feed DINO bboxes into SAMUtils.apply_sam_predictions_batch()
     │   │
-    │   ├─> Spawn sam_worker.py subprocess
+    │   ├─> Convert QImage to numpy, run Ultralytics SAM on worker thread
     │   └─> Returns one {segmentation: [...], score: ...} per bbox
     │
     ├─> Build temp_annotations (segmentation + class + score + source="dino")

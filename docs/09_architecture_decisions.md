@@ -218,7 +218,7 @@
 
 ## ADR-011: Run Torch-based Workers in Isolated Subprocesses
 
-**Status**: Accepted
+**Status**: Superseded by [ADR-013](#adr-013-in-process-inference-with-qthread-wrapping)
 
 **Context**: Both SAM 2 (via Ultralytics) and Grounding DINO (via transformers) load PyTorch into the process. On Windows + Python 3.14, importing PyQt5 first and then loading PyTorch causes `WinError 1114` (DLL load order conflict between Qt and Torch native dependencies). The application is fundamentally PyQt5-based, so we cannot reorder these imports.
 
@@ -237,8 +237,10 @@
 - ⚠️ Need UTF-8 forced on both ends of the pipe (`PYTHONIOENCODING=utf-8` in env, `encoding="utf-8", errors="replace"` on parent) — Windows cp1252 default crashes on non-ASCII bytes in torch warnings
 - ⚠️ Two near-identical worker scripts to maintain (`sam_worker.py` mirrors the pattern from `dino_worker.py`)
 
+**Superseded by**: Migrating to PyQt6 (ADR-013) eliminated the underlying DLL conflict. The subprocess hop, JSON marshalling, and `check_worker_isolation.py` tooling were removed in the same PR.
+
 **Related**:
-- Implementation: `sam_utils.py` / `sam_worker.py`, `dino_utils.py` / `dino_worker.py`
+- Implementation (historical): `sam_utils.py` / `sam_worker.py`, `dino_utils.py` / `dino_worker.py`
 - Original SAM-only version landed in #65 (Python 3.14 support)
 - DINO subprocess pattern landed alongside the DINO feature
 
@@ -262,6 +264,38 @@
 - ✅ Faster perceived startup; no spurious downloads from idle browsing
 - ⚠️ First Detect after selection blocks the UI while download runs (~1 min for DINO base); the status label shows progress but the dialog is otherwise unresponsive
 - ⚠️ No async download progress dialog — `huggingface_hub` prints to stdout
+
+---
+
+## ADR-013: In-process Inference with QThread Wrapping
+
+**Status**: Accepted
+
+**Context**: ADR-011 introduced a subprocess hop for every SAM and DINO inference call to work around a PyQt5 + Torch DLL load-order conflict on Windows + Python 3.14. The workaround cost a fresh `python sam_worker.py` / `dino_worker.py` spawn per inference (~1-2 s warm latency, model reloaded from disk on every call) plus a temp-PNG marshal of the image.
+
+Migrating the GUI from PyQt5 to PyQt6 (same PR) eliminates the DLL conflict — verified by `tools/check_pyqt6_torch_coexistence.py` importing PyQt6 → torch → transformers → ultralytics cleanly in one process on Windows+Py3.14 (the original failure case) and the Linux/macOS test matrix.
+
+**Decision**: Run SAM and DINO inference directly inside the main Python process. Keep the model objects on the `SAMUtils` / `DINOUtils` singletons so they persist across calls. Wrap each inference in a short-lived `QThread` to keep the UI thread responsive; the public API blocks the caller via a nested `QEventLoop` so call sites in `annotator_window.py` stay synchronous-looking.
+
+**Rationale**:
+- The latency win is the whole point. Subprocess spawn + Python startup + model reload was ~1-2 s every call; in-process with a cached model is ~50-500 ms.
+- Threading via a nested `QEventLoop` (the `_run_sync` helper in `sam_utils.py`) lets the calling thread keep pumping events — timers, repaints, progress dialog cancels still work — while inference runs on the QThread. Existing call sites need no refactor.
+- Torch and transformers are imported lazily on first inference, so app startup stays fast for users who never touch SAM/DINO.
+- `_qimage_to_numpy` already exists; converting the QImage on the calling thread (not on the worker) keeps Qt objects single-threaded as required.
+
+**Consequences**:
+- ✅ Each inference is ~1-2 s faster on Windows; less dramatic on macOS/Linux but still smoother.
+- ✅ Cached model survives between calls — opening a DINO model once costs once.
+- ✅ UI stays responsive during batch DINO+SAM runs (the calling thread's `QEventLoop` still processes events).
+- ✅ One source of truth per model — no more keeping `sam_utils.py` and `sam_worker.py` aligned.
+- ⚠️ A crash in torch (CUDA OOM, segfault) now takes the app down where the subprocess used to absorb it. Mitigation: inference is wrapped in `try/except` at the `_run_sync` boundary; the user sees an error dialog instead of a frozen UI.
+- ⚠️ Model RAM stays resident until the user closes the app (or hits a future "Unload" menu item, scaffolded as `SAMUtils.unload()` / `DINOUtils.unload()`).
+- ⚠️ Re-entrancy: because the calling thread keeps processing UI events during the wait, a user click on an un-disabled button can re-enter inference. Call sites that already disable buttons (batch DINO, model dropdown) are safe; single-click SAM relies on the SAM tool's own state flags. Acceptable for now; revisit if users hit it.
+
+**Related**:
+- Implementation: `sam_utils.py`, `dino_utils.py` (both refactored in the same PR that retires ADR-011).
+- Smoke test: `tools/check_pyqt6_torch_coexistence.py` (gate that gated this whole change).
+- Supersedes: [ADR-011](#adr-011-run-torch-based-workers-in-isolated-subprocesses).
 
 ---
 

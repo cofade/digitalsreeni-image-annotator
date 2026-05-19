@@ -2831,8 +2831,8 @@ class ImageAnnotator(QMainWindow):
                 self,
                 "SAM Model Error",
                 f"Failed to load SAM model '{model_name}':\n\n{str(e)}\n\n"
-                "If you are on Python 3.14, PyTorch may not yet be fully supported. "
-                "Try reinstalling torch/ultralytics for your platform."
+                "Check that the model weights are downloadable and that torch "
+                "is correctly installed for your platform / GPU."
             )
             self.sam_model_selector.setCurrentIndex(0)
             return

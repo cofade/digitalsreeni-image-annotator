@@ -95,9 +95,15 @@ sam_model: SAM                      # Ultralytics SAM instance
 - `qimage_to_numpy(qimage)`: Convert QImage to numpy array
 - `mask_to_polygon(mask)`: Convert SAM mask to polygon contours
 
-Inference does not run in-process. `SAMUtils._send_request()` spawns
-`sam_worker.py` as a subprocess (PyQt-free) and exchanges JSON over
-stdin/stdout. See [ADR-011](09_architecture_decisions.md#adr-011-run-torch-based-workers-in-isolated-subprocesses).
+Inference runs in-process on a background `QThread`. `SAMUtils._run_sync()`
+spawns the thread, pumps the caller's event loop until done, and returns
+the result — keeping the API synchronous-looking from call sites while
+the UI stays responsive. Model objects (Ultralytics `SAM`) live on the
+`SAMUtils` singleton and persist across calls. See
+[ADR-013](09_architecture_decisions.md#adr-013-in-process-inference-with-qthread-wrapping).
+The earlier subprocess approach is documented as
+[ADR-011](09_architecture_decisions.md#adr-011-run-torch-based-workers-in-isolated-subprocesses)
+(Superseded).
 
 ### DINO Subsystem (Grounding DINO + SAM pipeline)
 
@@ -107,30 +113,30 @@ segmentation masks.
 
 | Module | Responsibility |
 |--------|----------------|
-| `dino_utils.py` | `DINOUtils` — parent-side façade. Resolves model paths via `models_base_dir()` and forwards detection requests to the worker. |
-| `dino_worker.py` | Standalone subprocess that loads `transformers.GroundingDinoForObjectDetection` and runs inference. No PyQt imports. |
+| `dino_utils.py` | `DINOUtils` — in-process Grounding DINO wrapper. Resolves model paths via `models_base_dir()`, loads `transformers.AutoModelForZeroShotObjectDetection` lazily on first use, caches it across calls, runs inference on a worker `QThread` (same `_run_sync` pattern as `SAMUtils`). |
 | `dino_phrase_editor.py` | Two widgets: `ClassThresholdTable` (per-class box/text/NMS thresholds) and `PhraseEditorPanel` (per-class phrase list). These widgets are the **single source of truth** for phrases and thresholds; project save/load reads/writes them via `get_all_phrases()` / `set_phrases()` and `get_thresholds_dict()` / `set_thresholds()`. |
 | `dino_merge_dialog.py` | Standalone dialog: merges accumulated DINO+SAM annotations across images into a training-ready COCO JSON. |
 
-**Detection request shape** (parent → worker):
+**Detection call signature** (in-process):
 ```python
-{
-  "image_path": "/abs/path/to/temp.png",
-  "class_configs": [
-    {"name": "drone", "phrases": ["drone", "quadcopter"],
-     "box_thr": 0.10, "txt_thr": 0.25, "nms_thr": 0.50},
-    ...
-  ],
-  "model_path": "/abs/path/to/models/grounding-dino-base"
-}
+DINOUtils().detect(
+    qimage,                                # PyQt6.QtGui.QImage
+    class_configs=[
+        {"name": "drone", "phrases": ["drone", "quadcopter"],
+         "box_thr": 0.10, "txt_thr": 0.25, "nms_thr": 0.50},
+        ...
+    ],
+    model_name="grounding-dino-base",      # or custom_model_path=...
+)
 ```
 
-**Detection response shape** (worker → parent):
+**Detection return value**:
 ```python
-{"results": [
-  {"class_name": "drone", "bbox": [x1, y1, x2, y2], "score": 0.93, "label": "drone"},
-  ...
-]}
+[
+    {"class_name": "drone", "bbox": [x1, y1, x2, y2], "score": 0.93, "label": "drone"},
+    ...
+]
+# or [] if no boxes survived filtering, or None on error
 ```
 
 DINO's xyxy boxes feed directly into `SAMUtils.apply_sam_predictions_batch()`,

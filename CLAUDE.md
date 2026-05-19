@@ -83,11 +83,16 @@ self.all_annotations[self.image_file_name].append({
 
 ### SAM Integration
 
-```python
-# Load model (first use downloads, ~40-400MB)
-self.sam_utils.change_sam_model("SAM 2 tiny")
+SAM runs in-process; the Ultralytics model object lives on `SAMUtils`
+and persists across calls. Inference runs on a background QThread but
+the public API is synchronous — see ADR-013 in
+`docs/09_architecture_decisions.md`.
 
-# Run inference
+```python
+# Load model on first selection (downloads weights if missing, ~40-400MB)
+self.sam_utils.change_sam_model("SAM 2 tiny")  # blocks UI thread via QEventLoop spin
+
+# Run inference (also runs on worker thread, returns when done)
 prediction = self.sam_utils.apply_sam_points(
     qimage,
     positive_points=[(x1, y1)],

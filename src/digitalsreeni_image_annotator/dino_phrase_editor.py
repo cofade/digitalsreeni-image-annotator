@@ -7,7 +7,7 @@ Ported from annotation_tool_v4.py and adapted for integration.
 """
 
 from PyQt6.QtCore import Qt
-from PyQt6.QtGui import QColor
+from PyQt6.QtGui import QAction, QColor
 from PyQt6.QtWidgets import (
     QAbstractItemView,
     QDoubleSpinBox,
@@ -17,6 +17,7 @@ from PyQt6.QtWidgets import (
     QLabel,
     QListWidget,
     QListWidgetItem,
+    QMenu,
     QMessageBox,
     QPushButton,
     QTableWidget,
@@ -49,17 +50,24 @@ class ClassThresholdTable(QTableWidget):
             ["Class", "Box thr", "Txt thr", "NMS thr"])
         self.horizontalHeader().setSectionResizeMode(
             _COL_NAME, QHeaderView.ResizeMode.Stretch)
+        # Fixed-width threshold columns — wide enough for "0,99" plus
+        # spin arrows plus frame, with margin for macOS Retina font
+        # metrics (where 72px clipped the down-arrow on some setups).
         for col in (_COL_BOX, _COL_TXT, _COL_NMS):
             self.horizontalHeader().setSectionResizeMode(
-                col, QHeaderView.ResizeMode.ResizeToContents)
+                col, QHeaderView.ResizeMode.Fixed)
+            self.setColumnWidth(col, 88)
         self.setSelectionBehavior(QAbstractItemView.SelectionBehavior.SelectRows)
         self.setEditTriggers(QAbstractItemView.EditTrigger.NoEditTriggers)
         self.verticalHeader().setVisible(False)
         self.setMaximumHeight(160)
+        # No hardcoded background colors — pick them up from the active
+        # stylesheet so the table integrates with both light and dark
+        # mode. The earlier "background: #e0e0e0" produced a bright bar
+        # across the top of the panel in dark mode.
         self.setStyleSheet(
             "QTableWidget { font-size: 11px; }"
-            "QHeaderView::section { font-size: 11px; font-weight: bold; "
-            "  background: #e0e0e0; padding: 2px; }"
+            "QHeaderView::section { font-size: 11px; font-weight: bold; padding: 2px; }"
         )
 
     def _make_spin(self, value=0.25):
@@ -68,7 +76,7 @@ class ClassThresholdTable(QTableWidget):
         sp.setSingleStep(0.05)
         sp.setDecimals(2)
         sp.setValue(value)
-        sp.setFrame(False)
+        sp.setFrame(True)
         sp.setStyleSheet("font-size: 11px;")
         return sp
 
@@ -179,6 +187,8 @@ class PhraseEditorPanel(QWidget):
         self.phrase_list = QListWidget()
         self.phrase_list.setMaximumHeight(90)
         self.phrase_list.setStyleSheet("font-size: 11px;")
+        self.phrase_list.setContextMenuPolicy(Qt.ContextMenuPolicy.CustomContextMenu)
+        self.phrase_list.customContextMenuRequested.connect(self._show_phrase_context_menu)
         layout.addWidget(self.phrase_list)
 
         btn_row = QHBoxLayout()
@@ -214,7 +224,12 @@ class PhraseEditorPanel(QWidget):
         self.phrase_list.clear()
         if self._active_class is None:
             return
-        for i, phrase in enumerate(self._phrases[self._active_class]):
+        # Defensive .get(): set_phrases() replaces self._phrases
+        # wholesale. The danger is cross-project state carryover —
+        # Project A leaves a row selected (_active_class != None), then
+        # Project B loads via set_phrases(kept) where `kept` doesn't
+        # contain that class. KeyError on _phrases[active] was a P1.
+        for i, phrase in enumerate(self._phrases.get(self._active_class, [])):
             item = QListWidgetItem(phrase)
             if i == 0:
                 item.setForeground(QColor("#2E75B6"))
@@ -251,6 +266,57 @@ class PhraseEditorPanel(QWidget):
         self._phrases[self._active_class].pop(row)
         self._refresh_list()
 
+    def _show_phrase_context_menu(self, position):
+        """Right-click menu on a phrase row. Rename is allowed for every
+        row including row 0 (the class-name phrase); delete is still
+        locked for row 0 — handled in _remove_phrase, not here.
+        """
+        if self._active_class is None:
+            return
+        item = self.phrase_list.itemAt(position)
+        if item is None:
+            return
+        row = self.phrase_list.row(item)
+
+        menu = QMenu(self)
+        rename_action = QAction("Rename Phrase", self)
+        rename_action.triggered.connect(lambda: self._rename_phrase(row))
+        menu.addAction(rename_action)
+        menu.exec(self.phrase_list.mapToGlobal(position))
+
+    def _rename_phrase(self, row: int):
+        """Prompt for a new phrase text and replace the row. Mirrors the
+        class-rename flow in annotator_window: validate non-empty, strip,
+        reject duplicates within the same class. Row 0 may be renamed —
+        it just can't be removed.
+        """
+        if self._active_class is None or row < 0:
+            return
+        phrases = self._phrases.get(self._active_class, [])
+        if row >= len(phrases):
+            return
+        current = phrases[row]
+        text, ok = QInputDialog.getText(
+            self, "Rename Phrase",
+            f'New text for "{current}":',
+            text=current,
+        )
+        if not (ok and text.strip()):
+            return
+        new_phrase = text.strip().rstrip(".")
+        if new_phrase == current:
+            return
+        existing_lower = [p.lower() for i, p in enumerate(phrases) if i != row]
+        if new_phrase.lower() in existing_lower:
+            QMessageBox.information(self, "Duplicate",
+                                    "That phrase already exists for this class.")
+            return
+        phrases[row] = new_phrase
+        self._refresh_list()
+        # Restore selection on the renamed row so a follow-up rename
+        # works without re-clicking.
+        self.phrase_list.setCurrentRow(row)
+
     def on_class_added(self, class_name: str):
         if class_name not in self._phrases:
             self._phrases[class_name] = [class_name]
@@ -261,10 +327,14 @@ class PhraseEditorPanel(QWidget):
             self.set_active_class(None)
 
     def get_phrases_for(self, class_name: str) -> list[str]:
-        phrases = self._phrases.get(class_name, [class_name])
-        if class_name not in phrases:
-            phrases = [class_name] + phrases
-        return phrases
+        # Return the user-edited phrase list as-is. The class-name
+        # phrase (row 0) was historically auto-prepended here as a
+        # safety net, but that defeated the row-0 rename feature: the
+        # user would rename "cell" → "small green blob" and DINO would
+        # still receive ["cell", "small green blob"] because the
+        # original was re-injected. Trust the editor's state. Fall back
+        # to a single-phrase list only when nothing was ever stored.
+        return list(self._phrases.get(class_name, [class_name]))
 
     def get_all_phrases(self) -> dict[str, list[str]]:
         return dict(self._phrases)

@@ -99,7 +99,7 @@ class StackToSlicesDialog(QDialog):
     def get_dimensions(self, shape):
         dialog = DimensionDialog(shape, os.path.basename(self.file_name), self)
         dialog.setWindowModality(Qt.WindowModality.ApplicationModal)
-        if dialog.exec_():
+        if dialog.exec():
             self.dimensions = dialog.get_dimensions()
             self.convert_button.setEnabled(True)
         else:

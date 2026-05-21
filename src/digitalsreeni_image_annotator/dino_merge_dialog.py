@@ -8,6 +8,7 @@ import json
 import math
 import os
 import random
+import traceback
 from collections import defaultdict
 from pathlib import Path
 
@@ -316,4 +317,4 @@ class DinoMergeDialog(QDialog):
 
 def show_dino_merge_dialog(parent=None):
     dialog = DinoMergeDialog(parent)
-    dialog.exec_()
+    dialog.exec()

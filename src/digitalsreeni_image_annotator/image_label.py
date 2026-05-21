@@ -780,11 +780,44 @@ class ImageLabel(QLabel):
 
     def wheelEvent(self, event: QWheelEvent):
         if event.modifiers() == Qt.KeyboardModifier.ControlModifier:
+            if not self.original_pixmap or not self.scaled_pixmap:
+                event.accept()
+                return
+
+            cursor_widget_pos = event.position()
+            # Image-space coords of the pixel under the cursor BEFORE zoom.
+            img_x = (cursor_widget_pos.x() - self.offset_x) / self.zoom_factor
+            img_y = (cursor_widget_pos.y() - self.offset_y) / self.zoom_factor
+
+            scrollbar_h = self.main_window.scroll_area.horizontalScrollBar()
+            scrollbar_v = self.main_window.scroll_area.verticalScrollBar()
+            old_scroll_h = scrollbar_h.value()
+            old_scroll_v = scrollbar_v.value()
+
             delta = event.angleDelta().y()
             if delta > 0:
                 self.main_window.zoom_in()
             else:
                 self.main_window.zoom_out()
+
+            # Compute the post-zoom offset analytically from the
+            # viewport size and the new scaled-pixmap size. Reading
+            # self.offset_x here is unreliable on zoom-OUT: setMinimumSize
+            # in update_scaled_pixmap only relaxes the minimum, so the
+            # widget hasn't shrunk yet when update_offset ran. self.width()
+            # is stale → offset_x is wrong → cursor drifts. The viewport
+            # width is always current.
+            viewport = self.main_window.scroll_area.viewport()
+            new_scaled_w = self.scaled_pixmap.width()
+            new_scaled_h = self.scaled_pixmap.height()
+            new_offset_x = max(0, (viewport.width() - new_scaled_w) / 2)
+            new_offset_y = max(0, (viewport.height() - new_scaled_h) / 2)
+
+            new_widget_x = img_x * self.zoom_factor + new_offset_x
+            new_widget_y = img_y * self.zoom_factor + new_offset_y
+            scrollbar_h.setValue(int(round(new_widget_x - cursor_widget_pos.x() + old_scroll_h)))
+            scrollbar_v.setValue(int(round(new_widget_y - cursor_widget_pos.y() + old_scroll_v)))
+
             event.accept()
         else:
             super().wheelEvent(event)
@@ -793,7 +826,10 @@ class ImageLabel(QLabel):
         if not self.original_pixmap:
             return
         if event.modifiers() == Qt.KeyboardModifier.ControlModifier and event.button() == Qt.MouseButton.LeftButton:
-            self.pan_start_pos = event.position()
+            # Track pan in global (screen) coords so the reference frame
+            # doesn't shift when the scrollbar moves the widget under the
+            # cursor — previously caused effective half-speed pan.
+            self.pan_start_pos = event.globalPosition()
             self.setCursor(Qt.CursorShape.ClosedHandCursor)
             event.accept()
             return
@@ -842,12 +878,13 @@ class ImageLabel(QLabel):
         self.cursor_pos = self.get_image_coordinates(event.position())
         if event.modifiers() == Qt.KeyboardModifier.ControlModifier and event.buttons() == Qt.MouseButton.LeftButton:
             if self.pan_start_pos:
-                delta = event.position() - self.pan_start_pos
+                cur = event.globalPosition()
+                delta = cur - self.pan_start_pos
                 scrollbar_h = self.main_window.scroll_area.horizontalScrollBar()
                 scrollbar_v = self.main_window.scroll_area.verticalScrollBar()
                 scrollbar_h.setValue(scrollbar_h.value() - int(delta.x()))
                 scrollbar_v.setValue(scrollbar_v.value() - int(delta.y()))
-                self.pan_start_pos = event.position()
+                self.pan_start_pos = cur
             event.accept()
             return
 
@@ -943,11 +980,11 @@ class ImageLabel(QLabel):
 
     def keyPressEvent(self, event: QKeyEvent):
         if event.key() == Qt.Key.Key_Return or event.key() == Qt.Key.Key_Enter:
-            if self.temp_annotations and any(
-                a.get("source") == "dino" for a in self.temp_annotations
-            ):
-                self.main_window.accept_dino_results()
-            elif self.temp_annotations:
+            # DINO temp_annotations are accepted via the application-wide
+            # _DINOReviewEventFilter (see ADR-015) so Enter works regardless
+            # of focus. The branch below only catches non-DINO temp state
+            # (legacy YOLO model-prediction review path).
+            if self.temp_annotations:
                 self.accept_temp_annotations()
             elif self.temp_sam_prediction:
                 self.main_window.accept_sam_prediction()
@@ -972,10 +1009,9 @@ class ImageLabel(QLabel):
                 self.sam_negative_points = []
                 self.clear_temp_sam_prediction()
                 self.update()
-            elif self.temp_annotations and any(
-                a.get("source") == "dino" for a in self.temp_annotations
-            ):
-                self.main_window.reject_dino_results()
+            # DINO temp_annotations are rejected via the application-wide
+            # _DINOReviewEventFilter (see ADR-015). Branch below catches
+            # non-DINO temp state only.
             elif self.temp_annotations:
                 self.discard_temp_annotations()
             elif self.sam_magic_wand_active:

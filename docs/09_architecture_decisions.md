@@ -313,7 +313,7 @@ Migrating the GUI from PyQt5 to PyQt6 (same PR) eliminates the DLL conflict — 
 - ✅ Long support runway: PyQt6 is the maintained binding.
 - ⚠️ One-time migration cost: ~30 files touched, enum namespacing across `annotator_window.py` (300+ references), `event.pos()` → `event.position()` rewrite in `image_label.py`.
 - ⚠️ PyQt6 is GPLv3 / commercial like PyQt5. Switching to PySide6 (LGPL) was considered and rejected to stay close to the existing `pyqtSignal`/`pyqtSlot` API.
-- ⚠️ `app.exec_()` deprecated alias still works; lingering call sites are P2 cleanup.
+- ✅ All `.exec_()` call sites in `src/` migrated to `.exec()` in the v0.9.0 fix-pack — the PyQt5 alias is gone from this codebase.
 
 **Verification**:
 - `tools/check_pyqt6_torch_coexistence.py` imports PyQt6 → torch → torchvision → transformers → ultralytics in that order. Run before merging on the Windows + Python 3.14 target.
@@ -323,6 +323,58 @@ Migrating the GUI from PyQt5 to PyQt6 (same PR) eliminates the DLL conflict — 
 **Related**:
 - Supersedes: [ADR-001](#adr-001-gui-framework-choice).
 - Unblocks: [ADR-013](#adr-013-in-process-inference-with-qthread-wrapping).
+
+---
+
+## ADR-015: Application-wide Event Filter for DINO Review Shortcuts
+
+**Status**: Accepted (v0.9.0)
+
+**Context**: During DINO batch / single-image review, the user has
+to accept (Enter) or reject (Escape) pending masks. The keyboard
+handling was originally in `ImageLabel.keyPressEvent`, which only
+fires when the canvas has focus. In practice the user clicks slice
+entries, image entries, or buttons during review — focus moves to
+those widgets and Enter is consumed locally (e.g. `QListWidget`
+emits `itemActivated`), never reaching the canvas. The result: Enter
+and Escape silently failed during the most common review workflow.
+
+Three options were considered:
+
+1. **Force focus back to the canvas on every UI interaction** —
+   intrusive, breaks normal navigation (Tab/Arrow keys on lists), and
+   fragile because Qt's focus chain is not always predictable.
+2. **Global `QShortcut` with ApplicationShortcut context** — fires
+   regardless of focus but unconditionally hijacks Enter / Escape,
+   breaking modal dialogs (Enter activates default button) and inline
+   editing in `QLineEdit` / `QInputDialog`.
+3. **Application-wide `QObject` event filter** that intercepts only
+   when DINO temp_annotations are pending, and only when the focused
+   widget is not a text input and no modal dialog is active.
+
+**Decision**: Option 3. Implement `_DINOReviewEventFilter`, install it
+on `QApplication.instance()` once at startup, and gate the
+interception on three conditions: pending DINO temp_annotations,
+no active modal widget, focus not on `QLineEdit`/`QTextEdit`.
+
+**Consequences**:
+- ✅ Enter/Escape works regardless of which widget holds focus during
+  DINO review.
+- ✅ Modal dialogs and text-input fields are unaffected.
+- ✅ Pattern is reusable for any future "review pending state" feature.
+- ⚠️ Adds a per-key-press function call cost to the entire app. The
+  filter short-circuits in three cheap checks before any work, so the
+  overhead is negligible (≤ a few μs per keystroke).
+- ⚠️ Single global filter means future review-state features must
+  share it or layer additional filters; if more review modes appear,
+  collapse them into a strategy registry rather than installing
+  multiple top-level filters.
+
+**Related**:
+- Implementation: `annotator_window.py` (`_DINOReviewEventFilter`
+  class, `installEventFilter` call in `__init__`).
+- Cross-cuts: documented in
+  [Cross-cutting Concepts → DINO Temp Annotations](08_crosscutting_concepts.md#dino-temp-annotations--single-field-many-images).
 
 ---
 

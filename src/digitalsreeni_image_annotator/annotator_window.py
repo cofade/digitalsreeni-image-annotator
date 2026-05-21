@@ -10,7 +10,7 @@ import cv2
 import numpy as np
 import shapely
 from czifile import CziFile
-from PyQt6.QtCore import Qt, QThread, QTimer, pyqtSignal
+from PyQt6.QtCore import QEvent, QObject, Qt, QThread, QTimer, pyqtSignal
 from PyQt6.QtGui import (
     QAction,
     QColor,
@@ -20,6 +20,7 @@ from PyQt6.QtGui import (
     QKeySequence,
     QPalette,
     QPixmap,
+    QShortcut,
 )
 from PyQt6.QtWidgets import (
     QAbstractItemView,
@@ -152,6 +153,44 @@ class DimensionDialog(QDialog):
         return [combo.currentText() for combo in self.combos]
 
 
+class _DINOReviewEventFilter(QObject):
+    """Application-wide event filter that lets Enter / Escape accept or
+    reject pending DINO temp_annotations regardless of which widget has
+    focus. Without this, clicking a slice/image entry in a list moves
+    focus there and Enter is consumed by the list's itemActivated
+    handler before it can reach ImageLabel.keyPressEvent.
+
+    Suppressed when a modal dialog is active or focus is on a text-input
+    widget so we don't break dialog default-button behaviour or
+    in-cell editing.
+    """
+
+    def __init__(self, main_window: "ImageAnnotator"):
+        super().__init__(main_window)
+        self.main_window = main_window
+
+    def eventFilter(self, obj, event):
+        if event.type() != QEvent.Type.KeyPress:
+            return False
+        key = event.key()
+        if key not in (Qt.Key.Key_Return, Qt.Key.Key_Enter, Qt.Key.Key_Escape):
+            return False
+        app = QApplication.instance()
+        if app is None or app.activeModalWidget() is not None:
+            return False
+        focused = app.focusWidget()
+        if isinstance(focused, (QLineEdit, QTextEdit)):
+            return False
+        temp = self.main_window.image_label.temp_annotations
+        if not temp or not any(a.get("source") == "dino" for a in temp):
+            return False
+        if key in (Qt.Key.Key_Return, Qt.Key.Key_Enter):
+            self.main_window.accept_dino_results()
+        else:
+            self.main_window.reject_dino_results()
+        return True
+
+
 class ImageAnnotator(QMainWindow):
     def __init__(self):
         super().__init__()
@@ -239,11 +278,18 @@ class ImageAnnotator(QMainWindow):
         }  # Also, add the options in create_menu_bar method
         self.current_font_size = "Medium"
 
-        # Dark mode control
-        self.dark_mode = False
+        # Dark mode control. Default on — matches the look most users
+        # expect from a 2025-era desktop annotation tool; toggle with
+        # Settings → Toggle Dark Mode (Ctrl+D).
+        self.dark_mode = True
 
         # Default annotations sorting
         self.current_sort_method = "class"  # Default sorting method
+
+        # DINO batch review state. Initialised eagerly here so the
+        # consumers don't each carry a `hasattr` check (one forgotten
+        # check would crash with AttributeError).
+        self.dino_batch_results: dict[str, list] = {}
 
         # Setup UI components
         self.setup_ui()
@@ -259,6 +305,23 @@ class ImageAnnotator(QMainWindow):
         # YOLO Trainer
         self.yolo_trainer = None
         self.setup_yolo_menu()
+
+        # F2 → Snake game (Easter egg). Registered as a global QShortcut
+        # so it fires regardless of which widget has focus — putting it
+        # in keyPressEvent didn't work because QTableWidget (DINO
+        # threshold table) and other focusable children consume F2
+        # before it bubbles up to the main window.
+        self._snake_shortcut = QShortcut(QKeySequence("F2"), self)
+        self._snake_shortcut.setContext(Qt.ShortcutContext.ApplicationShortcut)
+        self._snake_shortcut.activated.connect(self.launch_snake_game)
+
+        # Enter/Escape for DINO temp_annotations need to work even when
+        # focus is on slice_list / image_list / a button — none of which
+        # forward the key to ImageLabel.keyPressEvent. Application-wide
+        # event filter intercepts these keys but only when DINO results
+        # are pending review, and skips modal dialogs + text inputs.
+        self._dino_review_filter = _DINOReviewEventFilter(self)
+        QApplication.instance().installEventFilter(self._dino_review_filter)
         
         # Start in maximized mode
         self.showMaximized()
@@ -418,6 +481,12 @@ class ImageAnnotator(QMainWindow):
 
                 # Now save once after everything is loaded
                 self.is_loading_project = False  # Clear loading flag
+                # Reveal the phrase editor if any classes exist — the
+                # per-class selectRow inside add_class was skipped during
+                # load (see add_class). Selecting row 0 is enough; the
+                # user can switch rows freely afterwards.
+                if self.dino_class_table.rowCount() > 0:
+                    self.dino_class_table.selectRow(0)
                 self.save_project(show_message=False)  # Save once after loading
 
                 self.initialize_yolo_trainer()
@@ -930,7 +999,7 @@ class ImageAnnotator(QMainWindow):
 
         dialog = ProjectDetailsDialog(self, stats_dialog)
 
-        if dialog.exec_() == QDialog.DialogCode.Accepted:
+        if dialog.exec() == QDialog.DialogCode.Accepted:
             if dialog.were_changes_made():
                 self.project_notes = dialog.get_notes()
                 self.save_project(show_message=False)
@@ -1347,6 +1416,10 @@ class ImageAnnotator(QMainWindow):
         # Reset zoom level to default (1.0)
         self.set_zoom(1.0)
 
+        # Sync DINO temp_annotations to the new slice (carry over masks
+        # from the previous slice was a reported bug).
+        self._refresh_dino_temp_for_current()
+
     def switch_image(self, item):
         if item is None:
             return
@@ -1428,6 +1501,10 @@ class ImageAnnotator(QMainWindow):
             self.update_image_info()
             self.clear_slice_list()
 
+        # Sync DINO temp_annotations to the new image (mask carry-over
+        # bug from single-image review and batch review).
+        self._refresh_dino_temp_for_current()
+
     def adjust_zoom_to_fit(self):
         if not self.current_image:
             return
@@ -1471,6 +1548,7 @@ class ImageAnnotator(QMainWindow):
         self, image_path, dimensions=None, shape=None, force_dimension_dialog=False
     ):
         print(f"Loading TIFF file: {image_path}")
+        axes_hint = None
         with TiffFile(image_path) as tif:
             print(f"TIFF tags: {tif.pages[0].tags}")
 
@@ -1480,6 +1558,28 @@ class ImageAnnotator(QMainWindow):
                 print(f"TIFF metadata: {metadata}")
             except KeyError:
                 print("No ImageDescription metadata found")
+
+            # Try to read axis labels from the tifffile series. ImageJ /
+            # OME-TIFF stores axes like "TZCYX" — we can prefill the
+            # dimension dialog with the right labels so the user just
+            # clicks OK instead of guessing per axis. Map tifffile's
+            # axes vocabulary (T,Z,C,S,Y,X) to the app's (T,Z,C,S,H,W).
+            try:
+                series_axes = tif.series[0].axes if tif.series else None
+                if series_axes:
+                    axis_map = {
+                        "T": "T", "Z": "Z", "C": "C", "S": "S",
+                        "Y": "H", "X": "W",
+                    }
+                    mapped = [axis_map.get(a) for a in series_axes]
+                    if all(a is not None for a in mapped):
+                        axes_hint = mapped
+                        print(f"TIFF series axes: {series_axes} → dimension hint: {axes_hint}")
+                    else:
+                        unknown = [a for a in series_axes if axis_map.get(a) is None]
+                        print(f"TIFF series axes had unknown labels {unknown}, no hint applied")
+            except Exception as e:
+                print(f"Could not read TIFF series axes: {e}")
 
             # Check if it's a multi-page TIFF
             if len(tif.pages) > 1:
@@ -1505,7 +1605,8 @@ class ImageAnnotator(QMainWindow):
             dimensions = None
 
         self.process_multidimensional_image(
-            image_array, image_path, dimensions, force_dimension_dialog
+            image_array, image_path, dimensions, force_dimension_dialog,
+            axes_hint=axes_hint,
         )
 
     def load_czi(
@@ -1539,7 +1640,8 @@ class ImageAnnotator(QMainWindow):
         self.current_slice = None
 
     def process_multidimensional_image(
-        self, image_array, image_path, dimensions=None, force_dimension_dialog=False
+        self, image_array, image_path, dimensions=None,
+        force_dimension_dialog=False, axes_hint=None,
     ):
         file_name = os.path.basename(image_path)
         base_name = os.path.splitext(file_name)[0]
@@ -1549,10 +1651,37 @@ class ImageAnnotator(QMainWindow):
 
         if dimensions is None or force_dimension_dialog:
             if image_array.ndim > 2:
-                default_dimensions = (
-                    ["Z", "H", "W"] if image_array.ndim == 3 else ["T", "Z", "H", "W"]
-                )
-                default_dimensions = default_dimensions[-image_array.ndim :]
+                # Prefer the loader's metadata-derived hint (e.g. ImageJ
+                # TIFF axes='TZCYX'). Fall back to a hand-crafted default
+                # that covers ndim 3..6 so a user clicking OK without
+                # tweaking the combos gets a sensible result. The earlier
+                # `default_dimensions[-ndim:]` slice silently degraded for
+                # ndim≥5: one axis ended up unset and inherited the combo
+                # box's first item ("T"), producing 2560 wrong slices for
+                # a 5D TZCYX file.
+                if axes_hint and len(axes_hint) == image_array.ndim:
+                    default_dimensions = list(axes_hint)
+                    print(f"Applying axes hint as default dims: {default_dimensions}")
+                else:
+                    if axes_hint and len(axes_hint) != image_array.ndim:
+                        print(
+                            f"Ignoring axes hint (length {len(axes_hint)} "
+                            f"vs ndim {image_array.ndim})"
+                        )
+                    ndim_defaults = {
+                        3: ["Z", "H", "W"],
+                        4: ["T", "Z", "H", "W"],
+                        5: ["T", "Z", "C", "H", "W"],
+                        6: ["T", "Z", "C", "S", "H", "W"],
+                    }
+                    # ndim ≥ 7 falls into the generic case: pad with
+                    # "T" at the front so H / W are still the last two
+                    # axes — that way "click OK" still produces a
+                    # sensible 2D slice even on exotic inputs.
+                    default_dimensions = ndim_defaults.get(
+                        image_array.ndim,
+                        ["T"] * max(0, image_array.ndim - 2) + ["H", "W"],
+                    )
 
                 # Show a progress dialog
                 progress = QProgressDialog(
@@ -1571,7 +1700,7 @@ class ImageAnnotator(QMainWindow):
                     # the old WindowContextHelpButtonHint clear is gone.
                     progress.setValue(50)
                     QApplication.processEvents()
-                    if dialog.exec_():
+                    if dialog.exec():
                         dimensions = dialog.get_dimensions()
                         print(f"Assigned dimensions: {dimensions}")
                         if "H" in dimensions and "W" in dimensions:
@@ -1706,8 +1835,11 @@ class ImageAnnotator(QMainWindow):
                 QColor(40, 40, 40)
             )  # Very dark gray background for all items
             if slice_name in self.all_annotations:
-                item.setForeground(QColor(60, 60, 60))  # Dark gray text
-                item.setBackground(QColor(173, 216, 230))  # Light blue background
+                # Muted steel-blue + light text; the prior light-blue
+                # (173, 216, 230) bg + dark-gray text was painfully
+                # bright on a dark sidebar.
+                item.setForeground(QColor(235, 235, 235))
+                item.setBackground(QColor(58, 95, 140))
             else:
                 item.setForeground(QColor(200, 200, 200))  # Light gray text
         else:
@@ -1822,9 +1954,9 @@ class ImageAnnotator(QMainWindow):
             super().keyPressEvent(event)
             return
 
-        if event.key() == Qt.Key.Key_F2:
-            self.launch_snake_game()
-        elif event.key() == Qt.Key.Key_Delete:
+        # F2 (Snake game) is wired as a global QShortcut in __init__
+        # so it works when child widgets have focus. Don't re-handle here.
+        if event.key() == Qt.Key.Key_Delete:
             # Handle deletions
             if self.class_list.hasFocus() and self.class_list.currentItem():
                 self.delete_class(self.class_list.currentItem())
@@ -2250,12 +2382,14 @@ class ImageAnnotator(QMainWindow):
             slice_name = item.text()
 
             if self.dark_mode:
-                # Dark mode
+                # Dark mode (annotated colors match add_slice_to_list —
+                # muted steel-blue, light text; not the prior glaring
+                # light-blue bg)
                 if slice_name in self.all_annotations and any(
                     self.all_annotations[slice_name].values()
                 ):
-                    item.setForeground(QColor(60, 60, 60))  # Dark gray text
-                    item.setBackground(QColor(173, 216, 230))  # Light blue background
+                    item.setForeground(QColor(235, 235, 235))
+                    item.setBackground(QColor(58, 95, 140))
                 else:
                     item.setForeground(QColor(200, 200, 200))  # Light gray text
                     item.setBackground(QColor(40, 40, 40))  # Very dark gray background
@@ -2532,14 +2666,23 @@ class ImageAnnotator(QMainWindow):
         """
         self.sam_utils.unload()
         self.dino_utils.unload()
-        # Reset the dropdown to a neutral state so the user knows they
+        # Reset the dropdowns to a neutral state so the user knows they
         # need to re-pick the model.
         self.sam_model_selector.setCurrentIndex(0)
+        if hasattr(self, "dino_model_selector"):
+            self.dino_model_selector.setCurrentIndex(0)
+            self.dino_model_loaded = False
+            self.lbl_dino_status.setText("No DINO model loaded")
+            self.btn_detect_single.setEnabled(False)
+            self.btn_detect_batch.setEnabled(False)
         QMessageBox.information(
             self,
             "Models Unloaded",
-            "SAM and DINO models have been unloaded from memory. "
-            "Re-select a SAM model to use AI tools again.",
+            "SAM and DINO models have been unloaded from memory.\n\n"
+            "Note: PyTorch keeps a per-process CUDA context that survives "
+            "this unload (typically a few hundred MB visible in Task Manager / "
+            "nvidia-smi). To fully reclaim GPU memory, restart the app.\n\n"
+            "Re-select a SAM/DINO model to use AI tools again.",
         )
 
     def setup_sidebar(self):
@@ -2672,8 +2815,12 @@ class ImageAnnotator(QMainWindow):
 
         self.lbl_dino_status = QLabel("No DINO model loaded")
         self.lbl_dino_status.setWordWrap(True)
+        # No hardcoded background — let the active stylesheet (light or
+        # dark) provide it via QLabel rules. Hardcoded #f5f5f5 used to
+        # punch a bright rectangle into the dark sidebar.
         self.lbl_dino_status.setStyleSheet(
-            "color:#888;font-size:11px;background:#f5f5f5;padding:4px;border-radius:3px;")
+            "font-size:11px;padding:4px;border-radius:3px;"
+            "border:1px solid palette(mid);")
         dino_layout.addWidget(self.lbl_dino_status)
 
         # Threshold table
@@ -3047,6 +3194,7 @@ class ImageAnnotator(QMainWindow):
         self.lbl_dino_status.setText("Detecting...")
         QApplication.processEvents()
 
+        print(f"[DINO] detect_single: model={model_name!r} class_configs={class_configs}")
         try:
             results = self.dino_utils.detect(
                 self.current_image, class_configs,
@@ -3065,8 +3213,14 @@ class ImageAnnotator(QMainWindow):
         self.btn_detect_batch.setEnabled(True)
 
         if results is None:
+            print("[DINO] detect_single: results=None (model resolution failure)")
             self.lbl_dino_status.setText("No detections.")
             return
+
+        print(f"[DINO] detect_single: got {len(results)} result(s)")
+        if results:
+            for i, r in enumerate(results[:3]):
+                print(f"[DINO]   result[{i}] class={r['class_name']!r} score={r['score']:.3f} bbox={r['bbox']}")
 
         if not results:
             self.lbl_dino_status.setText("No detections found.")
@@ -3079,6 +3233,7 @@ class ImageAnnotator(QMainWindow):
         # as the DINO call above — sam_utils raises on model load
         # failure / CUDA OOM / re-entry now, instead of returning None.
         bboxes = [r["bbox"] for r in results]
+        print(f"[SAM] batch call: {len(bboxes)} bbox(es), first 3 = {bboxes[:3]}")
         try:
             sam_results = self.sam_utils.apply_sam_predictions_batch(
                 self.current_image, bboxes
@@ -3090,16 +3245,46 @@ class ImageAnnotator(QMainWindow):
             return
 
         if sam_results is None:
+            print("[SAM] batch returned None (no SAM model loaded)")
             QMessageBox.warning(self, "SAM Error",
                                 "Failed to segment detections with SAM.")
             self.lbl_dino_status.setText("SAM segmentation failed.")
             return
 
-        # Build temp annotations
+        n_errors = sum(1 for s in sam_results if "error" in s)
+        n_ok = sum(1 for s in sam_results if "segmentation" in s)
+        print(f"[SAM] batch returned {len(sam_results)} result(s): {n_ok} ok, {n_errors} error(s)")
+
+        # Honor the batch-mode dropdown for the single-image case too:
+        # "Auto-accept" means commit straight to annotations without
+        # showing the temp-review overlay. The dropdown name is "batch"
+        # historically but it controls both paths.
+        image_name = self.current_slice or self.image_file_name
+        auto_accept = (
+            self.dino_batch_mode.currentText() == "Auto-accept all detections"
+        )
+        if auto_accept:
+            self._commit_dino_results(image_name, results, sam_results)
+            n_committed = sum(1 for s in sam_results if "error" not in s)
+            self.image_label.temp_annotations = []
+            self.image_label.update()
+            self.update_annotation_list()
+            # Refresh slice list so the freshly-annotated slice picks
+            # up the highlight color; review-mode's accept_dino_results
+            # already does this, the auto-accept path didn't.
+            self.update_slice_list_colors()
+            self.auto_save()
+            self.lbl_dino_status.setText(
+                f"Loaded: {model_name}  |  {n_committed} mask(s) auto-accepted"
+            )
+            print(f"[DINO] auto-accept: committed {n_committed} mask(s) to {image_name}")
+            return
+
+        # Review mode — build temp annotations and let user accept/reject
         temp_annotations = []
         for r, s in zip(results, sam_results):
             if "error" in s:
-                print(f"  SAM failed for {r['class_name']}: {s['error']}")
+                print(f"[SAM]   failed for {r['class_name']}: {s['error']}")
                 continue
             temp_annotations.append({
                 "segmentation": s["segmentation"],
@@ -3110,13 +3295,15 @@ class ImageAnnotator(QMainWindow):
             })
 
         self.image_label.temp_annotations = temp_annotations
-        # Focus the canvas so Enter/Esc accept/reject without an extra click.
-        self.image_label.setFocus()
+        # Defer setFocus until after the click event chain settles —
+        # synchronous setFocus often loses to whatever widget is still
+        # processing the original click.
+        QTimer.singleShot(0, self.image_label.setFocus)
         self.image_label.update()
         self.lbl_dino_status.setText(
             f"Loaded: {model_name}  |  {len(temp_annotations)} mask(s) ready"
         )
-        print(f"DINO detection: {len(results)} boxes, {len(temp_annotations)} masks.")
+        print(f"[DINO] detection complete: {len(results)} boxes, {len(temp_annotations)} masks attached to canvas")
 
     def run_dino_detection_batch(self):
         if not self.dino_model_loaded:
@@ -3146,37 +3333,33 @@ class ImageAnnotator(QMainWindow):
             return
 
         auto_accept = self.dino_batch_mode.currentText() == "Auto-accept all detections"
-        total = len(self.all_images)
+
+        # Build a flat list of (display_name, qimage) work items covering
+        # both regular images (loaded from disk) and multi-dim image
+        # slices (already QImages in memory). Slices live in
+        # self.image_slices[base_name], indexed by their slice_name
+        # (e.g. "stack_T1_Z1_C1"). The earlier implementation only
+        # iterated self.all_images and skipped multi-slice entries with
+        # a console warning, leaving slice-based projects unable to use
+        # Detect All.
+        work_items = self._collect_dino_batch_work_items()
+        if not work_items:
+            QMessageBox.information(
+                self, "Detect All Images",
+                "No images or slices available to process."
+            )
+            return
+        total = len(work_items)
 
         progress = QProgressDialog("Running LLM Detection...", "Cancel", 0, total, self)
         progress.setWindowModality(Qt.WindowModality.WindowModal)
         progress.setMinimumDuration(0)
 
-        for idx, img_info in enumerate(self.all_images):
+        for idx, (image_name, qimage) in enumerate(work_items):
             if progress.wasCanceled():
                 break
             progress.setValue(idx)
             QApplication.processEvents()
-
-            image_name = img_info["file_name"]
-            image_path = self.image_paths.get(image_name)
-            if not image_path:
-                # Multi-dimensional image slices live in self.image_slices,
-                # not self.image_paths — batch detection on stacks isn't
-                # supported yet. Surface the skip rather than dropping silently.
-                print(f"  Skipping '{image_name}': no entry in image_paths "
-                      "(multi-dimensional slices aren't supported in batch).")
-                continue
-            if not os.path.exists(image_path):
-                print(f"  Skipping '{image_name}': file missing on disk "
-                      f"({image_path}).")
-                continue
-
-            # Load image as QImage for DINO + SAM
-            from PIL import Image as PILImage
-            pil_img = PILImage.open(image_path).convert("RGB")
-            qimage = QImage(pil_img.tobytes(), pil_img.width, pil_img.height,
-                            pil_img.width * 3, QImage.Format.Format_RGB888)
 
             try:
                 results = self.dino_utils.detect(
@@ -3215,9 +3398,55 @@ class ImageAnnotator(QMainWindow):
                 "Detections have been saved to annotations."
             )
             self.update_annotation_list()
+            # Multi-dim stacks commonly auto-accept across dozens of
+            # slices; the slice list must show which ones gained
+            # annotations or the user can't tell what happened.
+            self.update_slice_list_colors()
             self.auto_save()
         else:
             self._show_dino_batch_review()
+
+    def _collect_dino_batch_work_items(self):
+        """Return a flat ``[(name, QImage), …]`` list for batch DINO.
+
+        Regular images are loaded from disk via PIL → QImage. Multi-dim
+        images contribute one entry per slice from ``self.image_slices``;
+        slices that haven't been materialised yet (the parent image was
+        never opened in this session) are skipped with a console log.
+        """
+        from PIL import Image as PILImage
+        items = []
+        for img_info in self.all_images:
+            file_name = img_info["file_name"]
+            if img_info.get("is_multi_slice", False):
+                base_name = os.path.splitext(file_name)[0]
+                slices = self.image_slices.get(base_name, [])
+                if not slices:
+                    print(f"  Skipping multi-slice image '{file_name}': "
+                          "no slices loaded (open the image first to "
+                          "materialise its slices).")
+                    continue
+                for slice_name, qimage in slices:
+                    items.append((slice_name, qimage))
+            else:
+                image_path = self.image_paths.get(file_name)
+                if not image_path or not os.path.exists(image_path):
+                    print(f"  Skipping '{file_name}': missing image path.")
+                    continue
+                try:
+                    pil_img = PILImage.open(image_path).convert("RGB")
+                    qimage = QImage(
+                        pil_img.tobytes(),
+                        pil_img.width,
+                        pil_img.height,
+                        pil_img.width * 3,
+                        QImage.Format.Format_RGB888,
+                    )
+                    items.append((file_name, qimage))
+                except Exception as e:
+                    print(f"  Skipping '{file_name}': failed to load ({e}).")
+        print(f"[DINO] batch work items: {len(items)} total")
+        return items
 
     def _commit_dino_results(self, image_name, dino_results, sam_results):
         """Commit DINO+SAM results to annotations for a single image.
@@ -3267,9 +3496,6 @@ class ImageAnnotator(QMainWindow):
 
     def _store_dino_batch_results(self, image_name, dino_results, sam_results):
         """Store results for batch review mode."""
-        if not hasattr(self, "dino_batch_results"):
-            self.dino_batch_results = {}
-
         valid = []
         for r, s in zip(dino_results, sam_results):
             if "error" not in s:
@@ -3283,25 +3509,110 @@ class ImageAnnotator(QMainWindow):
         self.dino_batch_results[image_name] = valid
 
     def _show_dino_batch_review(self):
-        """Navigate to first image with batch results for review."""
-        if not hasattr(self, "dino_batch_results") or not self.dino_batch_results:
+        """Navigate to first image with batch results for review.
+
+        If the next entry refers to an image/slice that's no longer in
+        the project (e.g. the source was removed between detection and
+        review), pop the orphan and try the next entry so the user
+        doesn't get stuck with un-reviewable results.
+        """
+        if not self.dino_batch_results:
             QMessageBox.information(self, "Batch Detection",
                                     "No detections found in any image.")
             return
-        first = next(iter(self.dino_batch_results))
-        # Switch to first image with results
+        # Drain orphans up front. Navigate to the entry: it may be a
+        # regular image (key in image_list) or a slice (key in some
+        # image_slices[base_name]). _navigate_to_image_or_slice handles
+        # both. After the switch, switch_image / switch_slice's tail
+        # call to _refresh_dino_temp_for_current copies
+        # dino_batch_results[first] into image_label.temp_annotations
+        # and defers setFocus on the canvas — nothing to repeat here.
+        while self.dino_batch_results:
+            first = next(iter(self.dino_batch_results))
+            if self._navigate_to_image_or_slice(first):
+                return
+            print(f"[DINO] dropping orphan batch result for {first!r} "
+                  "(no matching image or slice in project)")
+            self.dino_batch_results.pop(first, None)
+        # Drained all entries without a single navigable target.
+        QMessageBox.warning(
+            self, "Batch Detection",
+            "Detections were produced but none of them map to an image "
+            "or slice still in the project. Results discarded.",
+        )
+
+    def _navigate_to_image_or_slice(self, name: str) -> bool:
+        """Switch the UI to a regular image or a slice by name.
+
+        Returns True if a match was found and the switch was issued.
+        Used by batch-review navigation, which mixes regular image
+        names and slice names in ``dino_batch_results``.
+        """
+        # Regular image — match in image_list directly
         for i in range(self.image_list.count()):
             item = self.image_list.item(i)
-            if item and item.text() == first:
+            if item and item.text() == name:
                 self.image_list.setCurrentRow(i)
                 self.switch_image(item)
-                break
-        self.image_label.temp_annotations = self.dino_batch_results.get(first, [])
-        self.image_label.setFocus()
+                return True
+        # Slice — find which multi-dim image contains it, switch to
+        # that parent image first, then activate the specific slice
+        # via slice_list.
+        for base_name, slices in self.image_slices.items():
+            if not any(s_name == name for s_name, _ in slices):
+                continue
+            # Find the parent file in image_list. The file_name in the
+            # list includes the extension (e.g. "stack.tif") while
+            # base_name is the stem ("stack"), so match by stripping
+            # the extension and comparing for equality.
+            for i in range(self.image_list.count()):
+                item = self.image_list.item(i)
+                if not item:
+                    continue
+                file_name = item.text()
+                if os.path.splitext(file_name)[0] == base_name:
+                    self.image_list.setCurrentRow(i)
+                    self.switch_image(item)
+                    # switch_image populates slice_list. Now find the slice.
+                    for s_i in range(self.slice_list.count()):
+                        s_item = self.slice_list.item(s_i)
+                        if s_item and s_item.text() == name:
+                            self.slice_list.setCurrentRow(s_i)
+                            self.switch_slice(s_item)
+                            return True
+                    break
+            return False
+        return False
+
+    def _refresh_dino_temp_for_current(self):
+        """Sync ``image_label.temp_annotations`` to whatever the
+        currently-displayed image/slice has stored in
+        ``dino_batch_results``. Called from switch_slice / switch_image.
+
+        Why this exists: ``temp_annotations`` is a single field on
+        ``ImageLabel``, not a per-image cache. Without this sync, masks
+        from the previously-viewed image bleed onto every slice the
+        user navigates to. During a batch review the user expects each
+        image to show its own pending detections; outside batch review,
+        switching simply discards the pending overlay.
+        """
+        new_image = self.current_slice or self.image_file_name
+        pending = self.dino_batch_results.get(new_image, []) if new_image else []
+        if pending:
+            # Re-stamp the "temp" flag in case it was stripped by a
+            # previous accept path; this list also feeds the paintEvent
+            # which expects dicts with "segmentation" + "category_name".
+            self.image_label.temp_annotations = list(pending)
+            self.lbl_dino_status.setText(
+                f"Review: {new_image}  ({len(pending)} detection(s))"
+            )
+            QTimer.singleShot(0, self.image_label.setFocus)
+        else:
+            if self.image_label.temp_annotations:
+                print("[DINO] temp annotations cleared on switch "
+                      f"(no pending batch results for {new_image!r})")
+            self.image_label.temp_annotations = []
         self.image_label.update()
-        self.lbl_dino_status.setText(
-            f"Review: {first}  ({len(self.image_label.temp_annotations)} detections)"
-        )
 
     def accept_dino_results(self):
         """Accept current temp_annotations (called from keyPressEvent)."""
@@ -3332,10 +3643,9 @@ class ImageAnnotator(QMainWindow):
 
         self.image_label.temp_annotations = []
         # Clear batch results if reviewing
-        if hasattr(self, "dino_batch_results"):
-            self.dino_batch_results.pop(image_name, None)
-            if self.dino_batch_results:
-                self._show_dino_batch_review()
+        self.dino_batch_results.pop(image_name, None)
+        if self.dino_batch_results:
+            self._show_dino_batch_review()
         self.save_current_annotations()
         self.update_slice_list_colors()
         self.image_label.update()
@@ -3346,10 +3656,9 @@ class ImageAnnotator(QMainWindow):
         """Discard current temp_annotations."""
         self.image_label.temp_annotations = []
         image_name = self.current_slice or self.image_file_name
-        if hasattr(self, "dino_batch_results"):
-            self.dino_batch_results.pop(image_name, None)
-            if self.dino_batch_results:
-                self._show_dino_batch_review()
+        self.dino_batch_results.pop(image_name, None)
+        if self.dino_batch_results:
+            self._show_dino_batch_review()
         self.image_label.update()
         self.lbl_dino_status.setText("Results discarded.")
         print("DINO results discarded.")
@@ -3658,7 +3967,7 @@ class ImageAnnotator(QMainWindow):
             if self.is_multi_dimensional(file_name):
                 redefine_dimensions_action = menu.addAction("Redefine Dimensions")
 
-            action = menu.exec_(self.image_list.mapToGlobal(position))
+            action = menu.exec(self.image_list.mapToGlobal(position))
 
             if action == delete_action:
                 self.remove_image()
@@ -4137,7 +4446,7 @@ class ImageAnnotator(QMainWindow):
         msg_box.setDefaultButton(cancel_button)
         msg_box.setEscapeButton(cancel_button)
 
-        msg_box.exec_()
+        msg_box.exec()
 
         if msg_box.clickedButton() == cancel_button:
             return
@@ -4324,9 +4633,17 @@ class ImageAnnotator(QMainWindow):
             self.current_class = class_name
             print(f"Class added successfully: {class_name}")
 
-            # Sync DINO phrase/threshold state
-            self.dino_class_table.add_class(class_name)
+            # Sync DINO phrase/threshold state. Select the newly added
+            # row so the phrase editor below the table reveals itself —
+            # it hides by default and only becomes visible when a row is
+            # selected (set_active_class). Skip the row-select during
+            # project load: classes are added in a loop and we don't want
+            # N row-selection signals firing during bulk restoration; the
+            # caller will select an appropriate row after load completes.
+            row_added = self.dino_class_table.add_class(class_name)
             self.dino_phrase_panel.on_class_added(class_name)
+            if row_added and not self.is_loading_project:
+                self.dino_class_table.selectRow(self.dino_class_table.rowCount() - 1)
 
             if not self.is_loading_project:
                 self.auto_save()
@@ -4410,7 +4727,7 @@ class ImageAnnotator(QMainWindow):
         button_box.rejected.connect(class_dialog.reject)
         layout.addWidget(button_box)
 
-        if class_dialog.exec_() == QDialog.DialogCode.Accepted:
+        if class_dialog.exec() == QDialog.DialogCode.Accepted:
             new_class = class_combo.currentText()
             current_name = self.current_slice or self.image_file_name
 
@@ -4604,7 +4921,7 @@ class ImageAnnotator(QMainWindow):
 
         item = self.class_list.itemAt(position)
         if item:
-            action = menu.exec_(self.class_list.mapToGlobal(position))
+            action = menu.exec(self.class_list.mapToGlobal(position))
 
             if action == rename_action:
                 self.rename_class(item)
@@ -5149,7 +5466,7 @@ class ImageAnnotator(QMainWindow):
             self.initialize_yolo_trainer()
 
         dialog = LoadPredictionModelDialog(self)
-        if dialog.exec_() == QDialog.DialogCode.Accepted:
+        if dialog.exec() == QDialog.DialogCode.Accepted:
             model_path = dialog.model_path
             yaml_path = dialog.yaml_path
             if model_path and yaml_path:
@@ -5218,7 +5535,7 @@ class ImageAnnotator(QMainWindow):
 
         dialog.setLayout(layout)
 
-        if dialog.exec_() == QDialog.DialogCode.Accepted:
+        if dialog.exec() == QDialog.DialogCode.Accepted:
             epochs = int(epochs_input.text())
             imgsz = int(imgsz_input.text())
             self.start_training(epochs, imgsz)
@@ -5321,7 +5638,7 @@ class ImageAnnotator(QMainWindow):
 
         dialog.setLayout(layout)
 
-        if dialog.exec_() == QDialog.DialogCode.Accepted:
+        if dialog.exec() == QDialog.DialogCode.Accepted:
             selected_images = [item.text() for item in image_list.selectedItems()]
             conf = conf_input.value()
             self.yolo_trainer.set_conf_threshold(conf)

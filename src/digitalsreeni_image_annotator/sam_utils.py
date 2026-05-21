@@ -30,6 +30,7 @@ startup stays fast for users who never touch SAM.
 from __future__ import annotations
 
 import os
+import traceback
 
 import cv2
 import numpy as np
@@ -209,6 +210,11 @@ class _InferenceThread(QThread):
         except BaseException as exc:  # noqa: BLE001 - rebroadcast verbatim
             # Capture rather than print — _run_sync will re-raise on the
             # calling thread so try/except at the call site actually catches.
+            # We DO emit a traceback to the console here so the failure
+            # mode is visible even if a caller swallows the exception in
+            # a broad except block (debugging silent-failure regressions).
+            print(f"[InferenceThread] {type(exc).__name__}: {exc}")
+            traceback.print_exc()
             self._exc = exc
         self.finished_with_result.emit()
 
@@ -344,16 +350,42 @@ class SAMUtils(QObject):
     def unload(self) -> None:
         """Free GPU/CPU memory held by the loaded model.
 
-        Useful as a Tools menu entry; also handy in tests.
+        Three-step recipe required to actually drop the GPU allocation:
+
+        1. Move the underlying nn.Module to CPU
+           (``self._model.model.cpu()``). Without this the GPU tensors
+           stay resident even after Python drops its reference, because
+           the allocator pool keeps them.
+        2. Drop the Python references, ``gc.collect()`` to break the
+           Ultralytics circular refs.
+        3. ``torch.cuda.empty_cache()`` + ``ipc_collect()`` +
+           ``synchronize()`` so the allocator releases freed blocks
+           back to the driver and pending kernels complete first.
+
+        Caveat: PyTorch keeps a CUDA context per process. Even after a
+        clean unload, Task Manager / ``nvidia-smi`` show the residual
+        context (~200-500 MB depending on driver). To reclaim that the
+        user must restart the app.
         """
+        import gc
+        try:
+            if self._model is not None and hasattr(self._model, "model"):
+                self._model.model.cpu()
+        except Exception as e:
+            print(f"[SAM] unload: warning moving model to CPU: {e}")
         self._model = None
+        self.current_sam_model = None
         self._loaded_model_file = None
+        gc.collect()
         try:
             import torch
             if torch.cuda.is_available():
+                torch.cuda.synchronize()
                 torch.cuda.empty_cache()
+                torch.cuda.ipc_collect()
         except Exception:
             pass
+        print("[SAM] unload complete")
 
     # ── inference ──────────────────────────────────────────────────────
 
@@ -436,10 +468,12 @@ class SAMUtils(QObject):
 
     def apply_sam_predictions_batch(self, image: QImage, bboxes: list):
         if not self.current_sam_model or self._model is None:
-            print("No SAM model selected.")
+            print("[SAM] apply_sam_predictions_batch: no SAM model selected")
             return None
         if not bboxes:
+            print("[SAM] apply_sam_predictions_batch: empty bbox list")
             return []
+        print(f"[SAM] apply_sam_predictions_batch: running on {len(bboxes)} bbox(es)")
         return _run_sync(
             self._sam_batch_blocking,
             _qimage_to_numpy(image),

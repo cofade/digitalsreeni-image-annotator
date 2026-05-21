@@ -108,16 +108,33 @@ class DINOUtils(QObject):
         print("[DINO] Model loaded successfully.")
 
     def unload(self) -> None:
-        """Drop the cached model so its GPU/CPU memory comes back."""
+        """Drop the cached model so its GPU/CPU memory comes back.
+
+        Recipe mirrors ``SAMUtils.unload`` — see that docstring for the
+        full justification. Caveat: PyTorch keeps a per-process CUDA
+        context that survives unload (~200-500 MB residual). Full
+        reclaim requires restarting the app.
+        """
+        import gc
+        try:
+            if self._model is not None:
+                self._model.cpu()
+        except Exception as e:
+            print(f"[DINO] unload: warning moving model to CPU: {e}")
         self._proc = None
         self._model = None
         self._loaded_model_path = None
+        self._device = None
+        gc.collect()
         try:
             import torch
             if torch.cuda.is_available():
+                torch.cuda.synchronize()
                 torch.cuda.empty_cache()
+                torch.cuda.ipc_collect()
         except Exception:
             pass
+        print("[DINO] unload complete")
 
     # ── inference ─────────────────────────────────────────────────────
 
@@ -195,10 +212,12 @@ class DINOUtils(QObject):
                 all_labels.extend(labels)
 
         if not all_boxes:
+            print('[DINO]   total candidates pre-CCNMS: 0 (no class produced any boxes)')
             return []
 
         all_boxes = torch.cat(all_boxes, dim=0)
         all_scores = torch.cat(all_scores, dim=0)
+        print(f'[DINO]   total candidates pre-CCNMS: {len(all_boxes)}')
 
         # Cross-class NMS — drop boxes that overlap heavily across
         # classes so the user doesn't get two near-identical masks
@@ -212,6 +231,10 @@ class DINOUtils(QObject):
         all_boxes = all_boxes[cross_keep]
         all_scores = all_scores[cross_keep]
         all_labels = [all_labels[i] for i in cross_keep]
+        print(
+            f'[DINO]   cross-class NMS (iou={cc_thr:.2f}): '
+            f'{len(cross_keep)} survivor(s)'
+        )
 
         results = []
         for i in range(len(all_boxes)):
@@ -222,6 +245,7 @@ class DINOUtils(QObject):
                 "score": float(all_scores[i].item()),
                 "label": all_labels[i],
             })
+        print(f'[DINO] detect() returning {len(results)} result(s)')
         return results
 
     def _run_for_class(self, image_pil, class_cfg, device):
@@ -229,11 +253,15 @@ class DINOUtils(QObject):
         import torch
         from torchvision.ops import nms
 
-        phrases = class_cfg.get("phrases", [class_cfg["name"]])
-        if class_cfg["name"] not in phrases:
-            phrases = [class_cfg["name"]] + list(phrases)
-
+        # Use the phrases provided by the caller verbatim. The earlier
+        # auto-prepend of class_cfg["name"] silently overrode any
+        # rename of row-0 in the phrase editor (see ADR-015 area + arc42
+        # DINO Temp Annotations section). If the user emptied phrases
+        # entirely, fall back to the class name as the single prompt.
+        phrases = list(class_cfg.get("phrases") or [class_cfg["name"]])
         clean_phrases = [p.strip().rstrip(".") for p in phrases if p.strip()]
+        if not clean_phrases:
+            clean_phrases = [class_cfg["name"]]
         prompt = " . ".join(clean_phrases) + " ."
 
         box_thr = class_cfg.get("box_thr", 0.25)
@@ -267,6 +295,12 @@ class DINOUtils(QObject):
         scores = det["scores"].cpu()
         raw_labels = det.get("text_labels", det.get("labels", []))
 
+        top_scores = [float(s) for s in scores[:5].tolist()] if len(scores) else []
+        print(
+            f'[DINO]     post_process: {len(boxes)} raw box(es), '
+            f'top scores={top_scores}'
+        )
+
         if len(boxes) == 0:
             return torch.zeros((0, 4)), torch.zeros(0), []
 
@@ -277,6 +311,7 @@ class DINOUtils(QObject):
             i for i, b in enumerate(boxes)
             if ((b[2] - b[0]) * (b[3] - b[1])).item() / area < MAX_AREA_FRAC
         ]
+        print(f'[DINO]     after area filter (<{MAX_AREA_FRAC} of image): {len(keep)} kept')
         if not keep:
             return torch.zeros((0, 4)), torch.zeros(0), []
 
@@ -286,6 +321,7 @@ class DINOUtils(QObject):
 
         # Per-class NMS
         keep2 = nms(boxes, scores, nms_thr).tolist()
+        print(f'[DINO]     after per-class NMS (iou={nms_thr:.2f}): {len(keep2)} kept')
         boxes = boxes[keep2]
         scores = scores[keep2]
         raw_labels = [raw_labels[i] for i in keep2]

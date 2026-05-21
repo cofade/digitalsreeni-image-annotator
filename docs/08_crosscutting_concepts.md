@@ -26,6 +26,24 @@ Annotations are stored in image coordinates (unzoomed, absolute pixels):
 - **Polygon**: Flattened list `[x1, y1, x2, y2, ...]`
 - **Rectangle**: COCO format `[x, y, width, height]`
 
+### Pan + Zoom Reference Frames
+
+Two non-obvious gotchas live in `ImageLabel.mouseMoveEvent` /
+`wheelEvent`:
+
+- **Pan must use `event.globalPosition()`, not `event.position()`.**
+  Widget-local coords absorb half the cursor delta during a scrollbar
+  move (the widget shifts under the cursor mid-drag) → effective
+  half-speed pan. The global frame is stable.
+- **Zoom-to-cursor must compute the post-zoom `offset_x/y`
+  analytically from the viewport, not read `self.offset_x` after the
+  zoom call.** `update_scaled_pixmap()` only *relaxes* the minimum
+  size on zoom-out; the widget hasn't shrunk by the time
+  `update_offset()` runs, so `self.width()` is stale and the offset
+  comes out wrong. Use `viewport().width()` + `scaled_pixmap.width()`
+  to derive the offset directly. Zoom-in worked by accident because
+  the widget grows immediately when `setMinimumSize` enlarges it.
+
 ## Image Format Conversions
 
 ### QImage ↔ NumPy Array
@@ -133,6 +151,24 @@ First use downloads models, subsequent uses load from cache:
 sam_model = SAM("sam2_t.pt")  # Downloads if not present
 ```
 
+### Releasing Model GPU Memory
+
+`SAMUtils.unload()` and `DINOUtils.unload()` must do **three** things,
+in order:
+
+1. Drop the cached Python references (`self._model = None`, etc.).
+2. **`gc.collect()`** to break circular references inside Ultralytics
+   / Transformers model objects (config ↔ model, processor ↔
+   tokenizer). Without this, the C++/CUDA backing memory stays pinned
+   until Python's cyclic GC runs on its own schedule, which can be
+   many seconds or never. Task Manager / `nvidia-smi` will show zero
+   drop in GPU memory.
+3. **`torch.cuda.empty_cache()`** (plus `torch.cuda.ipc_collect()`) so
+   the PyTorch allocator returns the freed blocks to the OS / driver.
+
+Skipping step 2 was the cause of "Tools → Unload AI Models does
+nothing visible" in v0.9.0 manual testing.
+
 ### Model Size Recommendations
 
 | Model | Size | RAM Usage | Speed | Recommendation |
@@ -160,6 +196,30 @@ else:
 - Annotation rendering uses inverted colors for visibility
 - Text labels use high-contrast colors
 - Background grid adjusted for dark backgrounds
+
+### Dark Mode — No Hardcoded Colors Rule
+
+**Do not hardcode `background`, `color`, or other palette-dependent
+values in widget `setStyleSheet(...)` calls.** They override both the
+default OS look *and* `soft_dark_stylesheet.py`, leaving bright
+rectangles on the dark sidebar. Past offenders that bit us:
+
+- `ClassThresholdTable` header had `background: #e0e0e0;` → bright bar
+  across the top of the DINO panel in dark mode.
+- `lbl_dino_status` had `background: #f5f5f5;` → bright box where the
+  "No DINO model loaded" status sat.
+
+Either leave the property out of the inline stylesheet so the global
+sheet wins, or use Qt's palette role functions (`palette(base)`,
+`palette(mid)`, `palette(text)`, …) which resolve at paint time
+against the active palette. Inline hardcoded greys are an anti-pattern.
+
+When introducing a new widget type that doesn't have a rule in
+`soft_dark_stylesheet.py` yet — add the rule there *first*, then build
+the widget. Otherwise the widget uses the OS default in dark mode,
+which on Windows means barely-visible radio-button indicators and
+white-on-white headers (the dataset splitter radio buttons hit this
+before they were styled).
 
 ## Thread Safety for YOLO Training
 
@@ -279,3 +339,108 @@ print(f"Loading project from: {project_path}")
 ```
 
 **Note**: No formal logging framework is used. Output goes to console.
+
+## DINO Temp Annotations — Single Field, Many Images
+
+`ImageLabel.temp_annotations` is a **single list on the image_label**,
+not a per-image cache. It holds the pending DINO+SAM masks shown as
+an overlay while the user decides accept/reject. The per-image batch
+cache is `ImageAnnotator.dino_batch_results` (a dict keyed by image
+name) — `image_label.temp_annotations` is only ever set to one image's
+slice of that dict at a time.
+
+Consequences this codebase has tripped over:
+
+- **Image/slice switches must re-sync** `temp_annotations` from
+  `dino_batch_results` for the new image (load if pending, clear if
+  not). Otherwise masks from the previously-viewed image visually
+  bleed onto every slice the user navigates to. See
+  `_refresh_dino_temp_for_current()`.
+- **Enter / Escape during review** must work even when the focus is on
+  slice_list / image_list / a button — `QListWidget` consumes
+  Enter for itemActivated before `ImageLabel.keyPressEvent` ever sees
+  it. Solved with an application-wide event filter
+  (`_DINOReviewEventFilter`) that fires only while
+  `temp_annotations` has DINO items and skips modal dialogs and text
+  inputs. Setting `image_label.setFocus()` synchronously inside
+  `_show_dino_batch_review` was not enough — Qt's focus handling
+  raced the click event that opened the review and the canvas
+  often didn't end up focused. `QTimer.singleShot(0, …)` defers until
+  the current event chain settles.
+- **Auto-accept dropdown applies to both paths.** The batch-mode
+  combo ("Review before accepting" / "Auto-accept all detections")
+  controls **both** "Detect Current Image" and "Detect All Images".
+  Only checking it in `run_dino_detection_batch` and not
+  `run_dino_detection_single` produced a confusing "auto-accept
+  doesn't actually auto-accept for single image" bug.
+- **Batch detection must enumerate slices, not just `all_images`.**
+  Multi-dim images live in `all_images` as a single entry with
+  `is_multi_slice=True`, and their actual slice QImages live under
+  `self.image_slices[base_name]`. The first cut of
+  `run_dino_detection_batch` iterated `all_images` and skipped the
+  multi-slice entries with a console log — leaving stack-based
+  projects unable to use "Detect All Images" at all. Batch jobs go
+  through `_collect_dino_batch_work_items()` which flattens regular
+  images + every loaded slice into a `(name, QImage)` list.
+- **Review navigation must handle slice names.** Slice names like
+  `stack_T1_Z1_C1` are not in `image_list`. After collecting batch
+  results for slices, `_navigate_to_image_or_slice()` finds the
+  parent image via `os.path.splitext` matching and then activates
+  the specific row in `slice_list`. Without this, batch review on
+  slices either silently no-op'd or showed the first regular
+  image's masks on a slice.
+
+## Multi-dimensional TIFF Axis Defaults
+
+`load_tiff` extracts `tif.series[0].axes` (e.g. `"TZCYX"`) and maps
+it through `{T:T, Z:Z, C:C, S:S, Y:H, X:W}` to populate the
+`DimensionDialog` combo boxes. This is what lets a user open an
+ImageJ-style 5D TIFF and just click OK.
+
+When the metadata is missing or unfamiliar, fall back to the
+hand-crafted defaults keyed on `ndim`:
+
+| ndim | default labels |
+|------|---------------|
+| 3 | `Z H W` |
+| 4 | `T Z H W` |
+| 5 | `T Z C H W` |
+| 6 | `T Z C S H W` |
+
+**Do not** use `default_dimensions[-ndim:]` of a shorter list to
+"extend" defaults — that silently degrades for `ndim ≥ 5`: the final
+combo gets no default and inherits the first item ("T"), which is
+the wrong axis. The 5D TZCYX bug that produced 2560 one-row slices
+on a `(2,5,2,256,256)` file came from exactly this.
+
+## Export Format Filename Matching
+
+`export_formats.py` historically looked up image paths via substring
+match:
+
+```python
+image_path = next(
+    (path for name, path in image_paths.items() if image_name in name),
+    None,
+)
+```
+
+That is fragile — `"bee.jpg" in "honeybee.jpg"` returns True and you
+write the wrong file. The COCO, YOLO v4, and YOLO v5+ exports all
+share this code path.
+
+**Always try the exact key first; fall back to substring only if no
+exact key matches.** Pattern:
+
+```python
+image_path = image_paths.get(image_name)
+if image_path is None:
+    image_path = next(
+        (path for name, path in image_paths.items() if image_name in name),
+        None,
+    )
+```
+
+The substring fallback is kept for backward compatibility with old
+projects that may have stored normalised image names (e.g. without
+extension); new code should prefer the exact-key path.

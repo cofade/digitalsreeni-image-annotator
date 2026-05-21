@@ -216,4 +216,4 @@ class ProjectSearchDialog(QDialog):
 
 def show_project_search(parent):
     dialog = ProjectSearchDialog(parent)
-    dialog.exec_()
+    dialog.exec()

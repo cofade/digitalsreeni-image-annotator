@@ -239,7 +239,7 @@ class ImagePatcherTool(QDialog):
                 file_name = os.path.basename(file_path)
                 dialog = DimensionDialog(images.shape, file_name, self)
                 dialog.setWindowModality(Qt.WindowModality.ApplicationModal)
-                result = dialog.exec_()
+                result = dialog.exec()
                 if result == QDialog.DialogCode.Accepted:
                     dimensions = dialog.get_dimensions()
                     if 'H' in dimensions and 'W' in dimensions:
@@ -283,7 +283,7 @@ class ImagePatcherTool(QDialog):
     def get_dimensions(self, shape, file_name):
         dialog = DimensionDialog(shape, file_name, self)
         dialog.setWindowModality(Qt.WindowModality.ApplicationModal)
-        result = dialog.exec_()
+        result = dialog.exec()
         
         if result == QDialog.DialogCode.Accepted:
             dimensions = dialog.get_dimensions()

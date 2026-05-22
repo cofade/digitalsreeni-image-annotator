@@ -57,15 +57,15 @@ from shapely.ops import unary_union
 from shapely.validation import make_valid
 from tifffile import TiffFile
 
-from .annotation_statistics import show_annotation_statistics
-from .coco_json_combiner import show_coco_json_combiner
-from .dino_phrase_editor import ClassThresholdTable, PhraseEditorPanel
-from .dino_utils import DINOUtils
-from .dataset_splitter import DatasetSplitterTool
-from .default_stylesheet import default_stylesheet
-from .dicom_converter import DicomConverter
-from .dino_merge_dialog import show_dino_merge_dialog
-from .export_formats import (
+from .dialogs.annotation_statistics import show_annotation_statistics
+from .dialogs.coco_json_combiner import show_coco_json_combiner
+from .dialogs.dino_phrase_editor import ClassThresholdTable, PhraseEditorPanel
+from .inference.dino_utils import DINOUtils
+from .dialogs.dataset_splitter import DatasetSplitterTool
+from .ui.default_stylesheet import default_stylesheet
+from .dialogs.dicom_converter import DicomConverter
+from .dialogs.dino_merge_dialog import show_dino_merge_dialog
+from .io.export_formats import (
     export_coco_json,
     export_labeled_images,
     export_pascal_voc_bbox,
@@ -74,24 +74,24 @@ from .export_formats import (
     export_yolo_v4,
     export_yolo_v5plus,
 )
-from .help_window import HelpWindow
-from .image_augmenter import show_image_augmenter
-from .image_label import ImageLabel
-from .image_patcher import show_image_patcher
-from .import_formats import (
+from .dialogs.help_window import HelpWindow
+from .dialogs.image_augmenter import show_image_augmenter
+from .widgets.image_label import ImageLabel
+from .dialogs.image_patcher import show_image_patcher
+from .io.import_formats import (
     import_coco_json,
     import_yolo_v4,
     import_yolo_v5plus,
     process_import_format,
 )
-from .sam_utils import InferenceBusyError, SAMUtils
-from .slice_registration import SliceRegistrationTool
-from .snake_game import SnakeGame
-from .soft_dark_stylesheet import soft_dark_stylesheet
-from .stack_interpolator import StackInterpolator
-from .stack_to_slices import show_stack_to_slices
+from .inference.sam_utils import InferenceBusyError, SAMUtils
+from .dialogs.slice_registration import SliceRegistrationTool
+from .dialogs.snake_game import SnakeGame
+from .ui.soft_dark_stylesheet import soft_dark_stylesheet
+from .dialogs.stack_interpolator import StackInterpolator
+from .dialogs.stack_to_slices import show_stack_to_slices
 from .utils import calculate_area, calculate_bbox
-from .yolo_trainer import LoadPredictionModelDialog, TrainingInfoDialog, YOLOTrainer
+from .dialogs.yolo_trainer import LoadPredictionModelDialog, TrainingInfoDialog, YOLOTrainer
 
 warnings.filterwarnings("ignore", category=UserWarning)
 

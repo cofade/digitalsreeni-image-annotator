@@ -1,6 +1,6 @@
 import json
 from PyQt6.QtGui import QImage
-from .utils import calculate_area, calculate_bbox
+from ..utils import calculate_area, calculate_bbox
 import yaml
 import os
 import shutil

@@ -37,7 +37,7 @@ import numpy as np
 from PyQt6.QtCore import QEventLoop, QObject, QThread, pyqtSignal
 from PyQt6.QtGui import QImage
 
-from .utils import models_base_dir
+from ..utils import models_base_dir
 
 
 MODEL_NAMES = [

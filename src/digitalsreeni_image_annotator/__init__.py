@@ -11,8 +11,8 @@ __version__ = "0.9.0"
 __author__ = "Dr. Sreenivas Bhattiprolu"
 
 from .annotator_window import ImageAnnotator
-from .image_label import ImageLabel
+from .widgets.image_label import ImageLabel
 from .utils import calculate_area, calculate_bbox
-from .sam_utils import SAMUtils  
+from .inference.sam_utils import SAMUtils
 
 __all__ = ['ImageAnnotator', 'ImageLabel', 'calculate_area', 'calculate_bbox', 'SAMUtils']  # Add 'SAMUtils' to this list

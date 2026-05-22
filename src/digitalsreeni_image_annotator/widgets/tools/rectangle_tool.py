@@ -1,6 +1,6 @@
 """RectangleTool — drag a bbox; release commits via finishRectangleRequested."""
 
-from PyQt6.QtCore import QPointF, QRectF, Qt
+from PyQt6.QtCore import QRectF, Qt
 from PyQt6.QtGui import QColor, QPen
 
 from .base import ToolHandler
@@ -68,8 +68,23 @@ class RectangleTool(ToolHandler):
         )
         painter.restore()
 
+    def has_unsaved_state(self) -> bool:
+        # A rectangle commits automatically on mouse release (emits
+        # finishRectangleRequested) — there's no "draft" rectangle the
+        # user might want to save later. The only way to have lingering
+        # state is mid-drag; in that case discard() clears it on tool
+        # switch / image switch via check_unsaved_changes.
+        return self.label.drawing_rectangle
+
     def discard(self) -> None:
         self.label.start_point = None
         self.label.end_point = None
         self.label.current_rectangle = None
         self.label.drawing_rectangle = False
+
+    def commit(self) -> None:
+        # Mid-drag rectangle isn't finishable (no mouse-release signal
+        # was emitted yet). Treat "Yes save" as discard for consistency
+        # with the dialog's intent — the user clicked Yes meaning "keep
+        # what I drew" but there's nothing complete to keep.
+        self.discard()

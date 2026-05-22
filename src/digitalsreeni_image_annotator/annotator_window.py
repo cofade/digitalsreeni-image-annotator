@@ -414,31 +414,11 @@ class ImageAnnotator(QMainWindow):
         return self.image_controller.update_all_images(new_image_info)
 
     def closeEvent(self, event):
+        # check_unsaved_changes prompts and commits/discards as the
+        # user chooses; returns False on Cancel.
         if not self.image_label.check_unsaved_changes():
             event.ignore()
             return
-        event.accept()
-
-        if (
-            self.image_label.temp_paint_mask is not None
-            or self.image_label.temp_eraser_mask is not None
-        ):
-            reply = QMessageBox.question(
-                self,
-                "Unsaved Changes",
-                "You have unsaved changes. Do you want to save them before closing?",
-                QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No | QMessageBox.StandardButton.Cancel,
-            )
-            if reply == QMessageBox.StandardButton.Yes:
-                if self.image_label.temp_paint_mask is not None:
-                    self.image_label._tools["paint_brush"].commit()
-                if self.image_label.temp_eraser_mask is not None:
-                    self.image_label._tools["eraser"].commit()
-            elif reply == QMessageBox.StandardButton.Cancel:
-                event.ignore()
-                return
-
-        # Perform any other cleanup or saving operations here
         event.accept()
 
     def switch_slice(self, item):

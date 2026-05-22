@@ -251,10 +251,13 @@ class ImageLabel(QLabel):
                     painter.setBrush(QBrush(Qt.GlobalColor.red))
                     painter.drawEllipse(QPointF(pt[0], pt[1]), 4, 4)
                 painter.restore()
-            # Active tool's in-progress overlay (paint mask, eraser
-            # mask, polygon-in-progress, rectangle preview)
-            handler = self.active_tool_handler
-            if handler is not None:
+            # In-progress overlays from every tool that has state to
+            # render (paint mask, eraser mask, polygon-in-progress,
+            # rectangle preview). Pre-Phase-7 these drew whenever
+            # their state field was populated regardless of the active
+            # tool; iterating all handlers preserves that — switching
+            # tools mid-stroke does not hide an unsaved mark.
+            for handler in self._tools.values():
                 handler.paint_overlay(painter)
             self.draw_tool_size_indicator(painter)
             if self.temp_annotations:

@@ -71,10 +71,15 @@ class PolygonTool(ToolHandler):
         painter.restore()
 
     def has_unsaved_state(self) -> bool:
-        return self.label.drawing_polygon and len(self.label.current_annotation) > 0
+        # Only report unsaved if the polygon is actually finishable
+        # (3+ points). 1- or 2-point polygons can't be saved; they're
+        # silently dropped on tool switch via discard(), matching the
+        # pre-Phase-7 behaviour where commit_paint_annotation /
+        # commit_eraser_changes were the only "save?" prompts.
+        return self.label.drawing_polygon and len(self.label.current_annotation) > 2
 
     def commit(self) -> None:
-        if self.has_unsaved_state() and len(self.label.current_annotation) > 2:
+        if self.has_unsaved_state():
             self.label.drawing_polygon = False
             self.label.finishPolygonRequested.emit()
 

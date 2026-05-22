@@ -78,7 +78,7 @@ Architectural pattern used across `controllers/*`. A controller is a `QObject` s
 Base class for per-tool mouse / key / paint behaviour inside `ImageLabel`. Plain Python object (not a `QObject`); holds a back-reference to the widget for signal emission and `CanvasContext` reads. Subclasses (`RectangleTool`, `PolygonTool`, `PaintBrushTool`, `EraserTool`) live in `widgets/tools/` and are dispatched to by `ImageLabel.active_tool_handler`. Introduced in Phase 7 (ADR-017).
 
 ### Tool subclasses (`RectangleTool`, `PolygonTool`, `PaintBrushTool`, `EraserTool`)
-Concrete `ToolHandler` implementations, one per mouse-driven annotation tool. Each owns its event hooks (`on_mouse_press`, `on_mouse_move`, `on_mouse_release`, `on_enter`, `on_escape`, `paint_overlay`) and an `has_unsaved_state()` / `commit()` / `discard()` contract for the `check_unsaved_changes` dialog.
+Concrete `ToolHandler` implementations, one per mouse-driven annotation tool. Each overrides the event hooks defined on the base class (`on_mouse_press`, `on_mouse_move`, `on_mouse_release`, `on_double_click`, `on_enter`, `on_escape`, `paint_overlay`, `deactivate`) and participates in the `has_unsaved_state()` / `commit()` / `discard()` contract used by the `check_unsaved_changes` dialog.
 
 ### UI builders (`build_menu_bar`, `build_sidebar`, `build_image_area`, `build_image_list`)
 Functions under `ui/` that construct widget trees at startup. Each takes the `ImageAnnotator` instance as `window`, attaches widgets as `window.X = QWidget(...)` so other modules can read them, and wires signals to `window.<method>` delegate methods. Replaced the equivalent `setup_*` methods on `ImageAnnotator` in Phase 8.

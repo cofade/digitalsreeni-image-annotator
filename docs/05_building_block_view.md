@@ -41,6 +41,7 @@ src/digitalsreeni_image_annotator/
 │       ├── paint_tool.py
 │       └── eraser_tool.py
 ├── controllers/                   # Project/Image/SAM/DINO/YOLO/Annotation/Class
+│                                  # + io_controller helpers
 ├── inference/                     # sam_utils.py, dino_utils.py
 ├── io/                            # export_formats.py, import_formats.py
 ├── ui/                            # menu_bar, sidebar, shortcuts, theme, stylesheets
@@ -186,12 +187,15 @@ export time — see [Cross-cutting Concepts](08_crosscutting_concepts.md)).
 
 ## Level 3: Controllers
 
-The seven `controllers/*` modules carve `ImageAnnotator` into
-single-responsibility owners that the orchestrator delegates to.
-Pattern: each controller is a `QObject` subclass holding `self.mw =
-main_window`. The orchestrator keeps thin pass-through methods so
-external call sites (menus, signal wiring, the test harness) don't
-need to reach into the controller graph.
+Seven `QObject` controllers plus an `io_controller` helper module
+carve `ImageAnnotator` into single-responsibility owners that the
+orchestrator delegates to. Each `QObject` controller holds `self.mw
+= main_window` and owns one slice of behaviour; the
+`io_controller` is a thin module of UI-wrapper functions around the
+pure `io/` formatters and does not need to hold state. The
+orchestrator keeps pass-through methods so external call sites
+(menus, signal wiring, the test harness) don't need to reach into
+the controller graph.
 
 | Controller | Responsibility |
 |------------|----------------|

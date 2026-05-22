@@ -57,7 +57,7 @@ src/digitalsreeni_image_annotator/
 ├── io/                           # export_formats.py, import_formats.py
 ├── ui/                           # menu_bar, sidebar, shortcuts, theme, stylesheets
 └── dialogs/                      # Standalone tool dialogs (statistics,
-                                  #   splitter, augmenter, … 14 files)
+                                  #   splitter, augmenter, … 16 files)
 ```
 
 ## Key Classes

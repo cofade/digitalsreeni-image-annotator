@@ -1,7 +1,7 @@
 import plotly.graph_objects as go
 from plotly.subplots import make_subplots
-from PyQt5.QtWidgets import QDialog, QVBoxLayout, QTextBrowser, QPushButton, QHBoxLayout
-from PyQt5.QtCore import Qt
+from PyQt6.QtWidgets import QDialog, QVBoxLayout, QTextBrowser, QPushButton, QHBoxLayout
+from PyQt6.QtCore import Qt
 import tempfile
 import os
 import webbrowser
@@ -11,7 +11,7 @@ class AnnotationStatisticsDialog(QDialog):
         super().__init__(parent)
         self.setWindowTitle("Annotation Statistics")
         self.setGeometry(100, 100, 600, 400)
-        self.setWindowFlags(self.windowFlags() | Qt.Window)
+        self.setWindowFlags(self.windowFlags() | Qt.WindowType.Window)
         self.initUI()
 
     def initUI(self):

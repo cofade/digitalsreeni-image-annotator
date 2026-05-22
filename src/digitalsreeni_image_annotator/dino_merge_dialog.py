@@ -8,11 +8,12 @@ import json
 import math
 import os
 import random
+import traceback
 from collections import defaultdict
 from pathlib import Path
 
-from PyQt5.QtCore import Qt
-from PyQt5.QtWidgets import (
+from PyQt6.QtCore import Qt
+from PyQt6.QtWidgets import (
     QApplication,
     QComboBox,
     QDialog,
@@ -77,7 +78,7 @@ class DinoMergeDialog(QDialog):
         layout.addWidget(info)
 
         form = QFormLayout()
-        form.setLabelAlignment(Qt.AlignRight)
+        form.setLabelAlignment(Qt.AlignmentFlag.AlignRight)
 
         def browse_row(placeholder, pick_dir=True):
             row = QHBoxLayout()
@@ -316,4 +317,4 @@ class DinoMergeDialog(QDialog):
 
 def show_dino_merge_dialog(parent=None):
     dialog = DinoMergeDialog(parent)
-    dialog.exec_()
+    dialog.exec()

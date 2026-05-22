@@ -4,18 +4,18 @@ import cv2
 import numpy as np
 import json
 
-from PyQt5.QtWidgets import (QDialog, QVBoxLayout, QHBoxLayout, QPushButton, 
+from PyQt6.QtWidgets import (QDialog, QVBoxLayout, QHBoxLayout, QPushButton, 
                              QFileDialog, QLabel, QMessageBox, QSpinBox, 
                              QCheckBox, QDoubleSpinBox, QProgressBar, QApplication)
-from PyQt5.QtCore import Qt
+from PyQt6.QtCore import Qt
 
 class ImageAugmenterDialog(QDialog):
     def __init__(self, parent=None):
         super().__init__(parent)
         self.setWindowTitle("Image Augmenter")
         self.setGeometry(100, 100, 400, 600)
-        self.setWindowFlags(self.windowFlags() | Qt.Window)
-        self.setWindowModality(Qt.ApplicationModal)
+        self.setWindowFlags(self.windowFlags() | Qt.WindowType.Window)
+        self.setWindowModality(Qt.WindowModality.ApplicationModal)
         self.input_dir = ""
         self.output_dir = ""
         self.coco_file = ""
@@ -174,7 +174,7 @@ class ImageAugmenterDialog(QDialog):
             self.coco_check.setChecked(True)  # Automatically check the box when a file is loaded
                 
     def toggle_elastic_deformation(self, state):
-        if state == Qt.Checked:
+        if state == Qt.CheckState.Checked:
             self.elastic_check.setChecked(False)
             self.elastic_check.setEnabled(False)
         else:

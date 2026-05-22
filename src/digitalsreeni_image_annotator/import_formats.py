@@ -4,13 +4,13 @@ import os
 import yaml
 from PIL import Image
 
-from PyQt5.QtCore import QRectF
-from PyQt5.QtGui import QColor
-from PyQt5.QtWidgets import QMessageBox, QFileDialog
+from PyQt6.QtCore import QRectF
+from PyQt6.QtGui import QColor
+from PyQt6.QtWidgets import QMessageBox, QFileDialog
 
 import os
 import json
-from PyQt5.QtWidgets import QMessageBox
+from PyQt6.QtWidgets import QMessageBox
 
 def import_coco_json(file_path, class_mapping):
     try:
@@ -241,9 +241,9 @@ def import_yolo_v4(yaml_file_path, class_mapping):
         message += "Do you want to continue importing the remaining data?"
         
         reply = QMessageBox.question(None, "Import Issues", message, 
-                                     QMessageBox.Yes | QMessageBox.No, QMessageBox.No)
+                                     QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No, QMessageBox.StandardButton.No)
         
-        if reply == QMessageBox.No:
+        if reply == QMessageBox.StandardButton.No:
             raise ValueError("Import cancelled due to missing files.")
     
     return imported_annotations, image_info

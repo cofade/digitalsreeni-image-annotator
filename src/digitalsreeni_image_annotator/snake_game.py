@@ -1,8 +1,8 @@
 import sys
 import random
-from PyQt5.QtWidgets import QApplication, QWidget, QDesktopWidget, QMessageBox
-from PyQt5.QtGui import QPainter, QColor
-from PyQt5.QtCore import Qt, QTimer
+from PyQt6.QtWidgets import QApplication, QWidget, QMessageBox
+from PyQt6.QtGui import QPainter, QColor, QGuiApplication
+from PyQt6.QtCore import Qt, QTimer
 
 class SnakeGame(QWidget):
     def __init__(self):
@@ -23,18 +23,19 @@ class SnakeGame(QWidget):
         self.timer.timeout.connect(self.update_game)
         self.timer.start(100)
         
-        self.setFocusPolicy(Qt.StrongFocus)
+        self.setFocusPolicy(Qt.FocusPolicy.StrongFocus)
         self.show()
         
     def center(self):
         qr = self.frameGeometry()
-        cp = QDesktopWidget().availableGeometry().center()
+        screen = QGuiApplication.primaryScreen()
+        cp = screen.availableGeometry().center()
         qr.moveCenter(cp)
         self.move(qr.topLeft())
         
     def paintEvent(self, event):
         painter = QPainter(self)
-        painter.setRenderHint(QPainter.Antialiasing)
+        painter.setRenderHint(QPainter.RenderHint.Antialiasing)
         
         # Draw snake
         painter.setBrush(QColor(0, 255, 0))
@@ -52,15 +53,15 @@ class SnakeGame(QWidget):
     def keyPressEvent(self, event):
         key = event.key()
         
-        if key == Qt.Key_Left and self.direction != 'RIGHT':
+        if key == Qt.Key.Key_Left and self.direction != 'RIGHT':
             self.direction = 'LEFT'
-        elif key == Qt.Key_Right and self.direction != 'LEFT':
+        elif key == Qt.Key.Key_Right and self.direction != 'LEFT':
             self.direction = 'RIGHT'
-        elif key == Qt.Key_Up and self.direction != 'DOWN':
+        elif key == Qt.Key.Key_Up and self.direction != 'DOWN':
             self.direction = 'UP'
-        elif key == Qt.Key_Down and self.direction != 'UP':
+        elif key == Qt.Key.Key_Down and self.direction != 'UP':
             self.direction = 'DOWN'
-        elif key == Qt.Key_Escape:
+        elif key == Qt.Key.Key_Escape:
             self.close()
         
     def update_game(self):
@@ -110,4 +111,4 @@ class SnakeGame(QWidget):
 if __name__ == '__main__':
     app = QApplication(sys.argv)
     ex = SnakeGame()
-    sys.exit(app.exec_())
+    sys.exit(app.exec())

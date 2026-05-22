@@ -56,8 +56,8 @@ A 2D image extracted from a multi-dimensional image stack. Named with format `{f
 ### Stack
 A multi-dimensional image, typically a TIFF or CZI file with multiple 2D slices in Z-dimension (depth).
 
-### Subprocess Worker
-A standalone Python script (`sam_worker.py`, `dino_worker.py`) that runs ML model inference in its own process, communicating with the GUI parent via JSON over stdin/stdout. The split is required to avoid a Windows + Python 3.14 DLL load-order conflict between PyQt5 and PyTorch — see [ADR-011](09_architecture_decisions.md#adr-011-run-torch-based-workers-in-isolated-subprocesses).
+### Subprocess Worker (historical)
+A standalone Python script (`sam_worker.py`, `dino_worker.py`) that ran ML model inference in its own process to dodge a PyQt5 + Torch DLL load-order conflict on Windows + Python 3.14. Removed once the codebase migrated to PyQt6 (the conflict no longer manifests). See [ADR-011](09_architecture_decisions.md#adr-011-run-torch-based-workers-in-isolated-subprocesses) (Superseded) and [ADR-013](09_architecture_decisions.md#adr-013-in-process-inference-with-qthread-wrapping).
 
 ### TIFF Stack
 Multi-page TIFF file containing multiple 2D images, often used for Z-stacks in microscopy.

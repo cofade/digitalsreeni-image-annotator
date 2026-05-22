@@ -2,7 +2,7 @@
 
 This file provides guidance to Claude Code (claude.ai/code) when working with code in this repository.
 
-DigitalSreeni Image Annotator - PyQt5 desktop app for image annotation with SAM 2 integration and multi-dimensional image support.
+DigitalSreeni Image Annotator - PyQt6 desktop app for image annotation with SAM 2 integration and multi-dimensional image support.
 
 **Fork of**: https://github.com/bnsreenu/digitalsreeni-image-annotator
 
@@ -20,9 +20,9 @@ python -m src.digitalsreeni_image_annotator.main
 
 ## Tech Stack
 
-Python 3.10+ | PyQt5 5.15.11 | Ultralytics 8.3.27 (SAM 2) | NumPy | OpenCV | Shapely
+Python 3.10+ | PyQt6 6.7+ | Ultralytics 8.3.27 (SAM 2) | NumPy | OpenCV | Shapely
 
-**No automated tests exist** - all testing is manual.
+**Test suite**: `tests/` (pytest + pytest-qt). 65 tests pass on PyQt6.
 
 ## Documentation
 
@@ -83,11 +83,16 @@ self.all_annotations[self.image_file_name].append({
 
 ### SAM Integration
 
-```python
-# Load model (first use downloads, ~40-400MB)
-self.sam_utils.change_sam_model("SAM 2 tiny")
+SAM runs in-process; the Ultralytics model object lives on `SAMUtils`
+and persists across calls. Inference runs on a background QThread but
+the public API is synchronous — see ADR-013 in
+`docs/09_architecture_decisions.md`.
 
-# Run inference
+```python
+# Load model on first selection (downloads weights if missing, ~40-400MB)
+self.sam_utils.change_sam_model("SAM 2 tiny")  # blocks UI thread via QEventLoop spin
+
+# Run inference (also runs on worker thread, returns when done)
 prediction = self.sam_utils.apply_sam_points(
     qimage,
     positive_points=[(x1, y1)],
@@ -99,8 +104,8 @@ prediction = self.sam_utils.apply_sam_points(
 ## Important Notes
 
 ### Platform Support
-- ✅ Windows, macOS fully supported
-- ⚠️ Linux has XCB issues, limited testing
+- ✅ Windows, macOS, Linux supported (PyQt6 native integration improved over PyQt5)
+- Linux runtime needs libxcb-cursor0 (Qt6 requires this; was optional under Qt5)
 
 ### Critical: Project Loading
 **Always check `is_loading_project` flag before saving!** Autosave during load corrupts files (v0.8.12 fix).
@@ -124,8 +129,23 @@ See [Cross-cutting Concepts](docs/08_crosscutting_concepts.md#coordinate-systems
 - Slices extracted with names like `stack.tif_T0_Z5_C0`
 - Each slice annotated independently
 - Stored in `image_slices` dict
+- TIFF axis hint: `load_tiff` reads `tifffile.series[0].axes` and pre-fills the dimension dialog; ndim≥5 had a `[-ndim:]` slice bug that produced 2560 wrong slices on a 5D `TZCYX` file — see arc42 if you touch this
 
 See [Runtime View](docs/06_runtime_view.md#multi-dimensional-image-loading) for workflow.
+
+### Patterns introduced in v0.9.0 (read before touching these areas)
+
+| Area | Pattern | Why |
+|------|---------|-----|
+| Pan / zoom-to-cursor in scroll area | Use `event.globalPosition()` for pan; derive post-zoom offset from `viewport().width()`, not `self.width()` | Widget-local coords absorb half the pan delta as the widget shifts; `self.width()` is stale during zoom-out before layout settles. See [Pan + Zoom Reference Frames](docs/08_crosscutting_concepts.md#pan--zoom-reference-frames). |
+| Dark mode contrast | No hardcoded `background:` / `color:` in widget `setStyleSheet(...)` | Hardcoded greys override `soft_dark_stylesheet.py` and punch bright boxes into the sidebar. Add a global rule first, then write the widget. See [No Hardcoded Colors Rule](docs/08_crosscutting_concepts.md#dark-mode--no-hardcoded-colors-rule). |
+| DINO review state | `image_label.temp_annotations` is a single field, **not** per-image — must be re-synced from `dino_batch_results` on every image/slice switch via `_refresh_dino_temp_for_current` | Otherwise the first image's masks bleed onto every subsequent slice during navigation. See [DINO Temp Annotations](docs/08_crosscutting_concepts.md#dino-temp-annotations--single-field-many-images). |
+| DINO batch over stacks | Use `_collect_dino_batch_work_items()` to flatten regular images + every loaded slice; don't iterate `self.all_images` directly | Multi-dim images appear in `all_images` as a single entry — slices live in `self.image_slices[base_name]` and were silently skipped. |
+| DINO Enter/Escape during review | Application-wide `_DINOReviewEventFilter`, gated on pending temp_annotations + no modal + no text input | `QListWidget` consumes Enter for `itemActivated` before `ImageLabel.keyPressEvent` sees it. See [ADR-015](docs/09_architecture_decisions.md#adr-015-application-wide-event-filter-for-dino-review-shortcuts). |
+| Auto-accept dropdown | Honored by **both** `run_dino_detection_single` and `run_dino_detection_batch` | Easy to forget in the single path because the combo is labeled "batch". |
+| GPU model unload | `model.cpu()` → `gc.collect()` → `torch.cuda.empty_cache()` + `ipc_collect()` + `synchronize()` — full reclaim requires app restart due to per-process CUDA context | Setting refs to None alone leaves circular refs pinned and shows zero Task Manager drop. See [Releasing Model GPU Memory](docs/08_crosscutting_concepts.md#releasing-model-gpu-memory). |
+| Export image-path lookup | Exact-key match first, substring fallback only | `"bee.jpg" in "honeybee.jpg"` is True — substring-only matching writes the wrong file. See [Export Format Filename Matching](docs/08_crosscutting_concepts.md#export-format-filename-matching). |
+| F2 / global shortcuts | Use `QShortcut` with `Qt.ShortcutContext.ApplicationShortcut`, not `keyPressEvent` | `QTableWidget` consumes F2 for in-cell edit before it bubbles up. |
 
 ## Development Workflow
 
@@ -151,7 +171,7 @@ Before opening a PR, verify at minimum:
 4. **Dark mode** — toggle and check rendering of new UI elements
 5. **Save/load roundtrip** — if the feature touches `.iap` project files, save, close, reopen, verify state restored
 6. **Adjacent features** — verify no regression in SAM, annotation tools, export formats
-7. **Subprocess features** — if touching `sam_worker.py` or `dino_worker.py`, verify inference still works (model loads, returns masks/boxes)
+7. **Inference features** — if touching `sam_utils.py` or `dino_utils.py`, verify the model loads end-to-end (no silent load failure), returns masks/boxes, and the UI stays responsive during inference (timers, redraws, progress dialog cancels keep firing — see ADR-013)
 
 ### arc42 Documentation Update Rules
 
@@ -172,7 +192,9 @@ Before every PR, run the senior reviewer agent (`.claude/agents/senior-reviewer.
 This is **mandatory** — the agent performs an independent end-of-implementation review:
 - Reads the actual diff, not commit messages
 - Ranks issues P0 (blocks merge) / P1 (should fix) / P2 (nit)
-- Checks CLAUDE.md compliance (feature branches, coordinate systems, `is_loading_project` guards, DINO config persistence, subprocess isolation)
+- Checks CLAUDE.md compliance (feature branches, coordinate systems, `is_loading_project` guards, DINO config persistence, in-process inference re-entrancy guards)
+
+**Run it in the foreground** — never `run_in_background: true`. The review is a blocking quality gate: the next steps (address P0s, push, open PR) depend on its findings. Launch the agent and wait for the result before doing anything else, then iterate until clean.
 
 Address all P0s before merging. Address P1s unless there's explicit justification.
 

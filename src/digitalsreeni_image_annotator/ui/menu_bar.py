@@ -1,0 +1,123 @@
+"""Build the application menu bar.
+
+Moved verbatim from ImageAnnotator.create_menu_bar (Phase 8). Every
+action's `triggered` connects to a method on `window` (the
+ImageAnnotator instance) — many of those are thin delegates to
+controllers, but the menu doesn't need to know that.
+"""
+
+from PyQt6.QtGui import QAction, QKeySequence
+
+
+def build_menu_bar(window):
+    menu_bar = window.menuBar()
+
+    # Project Menu
+    project_menu = menu_bar.addMenu("&Project")
+
+    new_project_action = QAction("&New Project", window)
+    new_project_action.setShortcut(QKeySequence.StandardKey.New)
+    new_project_action.triggered.connect(window.new_project)
+    project_menu.addAction(new_project_action)
+
+    open_project_action = QAction("&Open Project", window)
+    open_project_action.setShortcut(QKeySequence.StandardKey.Open)
+    open_project_action.triggered.connect(window.open_project)
+    project_menu.addAction(open_project_action)
+
+    save_project_action = QAction("&Save Project", window)
+    save_project_action.setShortcut(QKeySequence.StandardKey.Save)
+    save_project_action.triggered.connect(window.save_project)
+    project_menu.addAction(save_project_action)
+
+    save_project_as_action = QAction("Save Project &As...", window)
+    save_project_as_action.setShortcut(QKeySequence("Ctrl+Shift+S"))
+    save_project_as_action.triggered.connect(window.save_project_as)
+    project_menu.addAction(save_project_as_action)
+
+    close_project_action = QAction("&Close Project", window)
+    close_project_action.setShortcut(QKeySequence("Ctrl+W"))
+    close_project_action.triggered.connect(window.close_project)
+    project_menu.addAction(close_project_action)
+
+    project_details_action = QAction("Project &Details", window)
+    project_details_action.setShortcut(QKeySequence("Ctrl+I"))
+    project_details_action.triggered.connect(window.show_project_details)
+    project_menu.addAction(project_details_action)
+
+    search_projects_action = QAction("&Search Projects", window)
+    search_projects_action.setShortcut(QKeySequence("Ctrl+F"))
+    search_projects_action.triggered.connect(window.show_project_search)
+    project_menu.addAction(search_projects_action)
+
+    # Settings Menu
+    settings_menu = menu_bar.addMenu("&Settings")
+
+    font_size_menu = settings_menu.addMenu("&Font Size")
+    for size in ["Small", "Medium", "Large", "XL", "XXL"]:
+        action = QAction(size, window)
+        action.triggered.connect(lambda checked, s=size: window.change_font_size(s))
+        font_size_menu.addAction(action)
+
+    toggle_dark_mode_action = QAction("Toggle &Dark Mode", window)
+    toggle_dark_mode_action.setShortcut(QKeySequence("Ctrl+D"))
+    toggle_dark_mode_action.triggered.connect(window.toggle_dark_mode)
+    settings_menu.addAction(toggle_dark_mode_action)
+
+    # Tools Menu
+    tools_menu = menu_bar.addMenu("&Tools")
+
+    annotation_stats_action = QAction("Annotation Statistics", window)
+    annotation_stats_action.triggered.connect(window.show_annotation_statistics)
+    annotation_stats_action.setShortcut(QKeySequence("Ctrl+Alt+S"))
+    tools_menu.addAction(annotation_stats_action)
+
+    coco_json_combiner_action = QAction("COCO JSON Combiner", window)
+    coco_json_combiner_action.triggered.connect(window.show_coco_json_combiner)
+    tools_menu.addAction(coco_json_combiner_action)
+
+    dataset_splitter_action = QAction("Dataset Splitter", window)
+    dataset_splitter_action.triggered.connect(window.open_dataset_splitter)
+    tools_menu.addAction(dataset_splitter_action)
+
+    dino_merge_action = QAction("Merge COCO for Training", window)
+    dino_merge_action.triggered.connect(window.show_dino_merge_dialog)
+    tools_menu.addAction(dino_merge_action)
+
+    stack_to_slices_action = QAction("Stack to Slices", window)
+    stack_to_slices_action.triggered.connect(window.show_stack_to_slices)
+    tools_menu.addAction(stack_to_slices_action)
+
+    image_patcher_action = QAction("Image Patcher", window)
+    image_patcher_action.triggered.connect(window.show_image_patcher)
+    tools_menu.addAction(image_patcher_action)
+
+    image_augmenter_action = QAction("Image Augmenter", window)
+    image_augmenter_action.triggered.connect(window.show_image_augmenter)
+    tools_menu.addAction(image_augmenter_action)
+
+    slice_registration_action = QAction("Slice Registration", window)
+    slice_registration_action.triggered.connect(window.show_slice_registration)
+    tools_menu.addAction(slice_registration_action)
+
+    stack_interpolator_action = QAction("Stack Interpolator", window)
+    stack_interpolator_action.triggered.connect(window.show_stack_interpolator)
+    tools_menu.addAction(stack_interpolator_action)
+
+    dicom_converter_action = QAction("DICOM Converter", window)
+    dicom_converter_action.triggered.connect(window.show_dicom_converter)
+    tools_menu.addAction(dicom_converter_action)
+
+    tools_menu.addSeparator()
+
+    unload_models_action = QAction("Unload AI Models (Free GPU Memory)", window)
+    unload_models_action.triggered.connect(window.unload_ai_models)
+    tools_menu.addAction(unload_models_action)
+
+    # Help Menu
+    help_menu = menu_bar.addMenu("&Help")
+
+    help_action = QAction("&Show Help", window)
+    help_action.setShortcut(QKeySequence.StandardKey.HelpContents)
+    help_action.triggered.connect(window.show_help)
+    help_menu.addAction(help_action)

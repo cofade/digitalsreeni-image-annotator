@@ -1,49 +1,34 @@
 import os
 import warnings
+
 from PyQt6.QtCore import Qt, QTimer
-from PyQt6.QtGui import (
-    QAction,
-    QColor,
-    QFont,
-    QImage,
-    QKeySequence,
-    QPalette,
-    QPixmap,
-    QShortcut,
-)
+from PyQt6.QtGui import QPixmap
 from PyQt6.QtWidgets import (
-    QAbstractItemView,
     QApplication,
-    QButtonGroup,
-    QComboBox,
     QDialog,
     QFileDialog,
     QHBoxLayout,
-    QLabel,
     QLineEdit,
-    QListWidget,
     QMainWindow,
     QMenu,
     QMessageBox,
-    QProgressBar,
-    QPushButton,
-    QScrollArea,
-    QSlider,
     QTextEdit,
-    QVBoxLayout,
     QWidget,
 )
 
 from .controllers import io_controller
 from .controllers.annotation_controller import AnnotationController
 from .controllers.class_controller import ClassController
-from .controllers.dino_controller import DINOController, _DINOReviewEventFilter
+from .controllers.dino_controller import DINOController
 from .controllers.image_controller import ImageController
 from .controllers.project_controller import ProjectController
 from .controllers.sam_controller import SAMController
 from .controllers.yolo_controller import YOLOController
 from .core import image_utils
 from .ui import theme
+from .ui.menu_bar import build_menu_bar
+from .ui.shortcuts import install_event_filters, install_shortcuts
+from .ui.sidebar import build_image_area, build_image_list, build_sidebar
 from .dialogs.annotation_statistics import show_annotation_statistics
 from .dialogs.coco_json_combiner import show_coco_json_combiner
 from .dialogs.dino_phrase_editor import ClassThresholdTable, PhraseEditorPanel
@@ -78,13 +63,8 @@ class ImageAnnotator(QMainWindow):
         self.setWindowTitle("Image Annotator")
         self.setGeometry(100, 100, 1400, 800)
 
-        self.central_widget = QWidget()
-        self.setCentralWidget(self.central_widget)
-        self.layout = QHBoxLayout(self.central_widget)
-
-        self.create_menu_bar()
-
-        # Initialize image_label early
+        # Initialize image_label early — setup_ui's sidebar/image-area
+        # builders expect it to exist.
         self.image_label = ImageLabel()
 
         self.image_label.sam_box_active = False
@@ -147,15 +127,6 @@ class ImageAnnotator(QMainWindow):
         self.image_label.set_context(CanvasContext(self))
         self._connect_image_label_signals()
 
-        # Create sam_magic_wand_button
-        self.sam_magic_wand_button = QPushButton("Magic Wand")
-        self.sam_magic_wand_button.setCheckable(True)
-        self.sam_magic_wand_button.setEnabled(False)  # Initially disable the button
-
-        # Initialize tool group
-        self.tool_group = QButtonGroup(self)
-        self.tool_group.setExclusive(False)
-
         # Font size control
         self.font_sizes = {
             "Small": 8,
@@ -185,32 +156,13 @@ class ImageAnnotator(QMainWindow):
         # Apply theme and font (this includes stylesheet and font size application)
         self.apply_theme_and_font()
 
-        # Connect sam_magic_wand_button
-        self.sam_magic_wand_button.clicked.connect(self.toggle_tool)
-
-        self.class_list.itemChanged.connect(self.toggle_class_visibility)
-
         # YOLO Trainer
         self.yolo_trainer = None
         self.setup_yolo_menu()
 
-        # F2 → Snake game (Easter egg). Registered as a global QShortcut
-        # so it fires regardless of which widget has focus — putting it
-        # in keyPressEvent didn't work because QTableWidget (DINO
-        # threshold table) and other focusable children consume F2
-        # before it bubbles up to the main window.
-        self._snake_shortcut = QShortcut(QKeySequence("F2"), self)
-        self._snake_shortcut.setContext(Qt.ShortcutContext.ApplicationShortcut)
-        self._snake_shortcut.activated.connect(self.launch_snake_game)
+        install_shortcuts(self)
+        install_event_filters(self)
 
-        # Enter/Escape for DINO temp_annotations need to work even when
-        # focus is on slice_list / image_list / a button — none of which
-        # forward the key to ImageLabel.keyPressEvent. Application-wide
-        # event filter intercepts these keys but only when DINO results
-        # are pending review, and skips modal dialogs + text inputs.
-        self._dino_review_filter = _DINOReviewEventFilter(self)
-        QApplication.instance().installEventFilter(self._dino_review_filter)
-        
         # Start in maximized mode
         self.showMaximized()
 
@@ -267,19 +219,16 @@ class ImageAnnotator(QMainWindow):
         self.class_controller.update_slice_list_colors()
 
     def setup_ui(self):
-        # Initialize the main layout
+        # Initialize the main layout. tool_group is created inside
+        # build_sidebar (it needs to register the tool buttons).
         self.central_widget = QWidget()
         self.setCentralWidget(self.central_widget)
         self.layout = QHBoxLayout(self.central_widget)
 
-        # Initialize tool group
-        self.tool_group = QButtonGroup(self)
-        self.tool_group.setExclusive(False)
-
-        # Setup UI components
-        self.setup_sidebar()
-        self.setup_image_area()
-        self.setup_image_list()
+        build_menu_bar(self)
+        build_sidebar(self)
+        build_image_area(self)
+        build_image_list(self)
         self.setup_slice_list()
         self.update_ui_for_current_tool()
 
@@ -582,195 +531,6 @@ class ImageAnnotator(QMainWindow):
     def save_current_annotations(self):
         return self.annotation_controller.save_current_annotations()
 
-    def setup_class_list(self):
-        """Set up the class list widget."""
-        self.class_list = QListWidget()
-        self.class_list.setContextMenuPolicy(Qt.ContextMenuPolicy.CustomContextMenu)
-        self.class_list.customContextMenuRequested.connect(self.show_class_context_menu)
-        self.class_list.itemClicked.connect(self.on_class_selected)
-        self.sidebar_layout.addWidget(QLabel("Classes:"))
-        self.sidebar_layout.addWidget(self.class_list)
-
-    def setup_tool_buttons(self):
-        """Set up the tool buttons with grouped manual and automated tools."""
-        self.tool_group = QButtonGroup(self)
-        self.tool_group.setExclusive(False)
-
-        # Create a widget for manual tools
-        manual_tools_widget = QWidget()
-        manual_layout = QVBoxLayout(manual_tools_widget)
-        manual_layout.setSpacing(5)
-
-        manual_label = QLabel("Manual Tools")
-        manual_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
-        manual_layout.addWidget(manual_label)
-
-        manual_buttons_layout = QHBoxLayout()
-        self.polygon_button = QPushButton("Polygon")
-        self.polygon_button.setCheckable(True)
-        self.rectangle_button = QPushButton("Rectangle")
-        self.rectangle_button.setCheckable(True)
-        manual_buttons_layout.addWidget(self.polygon_button)
-        manual_buttons_layout.addWidget(self.rectangle_button)
-        manual_layout.addLayout(manual_buttons_layout)
-
-        self.tool_group.addButton(self.polygon_button)
-        self.tool_group.addButton(self.rectangle_button)
-        self.polygon_button.clicked.connect(self.toggle_tool)
-        self.rectangle_button.clicked.connect(self.toggle_tool)
-
-        # Create a widget for automated tools
-        automated_tools_widget = QWidget()
-        automated_layout = QVBoxLayout(automated_tools_widget)
-        automated_layout.setSpacing(5)
-
-        automated_label = QLabel("Automated Tools")
-        automated_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
-        automated_layout.addWidget(automated_label)
-
-        automated_buttons_layout = QHBoxLayout()
-        self.sam_magic_wand_button = QPushButton("Magic Wand")
-        self.sam_magic_wand_button.setCheckable(True)
-        automated_buttons_layout.addWidget(self.sam_magic_wand_button)
-        automated_layout.addLayout(automated_buttons_layout)
-
-        self.tool_group.addButton(self.sam_magic_wand_button)
-        self.sam_magic_wand_button.clicked.connect(self.toggle_tool)
-
-        # Add the grouped tools to the sidebar layout
-        self.sidebar_layout.addWidget(manual_tools_widget)
-        self.sidebar_layout.addWidget(automated_tools_widget)
-
-        # Set a fixed size for all buttons to make them smaller
-        for button in [
-            self.polygon_button,
-            self.rectangle_button,
-            self.load_sam2_button,
-            self.sam_magic_wand_button,
-        ]:
-            button.setFixedSize(100, 30)
-
-    def setup_annotation_list(self):
-        """Set up the annotation list widget."""
-        self.annotation_list = QListWidget()
-        self.annotation_list.setSelectionMode(QAbstractItemView.SelectionMode.ExtendedSelection)
-        self.annotation_list.itemSelectionChanged.connect(
-            self.update_highlighted_annotations
-        )
-
-    def create_menu_bar(self):
-        menu_bar = self.menuBar()
-
-        # Project Menu
-        project_menu = menu_bar.addMenu("&Project")
-
-        new_project_action = QAction("&New Project", self)
-        new_project_action.setShortcut(QKeySequence.StandardKey.New)
-        new_project_action.triggered.connect(self.new_project)
-        project_menu.addAction(new_project_action)
-
-        open_project_action = QAction("&Open Project", self)
-        open_project_action.setShortcut(QKeySequence.StandardKey.Open)
-        open_project_action.triggered.connect(self.open_project)
-        project_menu.addAction(open_project_action)
-
-        save_project_action = QAction("&Save Project", self)
-        save_project_action.setShortcut(QKeySequence.StandardKey.Save)
-        save_project_action.triggered.connect(self.save_project)
-        project_menu.addAction(save_project_action)
-
-        save_project_as_action = QAction("Save Project &As...", self)
-        save_project_as_action.setShortcut(QKeySequence("Ctrl+Shift+S"))
-        save_project_as_action.triggered.connect(self.save_project_as)
-        project_menu.addAction(save_project_as_action)
-
-        close_project_action = QAction("&Close Project", self)
-        close_project_action.setShortcut(QKeySequence("Ctrl+W"))
-        close_project_action.triggered.connect(self.close_project)
-        project_menu.addAction(close_project_action)
-
-        project_details_action = QAction("Project &Details", self)
-        project_details_action.setShortcut(QKeySequence("Ctrl+I"))
-        project_details_action.triggered.connect(self.show_project_details)
-        project_menu.addAction(project_details_action)
-
-        search_projects_action = QAction("&Search Projects", self)
-        search_projects_action.setShortcut(QKeySequence("Ctrl+F"))
-        search_projects_action.triggered.connect(self.show_project_search)
-        project_menu.addAction(search_projects_action)
-
-        # Settings Menu
-        settings_menu = menu_bar.addMenu("&Settings")
-
-        font_size_menu = settings_menu.addMenu("&Font Size")
-        for size in ["Small", "Medium", "Large", "XL", "XXL"]:
-            action = QAction(size, self)
-            action.triggered.connect(lambda checked, s=size: self.change_font_size(s))
-            font_size_menu.addAction(action)
-
-        toggle_dark_mode_action = QAction("Toggle &Dark Mode", self)
-        toggle_dark_mode_action.setShortcut(QKeySequence("Ctrl+D"))
-        toggle_dark_mode_action.triggered.connect(self.toggle_dark_mode)
-        settings_menu.addAction(toggle_dark_mode_action)
-
-        # Tools Menu
-        tools_menu = menu_bar.addMenu("&Tools")
-
-        annotation_stats_action = QAction("Annotation Statistics", self)
-        annotation_stats_action.triggered.connect(self.show_annotation_statistics)
-        annotation_stats_action.setShortcut(QKeySequence("Ctrl+Alt+S"))
-        tools_menu.addAction(annotation_stats_action)
-
-        coco_json_combiner_action = QAction("COCO JSON Combiner", self)
-        coco_json_combiner_action.triggered.connect(self.show_coco_json_combiner)
-        tools_menu.addAction(coco_json_combiner_action)
-
-        dataset_splitter_action = QAction("Dataset Splitter", self)
-        dataset_splitter_action.triggered.connect(self.open_dataset_splitter)
-        tools_menu.addAction(dataset_splitter_action)
-
-        dino_merge_action = QAction("Merge COCO for Training", self)
-        dino_merge_action.triggered.connect(self.show_dino_merge_dialog)
-        tools_menu.addAction(dino_merge_action)
-
-        stack_to_slices_action = QAction("Stack to Slices", self)
-        stack_to_slices_action.triggered.connect(self.show_stack_to_slices)
-        tools_menu.addAction(stack_to_slices_action)
-
-        image_patcher_action = QAction("Image Patcher", self)
-        image_patcher_action.triggered.connect(self.show_image_patcher)
-        tools_menu.addAction(image_patcher_action)
-
-        image_augmenter_action = QAction("Image Augmenter", self)
-        image_augmenter_action.triggered.connect(self.show_image_augmenter)
-        tools_menu.addAction(image_augmenter_action)
-
-        slice_registration_action = QAction("Slice Registration", self)
-        slice_registration_action.triggered.connect(self.show_slice_registration)
-        tools_menu.addAction(slice_registration_action)
-
-        stack_interpolator_action = QAction("Stack Interpolator", self)
-        stack_interpolator_action.triggered.connect(self.show_stack_interpolator)
-        tools_menu.addAction(stack_interpolator_action)
-
-        dicom_converter_action = QAction("DICOM Converter", self)
-        dicom_converter_action.triggered.connect(self.show_dicom_converter)
-        tools_menu.addAction(dicom_converter_action)
-
-        tools_menu.addSeparator()
-
-        unload_models_action = QAction("Unload AI Models (Free GPU Memory)", self)
-        unload_models_action.triggered.connect(self.unload_ai_models)
-        tools_menu.addAction(unload_models_action)
-
-        # Help Menu
-        help_menu = menu_bar.addMenu("&Help")
-
-        help_action = QAction("&Show Help", self)
-        help_action.setShortcut(QKeySequence.StandardKey.HelpContents)
-        help_action.triggered.connect(self.show_help)
-        help_menu.addAction(help_action)
-
     def change_font_size(self, size):
         theme.change_font_size(self, size)
 
@@ -801,251 +561,6 @@ class ImageAnnotator(QMainWindow):
             "nvidia-smi). To fully reclaim GPU memory, restart the app.\n\n"
             "Re-select a SAM/DINO model to use AI tools again.",
         )
-
-    def setup_sidebar(self):
-        self.sidebar = QWidget()
-        self.sidebar_layout = QVBoxLayout(self.sidebar)
-        self.layout.addWidget(self.sidebar, 1)
-
-        # Helper function to create section headers
-        def create_section_header(text):
-            label = QLabel(text)
-            label.setProperty("class", "section-header")
-            label.setAlignment(Qt.AlignmentFlag.AlignLeft)
-            return label
-
-        # Import functionality
-        self.import_button = QPushButton("Import Annotations with Images")
-        self.import_button.clicked.connect(self.import_annotations)
-        self.sidebar_layout.addWidget(self.import_button)
-
-        self.import_format_selector = QComboBox()
-        self.import_format_selector.addItem("COCO JSON")
-        self.import_format_selector.addItem("YOLO (v4 and earlier)")  # Modified name
-        self.import_format_selector.addItem("YOLO (v5+)")  # New format
-
-        self.sidebar_layout.addWidget(self.import_format_selector)
-
-        # Add spacing
-        self.sidebar_layout.addSpacing(20)
-
-        self.add_images_button = QPushButton("Add New Images")
-        self.add_images_button.clicked.connect(self.add_images)
-        self.sidebar_layout.addWidget(self.add_images_button)
-
-        self.add_class_button = QPushButton("Add Classes")
-        self.add_class_button.clicked.connect(lambda: self.add_class())
-        self.sidebar_layout.addWidget(self.add_class_button)
-
-        # Class list (without the "Classes" header)
-        self.class_list = QListWidget()
-        self.class_list.setContextMenuPolicy(Qt.ContextMenuPolicy.CustomContextMenu)
-        self.class_list.customContextMenuRequested.connect(self.show_class_context_menu)
-        self.class_list.itemClicked.connect(self.on_class_selected)
-        self.sidebar_layout.addWidget(self.class_list)
-
-        # Annotation section
-        self.sidebar_layout.addWidget(create_section_header("Annotation"))
-        annotation_widget = QWidget()
-        annotation_layout = QVBoxLayout(annotation_widget)
-
-        # Manual tools subsection
-        manual_widget = QWidget()
-        manual_layout = QVBoxLayout(manual_widget)
-
-        button_layout_top = QHBoxLayout()
-        self.polygon_button = QPushButton("Polygon")
-        self.polygon_button.setCheckable(True)
-        self.rectangle_button = QPushButton("Rectangle")
-        self.rectangle_button.setCheckable(True)
-        button_layout_top.addWidget(self.polygon_button)
-        button_layout_top.addWidget(self.rectangle_button)
-
-        button_layout_bottom = QHBoxLayout()
-        self.paint_brush_button = QPushButton("Paint Brush")
-        self.paint_brush_button.setCheckable(True)
-        self.eraser_button = QPushButton("Eraser")
-        self.eraser_button.setCheckable(True)
-        button_layout_bottom.addWidget(self.paint_brush_button)
-        button_layout_bottom.addWidget(self.eraser_button)
-
-        manual_layout.addLayout(button_layout_top)
-        manual_layout.addLayout(button_layout_bottom)
-
-        annotation_layout.addWidget(manual_widget)
-
-        # SAM-Assisted tools subsection
-        sam_widget = QWidget()
-        sam_layout = QVBoxLayout(sam_widget)
-
-        # --- Replace the old SAM-Assisted button block with this: ---
-        sam_buttons_layout = QHBoxLayout()
-
-        self.sam_box_button = QPushButton("SAM-box")
-        self.sam_box_button.setCheckable(True)
-        self.sam_box_button.clicked.connect(self.toggle_sam_box)
-
-        self.sam_points_button = QPushButton("SAM-points")
-        self.sam_points_button.setCheckable(True)
-        self.sam_points_button.clicked.connect(self.toggle_sam_points)
-
-        sam_buttons_layout.addWidget(self.sam_box_button)
-        sam_buttons_layout.addWidget(self.sam_points_button)
-        sam_layout.addLayout(sam_buttons_layout)
-        # ------------------------------------------------------------
-
-        # Add SAM model selector
-        self.sam_model_selector = QComboBox()
-        self.sam_model_selector.addItem("Pick a SAM Model")
-        self.sam_model_selector.addItems(list(self.sam_utils.sam_models.keys()))
-        self.sam_model_selector.currentTextChanged.connect(self.change_sam_model)
-        sam_layout.addWidget(self.sam_model_selector)
-
-        annotation_layout.addWidget(sam_widget)
-
-        # --- LLM-Assisted Detection (DINO) subsection ---
-        dino_widget = QWidget()
-        dino_layout = QVBoxLayout(dino_widget)
-
-        self.dino_model_selector = QComboBox()
-        self.dino_model_selector.addItem("Pick a DINO Model")
-        self.dino_model_selector.addItem("grounding-dino-base")
-        self.dino_model_selector.addItem("grounding-dino-tiny")
-        self.dino_model_selector.addItem("Custom / fine-tuned (browse)")
-        self.dino_model_selector.currentTextChanged.connect(self._on_dino_model_changed)
-        dino_layout.addWidget(self.dino_model_selector)
-
-        # Custom model browse row (hidden by default)
-        self.dino_browse_row = QWidget()
-        dino_browse_layout = QHBoxLayout(self.dino_browse_row)
-        dino_browse_layout.setContentsMargins(0, 0, 0, 0)
-        self.lbl_dino_custom = QLabel("No path set")
-        self.lbl_dino_custom.setWordWrap(True)
-        self.lbl_dino_custom.setStyleSheet("font-size:10px;color:#555;")
-        btn_dino_browse = QPushButton("Browse")
-        btn_dino_browse.setFixedWidth(60)
-        btn_dino_browse.clicked.connect(self.browse_dino_model)
-        dino_browse_layout.addWidget(self.lbl_dino_custom, 1)
-        dino_browse_layout.addWidget(btn_dino_browse)
-        self.dino_browse_row.setVisible(False)
-        dino_layout.addWidget(self.dino_browse_row)
-
-        self.lbl_dino_status = QLabel("No DINO model loaded")
-        self.lbl_dino_status.setWordWrap(True)
-        # No hardcoded background — let the active stylesheet (light or
-        # dark) provide it via QLabel rules. Hardcoded #f5f5f5 used to
-        # punch a bright rectangle into the dark sidebar.
-        self.lbl_dino_status.setStyleSheet(
-            "font-size:11px;padding:4px;border-radius:3px;"
-            "border:1px solid palette(mid);")
-        dino_layout.addWidget(self.lbl_dino_status)
-
-        # Threshold table
-        self.dino_class_table = ClassThresholdTable()
-        self.dino_class_table.itemSelectionChanged.connect(self.on_dino_class_row_changed)
-        dino_layout.addWidget(self.dino_class_table)
-
-        # Phrase editor
-        self.dino_phrase_panel = PhraseEditorPanel()
-        dino_layout.addWidget(self.dino_phrase_panel)
-
-        # Detect buttons
-        det_btn_layout = QHBoxLayout()
-        self.btn_detect_single = QPushButton("Detect Current Image")
-        self.btn_detect_single.clicked.connect(self.run_dino_detection_single)
-        self.btn_detect_single.setEnabled(False)
-        det_btn_layout.addWidget(self.btn_detect_single)
-
-        self.btn_detect_batch = QPushButton("Detect All Images")
-        self.btn_detect_batch.clicked.connect(self.run_dino_detection_batch)
-        self.btn_detect_batch.setEnabled(False)
-        det_btn_layout.addWidget(self.btn_detect_batch)
-        dino_layout.addLayout(det_btn_layout)
-
-        # Batch mode
-        self.dino_batch_mode = QComboBox()
-        self.dino_batch_mode.addItem("Review before accepting")
-        self.dino_batch_mode.addItem("Auto-accept all detections")
-        dino_layout.addWidget(self.dino_batch_mode)
-
-        annotation_layout.addWidget(dino_widget)
-        # --- END DINO section ---
-
-        # Add tool group
-        self.tool_group = QButtonGroup(self)
-        self.tool_group.setExclusive(False)
-        self.tool_group.addButton(self.polygon_button)
-        self.tool_group.addButton(self.rectangle_button)
-        self.tool_group.addButton(self.paint_brush_button)
-        self.tool_group.addButton(self.eraser_button)
-        self.tool_group.addButton(self.sam_box_button)
-        self.tool_group.addButton(self.sam_points_button)
-
-        self.polygon_button.clicked.connect(self.toggle_tool)
-        self.rectangle_button.clicked.connect(self.toggle_tool)
-        self.paint_brush_button.clicked.connect(self.toggle_tool)
-        self.eraser_button.clicked.connect(self.toggle_tool)
-        self.sam_magic_wand_button.clicked.connect(self.toggle_tool)
-
-        # Annotations list subsection
-        annotation_layout.addWidget(QLabel("Annotations"))
-        self.annotation_list = QListWidget()
-        self.annotation_list.setSelectionMode(QAbstractItemView.SelectionMode.ExtendedSelection)
-        self.annotation_list.itemSelectionChanged.connect(
-            self.update_highlighted_annotations
-        )
-        annotation_layout.addWidget(self.annotation_list)
-
-        # Create a horizontal layout for the sort buttons
-        sort_button_layout = QHBoxLayout()
-
-        self.sort_by_class_button = QPushButton("Sort by Class")
-        self.sort_by_class_button.clicked.connect(self.sort_annotations_by_class)
-        sort_button_layout.addWidget(self.sort_by_class_button)
-
-        self.sort_by_area_button = QPushButton("Sort by Area")
-        self.sort_by_area_button.clicked.connect(self.sort_annotations_by_area)
-        sort_button_layout.addWidget(self.sort_by_area_button)
-
-        # Add the sort button layout to the annotation layout
-        annotation_layout.addLayout(sort_button_layout)
-
-        # Delete and Merge annotation buttons
-        self.delete_button = QPushButton("Delete")
-        self.delete_button.clicked.connect(self.delete_selected_annotations)
-        self.merge_button = QPushButton("Merge")
-        self.merge_button.clicked.connect(self.merge_annotations)
-        self.change_class_button = QPushButton("Change Class")
-        self.change_class_button.clicked.connect(self.change_annotation_class)
-
-        # Create a horizontal layout for the other buttons
-        button_layout = QHBoxLayout()
-        button_layout.addWidget(self.delete_button)
-        button_layout.addWidget(self.merge_button)
-        button_layout.addWidget(self.change_class_button)
-
-        # Add the button layout to the annotation layout
-        annotation_layout.addLayout(button_layout)
-
-        # Add export format selector
-        self.export_format_selector = QComboBox()
-        self.export_format_selector.addItem("COCO JSON")
-        self.export_format_selector.addItem("YOLO (v4 and earlier)")  # Modified name
-        self.export_format_selector.addItem("YOLO (v5+)")  # New format
-        self.export_format_selector.addItem("Labeled Images")
-        self.export_format_selector.addItem("Semantic Labels")
-        self.export_format_selector.addItem("Pascal VOC (BBox)")
-        self.export_format_selector.addItem("Pascal VOC (BBox + Segmentation)")
-
-        annotation_layout.addWidget(QLabel("Export Format:"))
-        annotation_layout.addWidget(self.export_format_selector)
-
-        self.export_button = QPushButton("Export Annotations")
-        self.export_button.clicked.connect(self.export_annotations)
-        annotation_layout.addWidget(self.export_button)
-
-        # Add the annotation widget to the sidebar
-        self.sidebar_layout.addWidget(annotation_widget)
 
     def toggle_sam_box(self):
         return self.sam_controller.toggle_sam_box()
@@ -1132,56 +647,6 @@ class ImageAnnotator(QMainWindow):
 
     def update_ui_colors(self):
         theme.update_ui_colors(self)
-
-    def setup_image_area(self):
-        """Set up the main image area."""
-        self.image_widget = QWidget()
-        self.image_layout = QVBoxLayout(self.image_widget)
-        self.layout.addWidget(self.image_widget, 3)
-
-        self.scroll_area = QScrollArea()
-        self.scroll_area.setWidgetResizable(True)
-        self.scroll_area.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAsNeeded)
-        self.scroll_area.setVerticalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAsNeeded)
-
-        # Use the already initialized image_label
-        self.image_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
-        self.scroll_area.setWidget(self.image_label)
-
-        self.image_layout.addWidget(self.scroll_area)
-
-        self.zoom_slider = QSlider(Qt.Orientation.Horizontal)
-        self.zoom_slider.setMinimum(10)
-        self.zoom_slider.setMaximum(500)
-        self.zoom_slider.setValue(100)
-        self.zoom_slider.setTickPosition(QSlider.TickPosition.TicksBelow)
-        self.zoom_slider.setTickInterval(50)
-        self.zoom_slider.valueChanged.connect(self.zoom_image)
-        self.image_layout.addWidget(self.zoom_slider)
-        self.image_info_label = QLabel()
-        self.image_layout.addWidget(self.image_info_label)
-
-    def setup_image_list(self):
-        """Set up the image list area."""
-        self.image_list_widget = QWidget()
-        self.image_list_layout = QVBoxLayout(self.image_list_widget)
-        self.layout.addWidget(self.image_list_widget, 1)
-
-        self.image_list_label = QLabel("Images:")
-        self.image_list_layout.addWidget(self.image_list_label)
-
-        self.image_list = QListWidget()
-        self.image_list.itemClicked.connect(self.switch_image)
-        self.image_list.currentRowChanged.connect(
-            lambda row: self.switch_image(self.image_list.currentItem())
-        )
-        self.image_list.setContextMenuPolicy(Qt.ContextMenuPolicy.CustomContextMenu)
-        self.image_list.customContextMenuRequested.connect(self.show_image_context_menu)
-        self.image_list_layout.addWidget(self.image_list)
-
-        self.clear_all_button = QPushButton("Clear All Images and Annotations")
-        self.clear_all_button.clicked.connect(self.clear_all)
-        self.image_list_layout.addWidget(self.clear_all_button)
 
     ##########    ### Tools  ########## I love useful image processing tools :)
     def open_dataset_splitter(self):

@@ -13,7 +13,7 @@ jobs:
       fail-fast: false
       matrix:
         os: [ubuntu-latest, windows-latest, macos-latest]
-        python-version: ['3.10', '3.11', '3.12']
+        python-version: ['3.10', '3.11', '3.12', '3.13']
 
     steps:
     - uses: actions/checkout@v4
@@ -27,9 +27,14 @@ jobs:
       if: runner.os == 'Linux'
       run: |
         sudo apt-get update
-        sudo apt-get install -y libxcb-xinerama0 libxcb-icccm4 libxcb-image0 libxcb-keysyms1 libxcb-randr0 libxcb-render-util0 libxcb-shape0 libxcb-xfixes0 libxkbcommon-x11-0 libdbus-1-3
-        # For headless Qt testing
-        sudo apt-get install -y xvfb x11-utils libxkbcommon-x11-0 libxcb-cursor0
+        # Qt6 Linux runtime: XCB plugin set + libEGL + xkbcommon +
+        # libxcb-cursor0 (required by Qt 6; was optional in Qt 5).
+        # Plus xvfb for headless test runs.
+        sudo apt-get install -y \
+          libxcb-xinerama0 libxcb-icccm4 libxcb-image0 libxcb-keysyms1 \
+          libxcb-randr0 libxcb-render-util0 libxcb-shape0 libxcb-xfixes0 \
+          libxcb-cursor0 libxkbcommon-x11-0 libdbus-1-3 libegl1 libgl1 \
+          xvfb x11-utils
 
     - name: Cache pip packages
       uses: actions/cache@v4

@@ -1,5 +1,5 @@
 import json
-from PyQt5.QtGui import QImage
+from PyQt6.QtGui import QImage
 from .utils import calculate_area, calculate_bbox
 import yaml
 import os
@@ -184,10 +184,17 @@ def export_yolo_v4(all_annotations, class_mapping, image_paths, slices, image_sl
                 qimage.save(save_path)
             img_width, img_height = qimage.width(), qimage.height()
         else:
-            # Handle regular images
-            image_path = next((path for name, path in image_paths.items() if image_name in name), None)
+            # Handle regular images. Exact key match first; substring
+            # fallback (the original behaviour) is fragile when one image
+            # name is a prefix of another.
+            image_path = image_paths.get(image_name)
+            if image_path is None:
+                image_path = next(
+                    (path for name, path in image_paths.items() if image_name in name),
+                    None,
+                )
             if not image_path or image_path.lower().endswith(('.tif', '.tiff', '.czi')):
-                print(f"Skipping file: {image_name}")
+                print(f"[YOLO v4] skipping {image_name!r}: no image path / TIFF source")
                 continue
             file_name_img = image_name
             dst_path = os.path.join(images_dir, file_name_img)
@@ -200,13 +207,16 @@ def export_yolo_v4(all_annotations, class_mapping, image_paths, slices, image_sl
         label_file = os.path.splitext(file_name_img)[0] + '.txt'
         with open(os.path.join(labels_dir, label_file), 'w') as f:
             for class_name, class_annotations in annotations.items():
+                if class_name not in class_to_index:
+                    print(f"[YOLO v4] warning: class {class_name!r} not in class_mapping, skipped")
+                    continue
                 class_index = class_to_index[class_name]
                 for ann in class_annotations:
-                    if 'segmentation' in ann:
+                    if 'segmentation' in ann and ann['segmentation']:
                         polygon = ann['segmentation']
                         normalized_polygon = [coord / img_width if i % 2 == 0 else coord / img_height for i, coord in enumerate(polygon)]
                         f.write(f"{class_index} " + " ".join(map(lambda x: f"{x:.6f}", normalized_polygon)) + "\n")
-                    elif 'bbox' in ann:
+                    elif 'bbox' in ann and ann['bbox']:
                         x, y, w, h = ann['bbox']
                         x_center = (x + w/2) / img_width
                         y_center = (y + h/2) / img_height
@@ -261,9 +271,16 @@ def export_yolo_v5plus(all_annotations, class_mapping, image_paths, slices, imag
     # Create a mapping of slice names to their QImage objects
     slice_map = {slice_name: qimage for slice_name, qimage in slices}
 
+    print(f"[YOLO v5+] export: {len(all_annotations)} image entries, "
+          f"{len(image_paths)} known image paths, "
+          f"{len(class_to_index)} class(es) → {list(class_to_index.keys())}")
+
+    label_files_written = 0
     for image_name, annotations in all_annotations.items():
+        print(f"[YOLO v5+]   image={image_name!r} annotation-classes={list(annotations.keys()) if annotations else '(none)'}")
         # Skip if there are no annotations for this image/slice
         if not annotations:
+            print(f"[YOLO v5+]     skipping: no annotations")
             continue
 
         # For simplicity, we'll put all data in the train directory
@@ -281,7 +298,7 @@ def export_yolo_v5plus(all_annotations, class_mapping, image_paths, slices, imag
                     if qimage:
                         break
             if qimage is None:
-                print(f"No image data found for slice {image_name}, skipping")
+                print(f"[YOLO v5+]     skipping: no image data for slice {image_name}")
                 continue
             file_name_img = f"{image_name}.png"
             save_path = os.path.join(images_dir, file_name_img)
@@ -289,36 +306,59 @@ def export_yolo_v5plus(all_annotations, class_mapping, image_paths, slices, imag
                 qimage.save(save_path)
             img_width, img_height = qimage.width(), qimage.height()
         else:
-            # Handle regular images
-            image_path = next((path for name, path in image_paths.items() if image_name in name), None)
-            if not image_path or image_path.lower().endswith(('.tif', '.tiff', '.czi')):
-                print(f"Skipping file: {image_name}")
+            # Handle regular images. Use exact-key match first; only fall
+            # back to substring match if no exact key is found (substring
+            # match was the original behaviour but it produces wrong hits
+            # when one image name is a prefix of another).
+            image_path = image_paths.get(image_name)
+            if image_path is None:
+                image_path = next(
+                    (path for name, path in image_paths.items() if image_name in name),
+                    None,
+                )
+            if not image_path:
+                print(f"[YOLO v5+]     skipping: no image_paths entry for {image_name!r}")
+                continue
+            if image_path.lower().endswith(('.tif', '.tiff', '.czi')):
+                print(f"[YOLO v5+]     skipping: TIFF/CZI source {image_name!r} (use slice export)")
                 continue
             file_name_img = image_name
             dst_path = os.path.join(images_dir, file_name_img)
             if not os.path.exists(dst_path):
                 shutil.copy2(image_path, dst_path)
+                print(f"[YOLO v5+]     copied image → {dst_path}")
             img = QImage(image_path)
             img_width, img_height = img.width(), img.height()
 
         # Write YOLO format annotation
         label_file = os.path.splitext(file_name_img)[0] + '.txt'
-        with open(os.path.join(labels_dir, label_file), 'w') as f:
+        label_path = os.path.join(labels_dir, label_file)
+        ann_lines = 0
+        with open(label_path, 'w') as f:
             for class_name, class_annotations in annotations.items():
+                if class_name not in class_to_index:
+                    print(f"[YOLO v5+]     warning: class {class_name!r} not in class_mapping, skipped")
+                    continue
                 class_index = class_to_index[class_name]
                 for ann in class_annotations:
-                    if 'segmentation' in ann:
+                    if 'segmentation' in ann and ann['segmentation']:
                         polygon = ann['segmentation']
-                        normalized_polygon = [coord / img_width if i % 2 == 0 else coord / img_height 
+                        normalized_polygon = [coord / img_width if i % 2 == 0 else coord / img_height
                                            for i, coord in enumerate(polygon)]
                         f.write(f"{class_index} " + " ".join(map(lambda x: f"{x:.6f}", normalized_polygon)) + "\n")
-                    elif 'bbox' in ann:
+                        ann_lines += 1
+                    elif 'bbox' in ann and ann['bbox']:
                         x, y, w, h = ann['bbox']
                         x_center = (x + w/2) / img_width
                         y_center = (y + h/2) / img_height
                         w = w / img_width
                         h = h / img_height
                         f.write(f"{class_index} {x_center:.6f} {y_center:.6f} {w:.6f} {h:.6f}\n")
+                        ann_lines += 1
+        print(f"[YOLO v5+]     wrote {ann_lines} annotation line(s) → {label_path}")
+        label_files_written += 1
+
+    print(f"[YOLO v5+] export complete: {label_files_written} label file(s) written")
 
     # Create YAML file
     names = list(class_mapping.keys())

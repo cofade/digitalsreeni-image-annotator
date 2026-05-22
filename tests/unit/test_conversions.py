@@ -8,8 +8,8 @@ import pytest
 import sys
 import os
 import importlib.util
-from PyQt5.QtCore import QPoint, QSize
-from PyQt5.QtGui import QPixmap
+from PyQt6.QtCore import QPoint, QSize
+from PyQt6.QtGui import QPixmap
 
 # Import image_label module directly by file path to avoid torch dependency issues
 image_label_path = os.path.join(os.path.dirname(__file__), '..', '..', 'src', 'digitalsreeni_image_annotator', 'image_label.py')

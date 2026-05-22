@@ -56,7 +56,7 @@ This document describes the testing infrastructure for the DigitalSreeni Image A
 6. **CI/CD Pipeline** ✓
    - Created [.github/workflows/tests.yml](.github/workflows/tests.yml)
    - Multi-platform testing: Ubuntu, Windows, macOS
-   - Multi-version testing: Python 3.10, 3.11, 3.12
+   - Multi-version testing: Python 3.10, 3.11, 3.12, 3.13
    - Automated coverage reporting (Codecov integration)
    - Coverage report artifacts
 
@@ -130,46 +130,14 @@ pytest -m "not slow" -v
 - **Phase 2 Target**: 80% code coverage
 - **Phase 3 Target**: 90% code coverage
 
-## Known Issues
+## Headless Testing
 
-### Python 3.14 + PyTorch Compatibility
+All tests run under `QT_QPA_PLATFORM=offscreen` so they work in CI and SSH
+sessions without a display. The Linux runner needs the Qt 6 platform-plugin
+deps (`libxcb-cursor0`, `libegl1`, `libgl1`, etc. — see
+[`.github/workflows/tests.yml`](.github/workflows/tests.yml) for the full list).
 
-**Issue**: PyTorch (torch) has DLL loading issues with Python 3.14 on Windows, causing access violations when importing ultralytics/SAM.
-
-**Workaround**: Tests use `importlib.util.spec_from_file_location()` to import modules directly by file path, bypassing the package `__init__.py` that imports torch. This allows unit tests to run without loading PyTorch.
-
-**Impact**:
-- ✓ Unit tests work fine (utils, conversions)
-- ✓ Integration tests that don't use SAM work
-- ⚠️ Tests requiring SAM/torch will need mocking or skipping until PyTorch adds full Python 3.14 support
-
-**Dependencies updated for Python 3.14**:
-- `numpy>=2.4.0` (Python 3.14 requires numpy 2.4+)
-- Other dependencies use latest compatible versions
-
-### Virtual Environment
-
-To use the project's .venv with Python 3.14:
-```bash
-# Windows
-.venv\Scripts\activate
-.venv\Scripts\python.exe -m pytest tests/unit/ -v
-
-# Linux/macOS
-source .venv/bin/activate
-python -m pytest tests/unit/ -v
-```
-
-## Next Steps
-
-### Milestone 1.2: PyQt6 Migration
-
-- Update all PyQt5 imports to PyQt6
-- Handle Qt enum changes
-- Test for feature parity
-- Update documentation
-
-### Future Testing Work
+## Future Testing Work
 
 1. **Add UI Tests** (pytest-qt)
    - Test annotation creation workflows

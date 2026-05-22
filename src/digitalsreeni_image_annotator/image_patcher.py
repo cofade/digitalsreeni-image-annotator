@@ -1,12 +1,12 @@
 import os
 import numpy as np
-from PyQt5.QtWidgets import (QDialog, QVBoxLayout, QHBoxLayout, QPushButton, QLabel, QFileDialog, 
+from PyQt6.QtWidgets import (QDialog, QVBoxLayout, QHBoxLayout, QPushButton, QLabel, QFileDialog, 
                              QSpinBox, QProgressBar, QMessageBox, QListWidget, QDialogButtonBox,
                              QGridLayout, QComboBox, QApplication, QScrollArea, QWidget)
 
 
-from PyQt5.QtCore import Qt, QThread, pyqtSignal
-from PyQt5.QtCore import QTimer, QEventLoop
+from PyQt6.QtCore import Qt, QThread, pyqtSignal
+from PyQt6.QtCore import QTimer, QEventLoop
 from tifffile import TiffFile, imwrite
 from PIL import Image
 import traceback
@@ -37,7 +37,7 @@ class DimensionDialog(QDialog):
             self.combos.append(combo)
         layout.addLayout(grid_layout)
 
-        self.button_box = QDialogButtonBox(QDialogButtonBox.Ok | QDialogButtonBox.Cancel)
+        self.button_box = QDialogButtonBox(QDialogButtonBox.StandardButton.Ok | QDialogButtonBox.StandardButton.Cancel)
         self.button_box.accepted.connect(self.accept)
         self.button_box.rejected.connect(self.reject)
         layout.addWidget(self.button_box)
@@ -123,7 +123,7 @@ class PatchingThread(QThread):
 class ImagePatcherTool(QDialog):
     def __init__(self, parent=None):
         super().__init__(parent)
-        self.setWindowModality(Qt.ApplicationModal)
+        self.setWindowModality(Qt.WindowModality.ApplicationModal)
         self.dimensions = {}
         self.input_files = []
         self.output_dir = ""
@@ -188,7 +188,7 @@ class ImagePatcherTool(QDialog):
         
         # Add the patch info label to the container
         self.patch_info_label = QLabel()
-        self.patch_info_label.setAlignment(Qt.AlignLeft | Qt.AlignTop)
+        self.patch_info_label.setAlignment(Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignTop)
         patch_info_layout.addWidget(self.patch_info_label)
         
         # Set the container as the scroll area's widget
@@ -238,9 +238,9 @@ class ImagePatcherTool(QDialog):
             if images.ndim > 2:
                 file_name = os.path.basename(file_path)
                 dialog = DimensionDialog(images.shape, file_name, self)
-                dialog.setWindowModality(Qt.ApplicationModal)
-                result = dialog.exec_()
-                if result == QDialog.Accepted:
+                dialog.setWindowModality(Qt.WindowModality.ApplicationModal)
+                result = dialog.exec()
+                if result == QDialog.DialogCode.Accepted:
                     dimensions = dialog.get_dimensions()
                     if 'H' in dimensions and 'W' in dimensions:
                         self.dimensions[file_path] = dimensions
@@ -282,10 +282,10 @@ class ImagePatcherTool(QDialog):
 
     def get_dimensions(self, shape, file_name):
         dialog = DimensionDialog(shape, file_name, self)
-        dialog.setWindowModality(Qt.ApplicationModal)
-        result = dialog.exec_()
+        dialog.setWindowModality(Qt.WindowModality.ApplicationModal)
+        result = dialog.exec()
         
-        if result == QDialog.Accepted:
+        if result == QDialog.DialogCode.Accepted:
             dimensions = dialog.get_dimensions()
             if 'H' in dimensions and 'W' in dimensions:
                 self.dimensions[file_name] = dimensions

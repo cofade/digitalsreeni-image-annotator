@@ -15,7 +15,7 @@ import numpy as np
 def models_base_dir() -> str:
     """Return the absolute path of the `models/` directory used for ML weights.
 
-    Resolution strategy (single source of truth used by sam_worker, dino_utils,
+    Resolution strategy (single source of truth used by sam_utils, dino_utils,
     and annotator_window so all three agree on where weights live):
 
     1. Editable / dev install: package source lives at

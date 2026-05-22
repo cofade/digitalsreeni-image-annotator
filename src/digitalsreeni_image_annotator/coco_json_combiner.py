@@ -1,16 +1,16 @@
 import json
 import os
-from PyQt5.QtWidgets import (QDialog, QVBoxLayout, QHBoxLayout, QPushButton, 
+from PyQt6.QtWidgets import (QDialog, QVBoxLayout, QHBoxLayout, QPushButton, 
                              QFileDialog, QLabel, QMessageBox, QApplication)
-from PyQt5.QtCore import Qt
+from PyQt6.QtCore import Qt
 
 class COCOJSONCombinerDialog(QDialog):
     def __init__(self, parent=None):
         super().__init__(parent)
         self.setWindowTitle("COCO JSON Combiner")
         self.setGeometry(100, 100, 400, 300)
-        self.setWindowFlags(self.windowFlags() | Qt.Window)
-        self.setWindowModality(Qt.ApplicationModal)
+        self.setWindowFlags(self.windowFlags() | Qt.WindowType.Window)
+        self.setWindowModality(Qt.WindowModality.ApplicationModal)
         self.json_files = []
         self.initUI()
 

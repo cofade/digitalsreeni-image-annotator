@@ -10,7 +10,7 @@ with open("README.md", "r", encoding="utf-8") as fh:
 
 setup(
     name="digitalsreeni-image-annotator",
-    version="0.8.12",  # Updated version number
+    version="0.9.0",  # PyQt6 + in-process inference
     author="Dr. Sreenivas Bhattiprolu",
     author_email="digitalsreeni@gmail.com",
     description="A tool for annotating images using manual and automated tools, supporting multi-dimensional images and SAM2-assisted annotations",
@@ -29,7 +29,7 @@ setup(
     ],
     python_requires=">=3.10",
     install_requires=[
-        "PyQt5>=5.15.0",
+        "PyQt6>=6.7.0",
         "numpy>=2.0.0",  # pip resolves 2.4+ on Py3.14, 2.2.x on Py3.10 (last 3.10-compatible)
         "Pillow>=10.0.0",
         "tifffile>=2023.0.0",

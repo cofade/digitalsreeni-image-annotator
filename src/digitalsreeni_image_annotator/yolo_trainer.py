@@ -1,6 +1,6 @@
 import os
-from PyQt5.QtWidgets import QFileDialog, QMessageBox
-from PyQt5.QtWidgets import (QDialog, QVBoxLayout, QHBoxLayout, QPushButton,
+from PyQt6.QtWidgets import QFileDialog, QMessageBox
+from PyQt6.QtWidgets import (QDialog, QVBoxLayout, QHBoxLayout, QPushButton,
                              QLineEdit, QLabel, QFileDialog, QDialogButtonBox)
 import yaml
 import numpy as np
@@ -11,8 +11,8 @@ from .export_formats import export_yolo_v5plus
 from collections import deque
 
 
-from PyQt5.QtWidgets import QDialog, QVBoxLayout, QTextEdit, QPushButton
-from PyQt5.QtCore import Qt, pyqtSignal, QObject
+from PyQt6.QtWidgets import QDialog, QVBoxLayout, QTextEdit, QPushButton
+from PyQt6.QtCore import Qt, pyqtSignal, QObject
 
 class TrainingInfoDialog(QDialog):
     stop_signal = pyqtSignal()
@@ -80,7 +80,7 @@ class LoadPredictionModelDialog(QDialog):
         layout.addLayout(yaml_layout)
 
         # OK and Cancel buttons
-        self.button_box = QDialogButtonBox(QDialogButtonBox.Ok | QDialogButtonBox.Cancel)
+        self.button_box = QDialogButtonBox(QDialogButtonBox.StandardButton.Ok | QDialogButtonBox.StandardButton.Cancel)
         self.button_box.accepted.connect(self.accept)
         self.button_box.rejected.connect(self.reject)
         layout.addWidget(self.button_box)

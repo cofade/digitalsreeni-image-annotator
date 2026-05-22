@@ -14,8 +14,8 @@ import warnings
 import cv2
 import numpy as np
 from PIL import Image
-from PyQt5.QtCore import QPoint, QPointF, QRectF, QSize, Qt
-from PyQt5.QtGui import (
+from PyQt6.QtCore import QPoint, QPointF, QRectF, QSize, Qt
+from PyQt6.QtGui import (
     QBrush,
     QColor,
     QFont,
@@ -29,7 +29,7 @@ from PyQt5.QtGui import (
     QPolygonF,
     QWheelEvent,
 )
-from PyQt5.QtWidgets import QApplication, QLabel, QMessageBox
+from PyQt6.QtWidgets import QApplication, QLabel, QMessageBox
 
 warnings.filterwarnings("ignore", category=UserWarning)
 
@@ -52,7 +52,7 @@ class ImageLabel(QLabel):
         self.end_point = None
         self.highlighted_annotations = []
         self.setMouseTracking(True)
-        self.setFocusPolicy(Qt.StrongFocus)
+        self.setFocusPolicy(Qt.FocusPolicy.StrongFocus)
         self.original_pixmap = None
         self.scaled_pixmap = None
         self.pan_start_pos = None
@@ -131,8 +131,8 @@ class ImageLabel(QLabel):
             self.scaled_pixmap = self.original_pixmap.scaled(
                 scaled_size.width(),
                 scaled_size.height(),
-                Qt.KeepAspectRatio,
-                Qt.SmoothTransformation,
+                Qt.AspectRatioMode.KeepAspectRatio,
+                Qt.TransformationMode.SmoothTransformation,
             )
             super().setPixmap(self.scaled_pixmap)
             self.setMinimumSize(self.scaled_pixmap.size())
@@ -305,7 +305,7 @@ class ImageLabel(QLabel):
         super().paintEvent(event)
         if self.scaled_pixmap:
             painter = QPainter(self)
-            painter.setRenderHint(QPainter.Antialiasing)
+            painter.setRenderHint(QPainter.RenderHint.Antialiasing)
             # Draw the image
             painter.drawPixmap(
                 int(self.offset_x), int(self.offset_y), self.scaled_pixmap
@@ -328,12 +328,12 @@ class ImageLabel(QLabel):
                 painter.translate(self.offset_x, self.offset_y)
                 painter.scale(self.zoom_factor, self.zoom_factor)
                 for pt in self.sam_positive_points:
-                    painter.setPen(QPen(Qt.green, 6 / self.zoom_factor, Qt.SolidLine))
-                    painter.setBrush(QBrush(Qt.green))
+                    painter.setPen(QPen(Qt.GlobalColor.green, 6 / self.zoom_factor, Qt.PenStyle.SolidLine))
+                    painter.setBrush(QBrush(Qt.GlobalColor.green))
                     painter.drawEllipse(QPointF(pt[0], pt[1]), 4, 4)
                 for pt in self.sam_negative_points:
-                    painter.setPen(QPen(Qt.red, 6 / self.zoom_factor, Qt.SolidLine))
-                    painter.setBrush(QBrush(Qt.red))
+                    painter.setPen(QPen(Qt.GlobalColor.red, 6 / self.zoom_factor, Qt.PenStyle.SolidLine))
+                    painter.setBrush(QBrush(Qt.GlobalColor.red))
                     painter.drawEllipse(QPointF(pt[0], pt[1]), 4, 4)
                 painter.restore()
             # Draw temporary paint mask
@@ -353,7 +353,7 @@ class ImageLabel(QLabel):
 
         for annotation in self.temp_annotations:
             color = QColor(255, 165, 0, 128)  # Semi-transparent orange
-            painter.setPen(QPen(color, 2 / self.zoom_factor, Qt.DashLine))
+            painter.setPen(QPen(color, 2 / self.zoom_factor, Qt.PenStyle.DashLine))
             painter.setBrush(QBrush(color))
 
             # Prefer segmentation polygon over bbox when both are present
@@ -423,7 +423,7 @@ class ImageLabel(QLabel):
                 self.temp_paint_mask.shape[1],
                 self.temp_paint_mask.shape[0],
                 self.temp_paint_mask.shape[1],
-                QImage.Format_Grayscale8,
+                QImage.Format.Format_Grayscale8,
             )
             mask_pixmap = QPixmap.fromImage(mask_image)
             painter.setOpacity(0.5)
@@ -443,7 +443,7 @@ class ImageLabel(QLabel):
                 self.temp_eraser_mask.shape[1],
                 self.temp_eraser_mask.shape[0],
                 self.temp_eraser_mask.shape[1],
-                QImage.Format_Grayscale8,
+                QImage.Format.Format_Grayscale8,
             )
             mask_pixmap = QPixmap.fromImage(mask_image)
             painter.setOpacity(0.5)
@@ -469,7 +469,7 @@ class ImageLabel(QLabel):
 
             # Draw filled circle with lower opacity
             painter.setOpacity(0.3)
-            painter.setPen(Qt.NoPen)
+            painter.setPen(Qt.PenStyle.NoPen)
             painter.setBrush(color)
             painter.drawEllipse(
                 QPointF(self.cursor_pos[0], self.cursor_pos[1]), size, size
@@ -477,8 +477,8 @@ class ImageLabel(QLabel):
 
             # Draw circle outline with full opacity
             painter.setOpacity(1.0)
-            painter.setPen(QPen(color.darker(150), 1 / self.zoom_factor, Qt.SolidLine))
-            painter.setBrush(Qt.NoBrush)
+            painter.setPen(QPen(color.darker(150), 1 / self.zoom_factor, Qt.PenStyle.SolidLine))
+            painter.setBrush(Qt.BrushStyle.NoBrush)
             painter.drawEllipse(
                 QPointF(self.cursor_pos[0], self.cursor_pos[1]), size, size
             )
@@ -489,7 +489,7 @@ class ImageLabel(QLabel):
             font = QFont()
             font.setPointSize(10)
             painter.setFont(font)
-            painter.setPen(QPen(Qt.black))  # Use black color for better visibility
+            painter.setPen(QPen(Qt.GlobalColor.black))  # Use black color for better visibility
 
             # Convert cursor position back to screen coordinates
             screen_x = self.cursor_pos[0] * self.zoom_factor + self.offset_x
@@ -504,7 +504,7 @@ class ImageLabel(QLabel):
             )
 
             text = f"Size: {size}"
-            painter.drawText(text_rect, Qt.AlignLeft | Qt.AlignVCenter, text)
+            painter.drawText(text_rect, Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignVCenter, text)
 
             painter.restore()
 
@@ -515,7 +515,7 @@ class ImageLabel(QLabel):
                 self.paint_mask.shape[1],
                 self.paint_mask.shape[0],
                 self.paint_mask.shape[1],
-                QImage.Format_Grayscale8,
+                QImage.Format.Format_Grayscale8,
             )
             mask_pixmap = QPixmap.fromImage(mask_image)
             painter.setOpacity(0.5)
@@ -533,7 +533,7 @@ class ImageLabel(QLabel):
                 self.eraser_mask.shape[1],
                 self.eraser_mask.shape[0],
                 self.eraser_mask.shape[1],
-                QImage.Format_Grayscale8,
+                QImage.Format.Format_Grayscale8,
             )
             mask_pixmap = QPixmap.fromImage(mask_image)
             painter.setOpacity(0.5)
@@ -548,7 +548,7 @@ class ImageLabel(QLabel):
         painter.save()
         painter.translate(self.offset_x, self.offset_y)
         painter.scale(self.zoom_factor, self.zoom_factor)
-        painter.setPen(QPen(Qt.red, 2 / self.zoom_factor, Qt.SolidLine))
+        painter.setPen(QPen(Qt.GlobalColor.red, 2 / self.zoom_factor, Qt.PenStyle.SolidLine))
         x1, y1, x2, y2 = self.sam_bbox
         painter.drawRect(QRectF(min(x1, x2), min(y1, y2), abs(x2 - x1), abs(y2 - y1)))
         painter.restore()
@@ -563,15 +563,15 @@ class ImageLabel(QLabel):
                 self.main_window,
                 "Unsaved Changes",
                 "You have unsaved changes. Do you want to save them?",
-                QMessageBox.Yes | QMessageBox.No | QMessageBox.Cancel,
+                QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No | QMessageBox.StandardButton.Cancel,
             )
-            if reply == QMessageBox.Yes:
+            if reply == QMessageBox.StandardButton.Yes:
                 if self.temp_paint_mask is not None:
                     self.commit_paint_annotation()
                 if self.temp_eraser_mask is not None:
                     self.commit_eraser_changes()
                 return True
-            elif reply == QMessageBox.No:
+            elif reply == QMessageBox.StandardButton.No:
                 self.discard_paint_annotation()
                 self.discard_eraser_changes()
                 return True
@@ -614,19 +614,19 @@ class ImageLabel(QLabel):
             if not self.main_window.is_class_visible(class_name):
                 continue
 
-            color = self.class_colors.get(class_name, QColor(Qt.white))
+            color = self.class_colors.get(class_name, QColor(Qt.GlobalColor.white))
             for annotation in class_annotations:
                 if annotation in self.highlighted_annotations:
-                    border_color = Qt.red
-                    fill_color = QColor(Qt.red)
+                    border_color = Qt.GlobalColor.red
+                    fill_color = QColor(Qt.GlobalColor.red)
                 else:
                     border_color = color
                     fill_color = QColor(color)
 
                 fill_color.setAlphaF(self.fill_opacity)
 
-                text_color = Qt.white if self.dark_mode else Qt.black
-                painter.setPen(QPen(border_color, 2 / self.zoom_factor, Qt.SolidLine))
+                text_color = Qt.GlobalColor.white if self.dark_mode else Qt.GlobalColor.black
+                painter.setPen(QPen(border_color, 2 / self.zoom_factor, Qt.PenStyle.SolidLine))
                 painter.setBrush(QBrush(fill_color))
 
                 if "segmentation" in annotation:
@@ -656,7 +656,7 @@ class ImageLabel(QLabel):
                                     QFont("Arial", int(12 / self.zoom_factor))
                                 )
                                 painter.setPen(
-                                    QPen(text_color, 2 / self.zoom_factor, Qt.SolidLine)
+                                    QPen(text_color, 2 / self.zoom_factor, Qt.PenStyle.SolidLine)
                                 )
                                 painter.drawText(
                                     centroid,
@@ -666,13 +666,13 @@ class ImageLabel(QLabel):
                 elif "bbox" in annotation:
                     x, y, width, height = annotation["bbox"]
                     painter.drawRect(QRectF(x, y, width, height))
-                    painter.setPen(QPen(text_color, 2 / self.zoom_factor, Qt.SolidLine))
+                    painter.setPen(QPen(text_color, 2 / self.zoom_factor, Qt.PenStyle.SolidLine))
                     painter.drawText(
                         QPointF(x, y), f"{class_name} {annotation.get('number', '')}"
                     )
 
         if self.current_annotation:
-            painter.setPen(QPen(Qt.red, 2 / self.zoom_factor, Qt.SolidLine))
+            painter.setPen(QPen(Qt.GlobalColor.red, 2 / self.zoom_factor, Qt.PenStyle.SolidLine))
             points = [QPointF(float(x), float(y)) for x, y in self.current_annotation]
             if len(points) > 1:
                 painter.drawPolyline(QPolygonF(points))
@@ -687,7 +687,7 @@ class ImageLabel(QLabel):
         # Draw temporary SAM prediction
         if self.temp_sam_prediction:
             temp_color = QColor(255, 165, 0, 128)  # Semi-transparent orange
-            painter.setPen(QPen(temp_color, 2 / self.zoom_factor, Qt.DashLine))
+            painter.setPen(QPen(temp_color, 2 / self.zoom_factor, Qt.PenStyle.DashLine))
             painter.setBrush(QBrush(temp_color))
 
             segmentation = self.temp_sam_prediction["segmentation"]
@@ -716,8 +716,8 @@ class ImageLabel(QLabel):
         painter.scale(self.zoom_factor, self.zoom_factor)
 
         x1, y1, x2, y2 = self.current_rectangle
-        color = self.class_colors.get(self.main_window.current_class, QColor(Qt.red))
-        painter.setPen(QPen(color, 2 / self.zoom_factor, Qt.SolidLine))
+        color = self.class_colors.get(self.main_window.current_class, QColor(Qt.GlobalColor.red))
+        painter.setPen(QPen(color, 2 / self.zoom_factor, Qt.PenStyle.SolidLine))
         painter.drawRect(QRectF(float(x1), float(y1), float(x2 - x1), float(y2 - y1)))
 
         painter.restore()
@@ -744,12 +744,12 @@ class ImageLabel(QLabel):
             )
         ]
         color = self.class_colors.get(
-            self.editing_polygon["category_name"], QColor(Qt.white)
+            self.editing_polygon["category_name"], QColor(Qt.GlobalColor.white)
         )
         fill_color = QColor(color)
         fill_color.setAlphaF(self.fill_opacity)
 
-        painter.setPen(QPen(color, 2 / self.zoom_factor, Qt.SolidLine))
+        painter.setPen(QPen(color, 2 / self.zoom_factor, Qt.PenStyle.SolidLine))
         painter.setBrush(QBrush(fill_color))
         painter.drawPolygon(QPolygonF(points))  # Changed QPolygon to QPolygonF - Sreeni
 
@@ -779,12 +779,45 @@ class ImageLabel(QLabel):
         self.update()
 
     def wheelEvent(self, event: QWheelEvent):
-        if event.modifiers() == Qt.ControlModifier:
+        if event.modifiers() == Qt.KeyboardModifier.ControlModifier:
+            if not self.original_pixmap or not self.scaled_pixmap:
+                event.accept()
+                return
+
+            cursor_widget_pos = event.position()
+            # Image-space coords of the pixel under the cursor BEFORE zoom.
+            img_x = (cursor_widget_pos.x() - self.offset_x) / self.zoom_factor
+            img_y = (cursor_widget_pos.y() - self.offset_y) / self.zoom_factor
+
+            scrollbar_h = self.main_window.scroll_area.horizontalScrollBar()
+            scrollbar_v = self.main_window.scroll_area.verticalScrollBar()
+            old_scroll_h = scrollbar_h.value()
+            old_scroll_v = scrollbar_v.value()
+
             delta = event.angleDelta().y()
             if delta > 0:
                 self.main_window.zoom_in()
             else:
                 self.main_window.zoom_out()
+
+            # Compute the post-zoom offset analytically from the
+            # viewport size and the new scaled-pixmap size. Reading
+            # self.offset_x here is unreliable on zoom-OUT: setMinimumSize
+            # in update_scaled_pixmap only relaxes the minimum, so the
+            # widget hasn't shrunk yet when update_offset ran. self.width()
+            # is stale → offset_x is wrong → cursor drifts. The viewport
+            # width is always current.
+            viewport = self.main_window.scroll_area.viewport()
+            new_scaled_w = self.scaled_pixmap.width()
+            new_scaled_h = self.scaled_pixmap.height()
+            new_offset_x = max(0, (viewport.width() - new_scaled_w) / 2)
+            new_offset_y = max(0, (viewport.height() - new_scaled_h) / 2)
+
+            new_widget_x = img_x * self.zoom_factor + new_offset_x
+            new_widget_y = img_y * self.zoom_factor + new_offset_y
+            scrollbar_h.setValue(int(round(new_widget_x - cursor_widget_pos.x() + old_scroll_h)))
+            scrollbar_v.setValue(int(round(new_widget_y - cursor_widget_pos.y() + old_scroll_v)))
+
             event.accept()
         else:
             super().wheelEvent(event)
@@ -792,26 +825,29 @@ class ImageLabel(QLabel):
     def mousePressEvent(self, event: QMouseEvent):
         if not self.original_pixmap:
             return
-        if event.modifiers() == Qt.ControlModifier and event.button() == Qt.LeftButton:
-            self.pan_start_pos = event.pos()
-            self.setCursor(Qt.ClosedHandCursor)
+        if event.modifiers() == Qt.KeyboardModifier.ControlModifier and event.button() == Qt.MouseButton.LeftButton:
+            # Track pan in global (screen) coords so the reference frame
+            # doesn't shift when the scrollbar moves the widget under the
+            # cursor — previously caused effective half-speed pan.
+            self.pan_start_pos = event.globalPosition()
+            self.setCursor(Qt.CursorShape.ClosedHandCursor)
             event.accept()
             return
 
-        pos = self.get_image_coordinates(event.pos())
+        pos = self.get_image_coordinates(event.position())
         if self.current_tool == "sam_points" and self.sam_points_active:
-            if event.button() == Qt.LeftButton:
+            if event.button() == Qt.MouseButton.LeftButton:
                 self.sam_positive_points.append(pos)
                 self.update()
                 self.main_window.schedule_sam_prediction()
                 return
-            elif event.button() == Qt.RightButton:
+            elif event.button() == Qt.MouseButton.RightButton:
                 self.sam_negative_points.append(pos)
                 self.update()
                 self.main_window.schedule_sam_prediction()
                 return
 
-        if event.button() == Qt.LeftButton:
+        if event.button() == Qt.MouseButton.LeftButton:
             if self.current_tool == "sam_box" and self.sam_box_active:
                 self.sam_bbox = [pos[0], pos[1], pos[0], pos[1]]
                 self.drawing_sam_bbox = True
@@ -839,15 +875,16 @@ class ImageLabel(QLabel):
     def mouseMoveEvent(self, event: QMouseEvent):
         if not self.original_pixmap:
             return
-        self.cursor_pos = self.get_image_coordinates(event.pos())
-        if event.modifiers() == Qt.ControlModifier and event.buttons() == Qt.LeftButton:
+        self.cursor_pos = self.get_image_coordinates(event.position())
+        if event.modifiers() == Qt.KeyboardModifier.ControlModifier and event.buttons() == Qt.MouseButton.LeftButton:
             if self.pan_start_pos:
-                delta = event.pos() - self.pan_start_pos
+                cur = event.globalPosition()
+                delta = cur - self.pan_start_pos
                 scrollbar_h = self.main_window.scroll_area.horizontalScrollBar()
                 scrollbar_v = self.main_window.scroll_area.verticalScrollBar()
-                scrollbar_h.setValue(scrollbar_h.value() - delta.x())
-                scrollbar_v.setValue(scrollbar_v.value() - delta.y())
-                self.pan_start_pos = event.pos()
+                scrollbar_h.setValue(scrollbar_h.value() - int(delta.x()))
+                scrollbar_v.setValue(scrollbar_v.value() - int(delta.y()))
+                self.pan_start_pos = cur
             event.accept()
             return
 
@@ -874,22 +911,22 @@ class ImageLabel(QLabel):
         elif self.current_tool == "rectangle" and self.drawing_rectangle:
             self.end_point = pos
             self.current_rectangle = self.get_rectangle_from_points()
-        elif self.current_tool == "paint_brush" and event.buttons() == Qt.LeftButton:
+        elif self.current_tool == "paint_brush" and event.buttons() == Qt.MouseButton.LeftButton:
             self.continue_painting(pos)
-        elif self.current_tool == "eraser" and event.buttons() == Qt.LeftButton:
+        elif self.current_tool == "eraser" and event.buttons() == Qt.MouseButton.LeftButton:
             self.continue_erasing(pos)
         self.update()
 
     def mouseReleaseEvent(self, event: QMouseEvent):
         if not self.original_pixmap:
             return
-        if event.modifiers() == Qt.ControlModifier and event.button() == Qt.LeftButton:
+        if event.modifiers() == Qt.KeyboardModifier.ControlModifier and event.button() == Qt.MouseButton.LeftButton:
             self.pan_start_pos = None
-            self.setCursor(Qt.ArrowCursor)
+            self.setCursor(Qt.CursorShape.ArrowCursor)
             event.accept()
         else:
-            pos = self.get_image_coordinates(event.pos())
-            if event.button() == Qt.LeftButton:
+            pos = self.get_image_coordinates(event.position())
+            if event.button() == Qt.MouseButton.LeftButton:
                 if (
                     self.sam_box_active
                     and self.drawing_sam_bbox
@@ -923,8 +960,8 @@ class ImageLabel(QLabel):
     def mouseDoubleClickEvent(self, event):
         if not self.pixmap():
             return
-        pos = self.get_image_coordinates(event.pos())
-        if event.button() == Qt.LeftButton:
+        pos = self.get_image_coordinates(event.position())
+        if event.button() == Qt.MouseButton.LeftButton:
             if self.drawing_polygon and len(self.current_annotation) > 2:
                 self.finish_polygon()
             else:
@@ -942,12 +979,12 @@ class ImageLabel(QLabel):
         return (int(x), int(y))
 
     def keyPressEvent(self, event: QKeyEvent):
-        if event.key() == Qt.Key_Return or event.key() == Qt.Key_Enter:
-            if self.temp_annotations and any(
-                a.get("source") == "dino" for a in self.temp_annotations
-            ):
-                self.main_window.accept_dino_results()
-            elif self.temp_annotations:
+        if event.key() == Qt.Key.Key_Return or event.key() == Qt.Key.Key_Enter:
+            # DINO temp_annotations are accepted via the application-wide
+            # _DINOReviewEventFilter (see ADR-015) so Enter works regardless
+            # of focus. The branch below only catches non-DINO temp state
+            # (legacy YOLO model-prediction review path).
+            if self.temp_annotations:
                 self.accept_temp_annotations()
             elif self.temp_sam_prediction:
                 self.main_window.accept_sam_prediction()
@@ -965,17 +1002,16 @@ class ImageLabel(QLabel):
                 self.commit_eraser_changes()
             else:
                 self.finish_current_annotation()
-        elif event.key() == Qt.Key_Escape:
+        elif event.key() == Qt.Key.Key_Escape:
             if self.sam_points_active:
                 self.main_window.sam_inference_timer.stop()
                 self.sam_positive_points = []
                 self.sam_negative_points = []
                 self.clear_temp_sam_prediction()
                 self.update()
-            elif self.temp_annotations and any(
-                a.get("source") == "dino" for a in self.temp_annotations
-            ):
-                self.main_window.reject_dino_results()
+            # DINO temp_annotations are rejected via the application-wide
+            # _DINOReviewEventFilter (see ADR-015). Branch below catches
+            # non-DINO temp state only.
             elif self.temp_annotations:
                 self.discard_temp_annotations()
             elif self.sam_magic_wand_active:
@@ -992,7 +1028,7 @@ class ImageLabel(QLabel):
                 self.discard_eraser_changes()
             else:
                 self.cancel_current_annotation()
-        elif event.key() == Qt.Key_Delete:
+        elif event.key() == Qt.Key.Key_Delete:
             if self.editing_polygon:
                 self.main_window.delete_selected_annotations()
                 self.editing_polygon = None
@@ -1000,7 +1036,7 @@ class ImageLabel(QLabel):
                 self.hover_point_index = None
                 self.main_window.enable_tools()
                 self.update()
-        elif event.key() == Qt.Key_Minus:
+        elif event.key() == Qt.Key.Key_Minus:
             if self.current_tool == "paint_brush":
                 self.main_window.paint_brush_size = max(
                     1, self.main_window.paint_brush_size - 1
@@ -1009,7 +1045,7 @@ class ImageLabel(QLabel):
             elif self.current_tool == "eraser":
                 self.main_window.eraser_size = max(1, self.main_window.eraser_size - 1)
                 print(f"Eraser size: {self.main_window.eraser_size}")
-        elif event.key() == Qt.Key_Equal:
+        elif event.key() == Qt.Key.Key_Equal:
             if self.current_tool == "paint_brush":
                 self.main_window.paint_brush_size += 1
                 print(f"Paint brush size: {self.main_window.paint_brush_size}")
@@ -1069,7 +1105,7 @@ class ImageLabel(QLabel):
         ]
         for i, point in enumerate(points):
             if self.distance(pos, point) < 10 / self.zoom_factor:
-                if event.modifiers() & Qt.ShiftModifier:
+                if event.modifiers() & Qt.KeyboardModifier.ShiftModifier:
                     # Delete point
                     del self.editing_polygon["segmentation"][i * 2 : i * 2 + 2]
                 else:

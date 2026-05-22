@@ -2,7 +2,7 @@
 
 ## Overview
 
-DigitalSreeni Image Annotator is a PyQt5-based desktop application for annotating images with polygons, rectangles, and paint tools. It integrates SAM 2 (Segment Anything Model) for semi-automated annotations and supports multi-dimensional images (TIFF stacks, CZI files).
+DigitalSreeni Image Annotator is a PyQt6-based desktop application for annotating images with polygons, rectangles, and paint tools. It integrates SAM 2 (Segment Anything Model) for semi-automated annotations and supports multi-dimensional images (TIFF stacks, CZI files).
 
 **Repository**: https://github.com/cofade/digitalsreeni-image-annotator (fork of https://github.com/bnsreenu/digitalsreeni-image-annotator)
 

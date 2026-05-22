@@ -2,10 +2,10 @@ import os
 import json
 import numpy as np
 from datetime import datetime
-from PyQt5.QtWidgets import (QDialog, QVBoxLayout, QHBoxLayout, QPushButton, QFileDialog, 
+from PyQt6.QtWidgets import (QDialog, QVBoxLayout, QHBoxLayout, QPushButton, QFileDialog, 
                             QLabel, QProgressDialog, QRadioButton, QButtonGroup, 
                             QMessageBox, QApplication, QGroupBox)
-from PyQt5.QtCore import Qt
+from PyQt6.QtCore import Qt
 import pydicom
 from pydicom.pixel_data_handlers.util import apply_voi_lut
 import tifffile
@@ -15,8 +15,8 @@ class DicomConverter(QDialog):
         super().__init__(parent)
         self.setWindowTitle("DICOM to TIFF Converter")
         self.setGeometry(100, 100, 600, 300)
-        self.setWindowFlags(self.windowFlags() | Qt.Window)
-        self.setWindowModality(Qt.ApplicationModal)  # Add modal behavior
+        self.setWindowFlags(self.windowFlags() | Qt.WindowType.Window)
+        self.setWindowModality(Qt.WindowModality.ApplicationModal)  # Add modal behavior
         
         # Initialize variables first
         self.input_file = ""
@@ -97,7 +97,7 @@ class DicomConverter(QDialog):
                 "Select DICOM File",
                 "",
                 file_filter,
-                options=QFileDialog.Options()
+                options=QFileDialog.Option(0)
             )
             
             if file_name:
@@ -115,7 +115,7 @@ class DicomConverter(QDialog):
                 self,
                 "Select Output Directory",
                 "",
-                QFileDialog.ShowDirsOnly | QFileDialog.DontResolveSymlinks
+                QFileDialog.Option.ShowDirsOnly | QFileDialog.Option.DontResolveSymlinks
             )
             
             if directory:
@@ -182,7 +182,7 @@ class DicomConverter(QDialog):
         try:
             # Create progress dialog
             progress = QProgressDialog("Processing DICOM file...", "Cancel", 0, 100, self)
-            progress.setWindowModality(Qt.WindowModal)
+            progress.setWindowModality(Qt.WindowModality.WindowModal)
             progress.setMinimumWidth(400)
             progress.show()
             

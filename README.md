@@ -4,7 +4,7 @@
 ![License](https://img.shields.io/badge/license-MIT-green)
 ![PyPI version](https://img.shields.io/pypi/v/digitalsreeni-image-annotator.svg?style=flat-square)
 
-A powerful and user-friendly tool for annotating images with polygons and rectangles, built with PyQt5. Now with additional supporting tools for comprehensive image processing and dataset management.
+A powerful and user-friendly tool for annotating images with polygons and rectangles, built with PyQt6. Now with additional supporting tools for comprehensive image processing and dataset management.
 
 ## Support the Project
 
@@ -66,7 +66,7 @@ Dr. Sreenivas Bhattiprolu
 
 ## Operating System Requirements
 
-This application is built using PyQt5 and has been tested on macOS and Windows. It may experience compatibility issues on Linux systems, particularly related to the XCB plugin for PyQt5. Extensive testing on Linux systems has not been done yet.
+This application is built using PyQt6 and runs on macOS, Windows and Linux. On Linux you'll need the standard Qt 6 runtime libraries (notably `libxcb-cursor0`, `libegl1`, `libgl1`, and the XCB plugin set) — `sudo apt install libxcb-cursor0 libegl1 libgl1 libxcb-xinerama0 libxkbcommon-x11-0` covers the common ones on Debian/Ubuntu.
 
 ## Installation
 

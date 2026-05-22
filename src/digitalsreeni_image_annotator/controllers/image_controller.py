@@ -192,14 +192,14 @@ class ImageController(QObject):
             )
             if reply == QMessageBox.StandardButton.Yes:
                 if self.mw.image_label.temp_paint_mask is not None:
-                    self.mw.image_label.commit_paint_annotation()
+                    self.mw.image_label._tools["paint_brush"].commit()
                 if self.mw.image_label.temp_eraser_mask is not None:
-                    self.mw.image_label.commit_eraser_changes()
+                    self.mw.image_label._tools["eraser"].commit()
             elif reply == QMessageBox.StandardButton.Cancel:
                 return
             else:
-                self.mw.image_label.discard_paint_annotation()
-                self.mw.image_label.discard_eraser_changes()
+                self.mw.image_label._tools["paint_brush"].discard()
+                self.mw.image_label._tools["eraser"].discard()
 
         self.mw.save_current_annotations()
         self.mw.image_label.clear_temp_sam_prediction()

@@ -779,7 +779,7 @@ class ImageLabel(QLabel):
     def keyPressEvent(self, event: QKeyEvent):
         if event.key() == Qt.Key.Key_Return or event.key() == Qt.Key.Key_Enter:
             # DINO temp_annotations are accepted via the application-wide
-            # _DINOReviewEventFilter (see ADR-015) so Enter works regardless
+            # DINOReviewEventFilter (see ADR-015) so Enter works regardless
             # of focus. The branch below only catches non-DINO temp state
             # (legacy YOLO model-prediction review path).
             if self.temp_annotations:
@@ -804,7 +804,7 @@ class ImageLabel(QLabel):
                 self.clear_temp_sam_prediction()
                 self.update()
             # DINO temp_annotations are rejected via the application-wide
-            # _DINOReviewEventFilter (see ADR-015). Branch below catches
+            # DINOReviewEventFilter (see ADR-015). Branch below catches
             # non-DINO temp state only.
             elif self.temp_annotations:
                 self.discard_temp_annotations()

@@ -43,7 +43,7 @@ src/digitalsreeni_image_annotator/
 ├── controllers/                   # Project/Image/SAM/DINO/YOLO/Annotation/Class
 ├── inference/                     # sam_utils.py, dino_utils.py
 ├── io/                            # export_formats.py, import_formats.py
-├── ui/                            # menu_bar, sidebar, theme, stylesheets
+├── ui/                            # menu_bar, sidebar, shortcuts, theme, stylesheets
 └── dialogs/                       # Standalone tool dialogs (statistics, …)
 ```
 

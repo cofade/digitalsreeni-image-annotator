@@ -154,7 +154,10 @@ def build_sidebar(window):
     dino_browse_layout.setContentsMargins(0, 0, 0, 0)
     window.lbl_dino_custom = QLabel("No path set")
     window.lbl_dino_custom.setWordWrap(True)
-    window.lbl_dino_custom.setStyleSheet("font-size:10px;color:#555;")
+    # Use palette(text) so the colour follows the active stylesheet
+    # (light or dark) — hardcoded #555 used to render unreadable on
+    # dark mode. See "No Hardcoded Colors Rule" in CLAUDE.md.
+    window.lbl_dino_custom.setStyleSheet("font-size:10px;color:palette(text);")
     btn_dino_browse = QPushButton("Browse")
     btn_dino_browse.setFixedWidth(60)
     btn_dino_browse.clicked.connect(window.browse_dino_model)

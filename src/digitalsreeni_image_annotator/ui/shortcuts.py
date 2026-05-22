@@ -9,7 +9,7 @@ from PyQt6.QtCore import Qt
 from PyQt6.QtGui import QKeySequence, QShortcut
 from PyQt6.QtWidgets import QApplication
 
-from ..controllers.dino_controller import _DINOReviewEventFilter
+from ..controllers.dino_controller import DINOReviewEventFilter
 
 
 def install_shortcuts(window):
@@ -30,5 +30,5 @@ def install_event_filters(window):
     work even when focus is on slice_list / image_list / a button,
     none of which forward the key to ImageLabel.keyPressEvent. See
     ADR-015."""
-    window._dino_review_filter = _DINOReviewEventFilter(window)
+    window._dino_review_filter = DINOReviewEventFilter(window)
     QApplication.instance().installEventFilter(window._dino_review_filter)

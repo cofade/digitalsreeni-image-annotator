@@ -360,7 +360,7 @@ Consequences this codebase has tripped over:
   slice_list / image_list / a button — `QListWidget` consumes
   Enter for itemActivated before `ImageLabel.keyPressEvent` ever sees
   it. Solved with an application-wide event filter
-  (`_DINOReviewEventFilter`) that fires only while
+  (`DINOReviewEventFilter`) that fires only while
   `temp_annotations` has DINO items and skips modal dialogs and text
   inputs. Setting `image_label.setFocus()` synchronously inside
   `_show_dino_batch_review` was not enough — Qt's focus handling

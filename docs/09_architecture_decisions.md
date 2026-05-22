@@ -352,7 +352,7 @@ Three options were considered:
    when DINO temp_annotations are pending, and only when the focused
    widget is not a text input and no modal dialog is active.
 
-**Decision**: Option 3. Implement `_DINOReviewEventFilter`, install it
+**Decision**: Option 3. Implement `DINOReviewEventFilter`, install it
 on `QApplication.instance()` once at startup, and gate the
 interception on three conditions: pending DINO temp_annotations,
 no active modal widget, focus not on `QLineEdit`/`QTextEdit`.
@@ -371,8 +371,10 @@ no active modal widget, focus not on `QLineEdit`/`QTextEdit`.
   multiple top-level filters.
 
 **Related**:
-- Implementation: `annotator_window.py` (`_DINOReviewEventFilter`
-  class, `installEventFilter` call in `__init__`).
+- Implementation: `DINOReviewEventFilter` class in
+  `controllers/dino_controller.py` (moved there in Phase 4b);
+  `installEventFilter` call in `ui/shortcuts.py:install_event_filters`,
+  invoked from `ImageAnnotator.__init__` (moved there in Phase 8).
 - Cross-cuts: documented in
   [Cross-cutting Concepts → DINO Temp Annotations](08_crosscutting_concepts.md#dino-temp-annotations--single-field-many-images).
 
@@ -584,9 +586,13 @@ without losing visual feedback.
 2. Override the event hooks you need; emit via
    `self.label.<signal>.emit(...)` and read via `self.label._ctx.X()`.
 3. Register in `ImageLabel.__init__`'s `_tools = {…, "foo": FooTool(self)}`.
-4. Add a button in `ImageAnnotator.setup_tool_buttons()` and a branch
-   in the tool-toggle handler that calls
-   `self.image_label.set_active_tool("foo")`.
+4. Add a button in `ui/sidebar.py:build_sidebar` next to the existing
+   tool buttons, register it in `window.tool_group`, and connect
+   `clicked` to `window.toggle_tool`. Then add a branch in
+   `ImageAnnotator.toggle_tool` that calls
+   `self.image_label.set_active_tool("foo")` for that button (since
+   Phase 8 the UI building lives in `ui/sidebar.py`, not on the
+   orchestrator).
 
 **Related**:
 - Implementation: `widgets/tools/base.py`,

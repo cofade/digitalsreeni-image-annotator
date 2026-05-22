@@ -31,7 +31,6 @@ from .ui.shortcuts import install_event_filters, install_shortcuts
 from .ui.sidebar import build_image_area, build_image_list, build_sidebar
 from .dialogs.annotation_statistics import show_annotation_statistics
 from .dialogs.coco_json_combiner import show_coco_json_combiner
-from .dialogs.dino_phrase_editor import ClassThresholdTable, PhraseEditorPanel
 from .inference.dino_utils import DINOUtils
 from .dialogs.dataset_splitter import DatasetSplitterTool
 from .dialogs.dicom_converter import DicomConverter
@@ -134,7 +133,7 @@ class ImageAnnotator(QMainWindow):
             "Large": 12,
             "XL": 14,
             "XXL": 16,
-        }  # Also, add the options in create_menu_bar method
+        }  # When adding a new option here, also add it to the Font Size submenu in ui/menu_bar.build_menu_bar.
         self.current_font_size = "Medium"
 
         # Dark mode control. Default on — matches the look most users
@@ -162,9 +161,6 @@ class ImageAnnotator(QMainWindow):
 
         install_shortcuts(self)
         install_event_filters(self)
-
-        # Start in maximized mode
-        self.showMaximized()
 
         # Start in maximized mode
         self.showMaximized()

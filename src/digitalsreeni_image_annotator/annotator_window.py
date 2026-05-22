@@ -53,6 +53,7 @@ from .dialogs.dicom_converter import DicomConverter
 from .dialogs.dino_merge_dialog import show_dino_merge_dialog
 from .dialogs.help_window import HelpWindow
 from .dialogs.image_augmenter import show_image_augmenter
+from .widgets.canvas_context import CanvasContext
 from .widgets.image_label import ImageLabel
 from .dialogs.image_patcher import show_image_patcher
 from .inference.sam_utils import SAMUtils
@@ -90,7 +91,6 @@ class ImageAnnotator(QMainWindow):
         self.image_label.sam_points_active = False
         self.image_label.sam_positive_points = []
         self.image_label.sam_negative_points = []
-        self.image_label.set_main_window(self)
 
         # Initialize attributes
         self.current_image = None
@@ -140,6 +140,12 @@ class ImageAnnotator(QMainWindow):
         self.yolo_controller = YOLOController(self)
         self.annotation_controller = AnnotationController(self)
         self.class_controller = ClassController(self)
+
+        # CanvasContext gives ImageLabel a narrow read view of main-window
+        # state. All write paths from the canvas leave as Qt signals
+        # connected to controllers below.
+        self.image_label.set_context(CanvasContext(self))
+        self._connect_image_label_signals()
 
         # Create sam_magic_wand_button
         self.sam_magic_wand_button = QPushButton("Magic Wand")
@@ -210,6 +216,55 @@ class ImageAnnotator(QMainWindow):
 
         # Start in maximized mode
         self.showMaximized()
+
+    def _connect_image_label_signals(self):
+        """Wire ImageLabel events to controller slots. ImageLabel does not
+        hold a main_window reference any more — every write path is a
+        Qt signal connected here."""
+        il = self.image_label
+        ac = self.annotation_controller
+        cc = self.class_controller
+        sc = self.sam_controller
+
+        # Annotation lifecycle
+        il.annotationCommitted.connect(ac.add_annotation_to_list)
+        il.annotationsBatchSaved.connect(self._on_annotations_batch_saved)
+        il.annotationsReplaced.connect(ac.replace_annotations)
+        il.annotationListUpdateRequested.connect(ac.update_annotation_list)
+        il.annotationSelected.connect(ac.select_annotation_in_list)
+        il.deleteSelectionRequested.connect(ac.delete_selected_annotations)
+        il.finishPolygonRequested.connect(ac.finish_polygon)
+        il.finishRectangleRequested.connect(ac.finish_rectangle)
+
+        # Class
+        il.classRequested.connect(cc.add_class)
+
+        # SAM
+        il.samPredictionRequested.connect(sc.schedule_sam_prediction)
+        il.samPredictionApplyRequested.connect(sc.apply_sam_prediction)
+        il.samPredictionAccepted.connect(sc.accept_sam_prediction)
+        il.samPointsCleared.connect(sc.cancel_sam_prediction)
+
+        # Tool / UI state
+        il.enableToolsRequested.connect(self.enable_tools)
+        il.disableToolsRequested.connect(self.disable_tools)
+        il.resetToolButtonsRequested.connect(self.reset_tool_buttons)
+        il.toolSizeChanged.connect(self._on_tool_size_changed)
+
+        # Navigation / info
+        il.zoomInRequested.connect(self.zoom_in)
+        il.zoomOutRequested.connect(self.zoom_out)
+        il.imageInfoChanged.connect(self.update_image_info)
+
+    def _on_tool_size_changed(self, tool: str, size: int) -> None:
+        if tool == "paint":
+            self.paint_brush_size = size
+        elif tool == "eraser":
+            self.eraser_size = size
+
+    def _on_annotations_batch_saved(self) -> None:
+        self.annotation_controller.save_current_annotations()
+        self.class_controller.update_slice_list_colors()
 
     def setup_ui(self):
         # Initialize the main layout

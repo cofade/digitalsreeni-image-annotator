@@ -111,6 +111,11 @@ class SAMController(QObject):
         self.mw.sam_inference_timer.stop()
         self.mw.sam_inference_timer.start(1000)
 
+    def cancel_sam_prediction(self):
+        """Cancel a pending SAM points prediction. Triggered by Escape
+        in ImageLabel while sam_points mode is active."""
+        self.mw.sam_inference_timer.stop()
+
     def apply_sam_prediction(self):
         # Re-entry guard (ADR-013): the event-loop pump inside _run_sync
         # can deliver this timer fire before the first call returns.

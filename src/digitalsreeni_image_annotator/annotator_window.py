@@ -4,10 +4,8 @@ import os
 import traceback
 import warnings
 
-import cv2
-import numpy as np
 import shapely
-from PyQt6.QtCore import Qt, QThread, QTimer, pyqtSignal
+from PyQt6.QtCore import Qt, QTimer
 from PyQt6.QtGui import (
     QAction,
     QColor,
@@ -28,7 +26,6 @@ from PyQt6.QtWidgets import (
     QComboBox,
     QDialog,
     QDialogButtonBox,
-    QDoubleSpinBox,
     QFileDialog,
     QGridLayout,
     QHBoxLayout,
@@ -57,6 +54,7 @@ from .controllers.dino_controller import DINOController, _DINOReviewEventFilter
 from .controllers.image_controller import ImageController
 from .controllers.project_controller import ProjectController
 from .controllers.sam_controller import SAMController
+from .controllers.yolo_controller import YOLOController
 from .core import image_utils
 from .ui import theme
 from .dialogs.annotation_statistics import show_annotation_statistics
@@ -76,29 +74,8 @@ from .dialogs.snake_game import SnakeGame
 from .dialogs.stack_interpolator import StackInterpolator
 from .dialogs.stack_to_slices import show_stack_to_slices
 from .utils import calculate_area, calculate_bbox
-from .dialogs.yolo_trainer import LoadPredictionModelDialog, TrainingInfoDialog, YOLOTrainer
 
 warnings.filterwarnings("ignore", category=UserWarning)
-
-
-class TrainingThread(QThread):
-    progress_update = pyqtSignal(str)
-    finished = pyqtSignal(object)
-
-    def __init__(self, yolo_trainer, epochs, imgsz):
-        super().__init__()
-        self.yolo_trainer = yolo_trainer
-        self.epochs = epochs
-        self.imgsz = imgsz
-
-    def run(self):
-        try:
-            results = self.yolo_trainer.train_model(
-                epochs=self.epochs, imgsz=self.imgsz
-            )
-            self.finished.emit(results)
-        except Exception as e:
-            self.finished.emit(str(e))
 
 
 class ImageAnnotator(QMainWindow):
@@ -174,6 +151,7 @@ class ImageAnnotator(QMainWindow):
 
         self.sam_controller = SAMController(self)
         self.dino_controller = DINOController(self)
+        self.yolo_controller = YOLOController(self)
 
         # Create sam_magic_wand_button
         self.sam_magic_wand_button = QPushButton("Magic Wand")
@@ -1585,32 +1563,7 @@ class ImageAnnotator(QMainWindow):
         return self.image_controller.is_multi_dimensional(file_name)
 
     def predict_single_image(self, file_name):
-        if self.is_multi_dimensional(file_name):
-            return  # Do nothing for multi-dimensional images
-
-        if not self.yolo_trainer or not self.yolo_trainer.model:
-            QMessageBox.warning(
-                self,
-                "No Model",
-                "Please load a YOLO model first from the YOLO > Prediction Settings > Load Model menu.",
-            )
-            return
-
-        # Deactivate SAM tool before prediction
-        self.deactivate_sam_magic_wand()
-
-        image_path = self.image_paths[file_name]
-        try:
-            results = self.yolo_trainer.predict(image_path)
-            self.process_yolo_results(results, file_name)
-        except Exception as e:
-            QMessageBox.warning(
-                self,
-                "Prediction Error",
-                f"An error occurred during prediction: {str(e)}\n\n"
-                "This might be due to a mismatch between the model and the YAML file classes. "
-                "Please check that the YAML file corresponds to the loaded model.",
-            )
+        return self.yolo_controller.predict_single_image(file_name)
 
     def redefine_dimensions(self, file_name):
         return self.image_controller.redefine_dimensions(file_name)
@@ -2735,436 +2688,46 @@ class ImageAnnotator(QMainWindow):
     ################################################################
 
     def setup_yolo_menu(self):
-        yolo_menu = self.menuBar().addMenu("&YOLO (beta)")
-
-        # Training submenu
-        training_submenu = yolo_menu.addMenu("Training")
-
-        load_pretrained_action = QAction("Load Pre-trained Model", self)
-        load_pretrained_action.triggered.connect(self.load_yolo_model)
-        training_submenu.addAction(load_pretrained_action)
-
-        prepare_data_action = QAction("Prepare YOLO Dataset", self)
-        prepare_data_action.triggered.connect(self.prepare_yolo_dataset)
-        training_submenu.addAction(prepare_data_action)
-
-        load_yaml_action = QAction("Load Dataset YAML", self)
-        load_yaml_action.triggered.connect(self.load_yolo_yaml)
-        training_submenu.addAction(load_yaml_action)
-
-        train_action = QAction("Train Model", self)
-        train_action.triggered.connect(self.show_train_dialog)
-        training_submenu.addAction(train_action)
-
-        save_model_action = QAction("Save Model", self)
-        save_model_action.triggered.connect(self.save_yolo_model)
-        training_submenu.addAction(save_model_action)
-
-        # Prediction Settings submenu
-        prediction_submenu = yolo_menu.addMenu("Prediction Settings")
-
-        load_model_action = QAction("Load Model", self)
-        load_model_action.triggered.connect(self.load_prediction_model)
-        prediction_submenu.addAction(load_model_action)
-
-        set_threshold_action = QAction("Set Confidence Threshold", self)
-        set_threshold_action.triggered.connect(self.set_confidence_threshold)
-        prediction_submenu.addAction(set_threshold_action)
+        return self.yolo_controller.setup_yolo_menu()
 
     def load_yolo_model(self):
-        if not hasattr(self, "current_project_dir"):
-            QMessageBox.warning(
-                self, "No Project", "Please open or create a project first."
-            )
-            return
-
-        if not self.yolo_trainer:
-            self.initialize_yolo_trainer()
-
-        if self.yolo_trainer.load_model():
-            QMessageBox.information(
-                self, "Model Loaded", "YOLO model loaded successfully."
-            )
-        else:
-            QMessageBox.warning(self, "Load Cancelled", "Model loading was cancelled.")
+        return self.yolo_controller.load_yolo_model()
 
     def prepare_yolo_dataset(self):
-        if not hasattr(self, "current_project_file"):
-            QMessageBox.warning(
-                self, "No Project", "Please open or create a project first."
-            )
-            return
-
-        if not self.yolo_trainer:
-            self.initialize_yolo_trainer()
-
-        try:
-            yaml_path = self.yolo_trainer.prepare_dataset()
-            QMessageBox.information(
-                self,
-                "Dataset Prepared",
-                f"YOLO dataset prepared successfully. YAML file: {yaml_path}",
-            )
-        except Exception as e:
-            QMessageBox.critical(
-                self,
-                "Error",
-                f"An error occurred while preparing the dataset: {str(e)}",
-            )
+        return self.yolo_controller.prepare_yolo_dataset()
 
     def load_yolo_yaml(self):
-        if not hasattr(self, "current_project_file"):
-            QMessageBox.warning(
-                self, "No Project", "Please open or create a project first."
-            )
-            return
-
-        if not self.yolo_trainer:
-            self.initialize_yolo_trainer()
-
-        try:
-            if self.yolo_trainer.load_yaml():
-                QMessageBox.information(
-                    self, "YAML Loaded", "Dataset YAML loaded successfully."
-                )
-            else:
-                QMessageBox.warning(
-                    self, "Load Cancelled", "YAML loading was cancelled."
-                )
-        except Exception as e:
-            QMessageBox.critical(
-                self,
-                "Error",
-                f"An error occurred while loading the YAML file: {str(e)}",
-            )
+        return self.yolo_controller.load_yolo_yaml()
 
     def save_yolo_model(self):
-        if not hasattr(self, "current_project_file"):
-            QMessageBox.warning(
-                self, "No Project", "Please open or create a project first."
-            )
-            return
-
-        if not self.yolo_trainer or not self.yolo_trainer.model:
-            QMessageBox.warning(
-                self, "No Model", "Please train or load a YOLO model first."
-            )
-            return
-
-        try:
-            if self.yolo_trainer.save_model():
-                QMessageBox.information(
-                    self, "Model Saved", "YOLO model saved successfully."
-                )
-            else:
-                QMessageBox.warning(
-                    self, "Save Cancelled", "Model saving was cancelled."
-                )
-        except Exception as e:
-            QMessageBox.critical(
-                self, "Error", f"An error occurred while saving the model: {str(e)}"
-            )
+        return self.yolo_controller.save_yolo_model()
 
     def load_prediction_model(self):
-        if not hasattr(self, "current_project_file"):
-            QMessageBox.warning(
-                self, "No Project", "Please open or create a project first."
-            )
-            return
-
-        if not self.yolo_trainer:
-            self.initialize_yolo_trainer()
-
-        dialog = LoadPredictionModelDialog(self)
-        if dialog.exec() == QDialog.DialogCode.Accepted:
-            model_path = dialog.model_path
-            yaml_path = dialog.yaml_path
-            if model_path and yaml_path:
-                try:
-                    result, message = self.yolo_trainer.load_prediction_model(
-                        model_path, yaml_path
-                    )
-                    if result:
-                        QMessageBox.information(
-                            self,
-                            "Model Loaded",
-                            "YOLO model and YAML file loaded successfully for prediction.",
-                        )
-                        if message:
-                            QMessageBox.warning(self, "Class Mismatch Warning", message)
-                    else:
-                        QMessageBox.critical(
-                            self,
-                            "Error Loading Model",
-                            f"Could not load the model or YAML file: {message}",
-                        )
-                except Exception as e:
-                    QMessageBox.critical(self, "Error", f"An error occurred: {str(e)}")
-            else:
-                QMessageBox.warning(
-                    self,
-                    "Files Required",
-                    "Both model and YAML files are required for prediction.",
-                )
+        return self.yolo_controller.load_prediction_model()
 
     def show_train_dialog(self):
-        if not self.yolo_trainer:
-            QMessageBox.warning(
-                self, "No Project", "Please open or create a project first."
-            )
-            return
-        if not self.yolo_trainer.model:
-            QMessageBox.warning(
-                self, "No Model", "Please load a pre-trained model first."
-            )
-            return
-        if not self.yolo_trainer.yaml_path:
-            QMessageBox.warning(
-                self, "No Dataset", "Please prepare or load a dataset YAML first."
-            )
-            return
-
-        dialog = QDialog(self)
-        dialog.setWindowTitle("Train YOLO Model")
-        layout = QVBoxLayout()
-
-        epochs_label = QLabel("Number of Epochs:")
-        epochs_input = QLineEdit("100")
-        layout.addWidget(epochs_label)
-        layout.addWidget(epochs_input)
-
-        imgsz_label = QLabel("Image Size:")
-        imgsz_input = QLineEdit("640")
-        layout.addWidget(imgsz_label)
-        layout.addWidget(imgsz_input)
-
-        button_box = QDialogButtonBox(QDialogButtonBox.StandardButton.Ok | QDialogButtonBox.StandardButton.Cancel)
-        button_box.accepted.connect(dialog.accept)
-        button_box.rejected.connect(dialog.reject)
-        layout.addWidget(button_box)
-
-        dialog.setLayout(layout)
-
-        if dialog.exec() == QDialog.DialogCode.Accepted:
-            epochs = int(epochs_input.text())
-            imgsz = int(imgsz_input.text())
-            self.start_training(epochs, imgsz)
+        return self.yolo_controller.show_train_dialog()
 
     def initialize_yolo_trainer(self):
-        if hasattr(self, "current_project_dir"):
-            self.yolo_trainer = YOLOTrainer(self.current_project_dir, self)
-        else:
-            QMessageBox.warning(
-                self, "No Project", "Please open or create a project first."
-            )
+        return self.yolo_controller.initialize_yolo_trainer()
 
     def start_training(self, epochs, imgsz):
-        if not hasattr(self, "training_dialog"):
-            self.training_dialog = TrainingInfoDialog(self)
-        self.training_dialog.show()
-
-        self.yolo_trainer.progress_signal.connect(self.training_dialog.update_info)
-        self.yolo_trainer.set_progress_callback(self.training_dialog.update_info)
-        self.training_dialog.stop_signal.connect(self.yolo_trainer.stop_training_signal)
-
-        self.training_thread = TrainingThread(self.yolo_trainer, epochs, imgsz)
-        self.training_thread.finished.connect(self.training_finished)
-        self.training_thread.start()
+        return self.yolo_controller.start_training(epochs, imgsz)
 
     def training_finished(self, results):
-        self.training_dialog.stop_button.setEnabled(True)
-        self.training_dialog.stop_button.setText("Stop Training")
-        self.yolo_trainer.progress_signal.disconnect(self.training_dialog.update_info)
-        self.training_dialog.stop_signal.disconnect(
-            self.yolo_trainer.stop_training_signal
-        )
-
-        if isinstance(results, str):
-            QMessageBox.critical(
-                self, "Training Error", f"An error occurred during training: {results}"
-            )
-        else:
-            QMessageBox.information(
-                self, "Training Complete", "YOLO model training completed successfully."
-            )
+        return self.yolo_controller.training_finished(results)
 
     def set_confidence_threshold(self):
-        if not hasattr(self, "current_project_file"):
-            QMessageBox.warning(
-                self, "No Project", "Please open or create a project first."
-            )
-            return
-
-        if not self.yolo_trainer:
-            self.initialize_yolo_trainer()
-
-        current_threshold = self.yolo_trainer.conf_threshold
-        new_threshold, ok = QInputDialog.getDouble(
-            self,
-            "Set Confidence Threshold",
-            "Enter confidence threshold (0-1):",
-            current_threshold,
-            0,
-            1,
-            2,
-        )
-        if ok:
-            self.yolo_trainer.set_conf_threshold(new_threshold)
-            QMessageBox.information(
-                self,
-                "Threshold Updated",
-                f"Confidence threshold set to {new_threshold}",
-            )
+        return self.yolo_controller.set_confidence_threshold()
 
     def show_predict_dialog(self):
-        if not self.yolo_trainer or not self.yolo_trainer.model:
-            QMessageBox.warning(self, "No Model", "Please load a YOLO model first.")
-            return
-
-        dialog = QDialog(self)
-        dialog.setWindowTitle("Predict with YOLO Model")
-        layout = QVBoxLayout()
-
-        image_list = QListWidget()
-        for image_name in self.image_paths.keys():
-            image_list.addItem(image_name)
-        layout.addWidget(QLabel("Select images for prediction:"))
-        layout.addWidget(image_list)
-
-        conf_label = QLabel("Confidence Threshold:")
-        conf_input = QDoubleSpinBox()
-        conf_input.setRange(0, 1)
-        conf_input.setSingleStep(0.01)
-        conf_input.setValue(self.yolo_trainer.conf_threshold)
-        layout.addWidget(conf_label)
-        layout.addWidget(conf_input)
-
-        button_box = QDialogButtonBox(QDialogButtonBox.StandardButton.Cancel)
-        predict_button = QPushButton("Predict")
-        button_box.addButton(predict_button, QDialogButtonBox.ButtonRole.AcceptRole)
-        button_box.accepted.connect(dialog.accept)
-        button_box.rejected.connect(dialog.reject)
-        layout.addWidget(button_box)
-
-        dialog.setLayout(layout)
-
-        if dialog.exec() == QDialog.DialogCode.Accepted:
-            selected_images = [item.text() for item in image_list.selectedItems()]
-            conf = conf_input.value()
-            self.yolo_trainer.set_conf_threshold(conf)
-            self.run_predictions(selected_images)
+        return self.yolo_controller.show_predict_dialog()
 
     def run_predictions(self, selected_images):
-        for image_name in selected_images:
-            image_path = self.image_paths[image_name]
-            results = self.yolo_trainer.predict(image_path)
-            self.process_yolo_results(results, image_name)
+        return self.yolo_controller.run_predictions(selected_images)
 
     def process_yolo_results(self, results, image_name):
-        image_path = self.image_paths[image_name]
-        image = cv2.imread(image_path)
-        if image is None:
-            QMessageBox.warning(self, "Error", f"Failed to load image: {image_name}")
-            return
-        original_height, original_width = image.shape[:2]
-
-        temp_annotations = {}
-
-        try:
-            results, input_size, original_size = (
-                results  # Unpack the results, input size, and original size
-            )
-            input_height, input_width = input_size
-            orig_height, orig_width = original_size
-
-            scale_x = original_width / orig_width
-            scale_y = original_height / orig_height
-
-            for result in results:
-                boxes = result.boxes
-                masks = result.masks
-
-                if masks is None:
-                    print(f"No masks found for {image_name}")
-                    continue
-
-                for mask, box in zip(masks, boxes):
-                    try:
-                        class_id = int(box.cls)
-                        class_name = self.yolo_trainer.class_names[class_id]
-                        score = float(box.conf)
-
-                        mask_array = mask.data.cpu().numpy()[0]
-                        # Resize mask to original image size
-                        mask_array = cv2.resize(mask_array, (orig_width, orig_height))
-                        contours, _ = cv2.findContours(
-                            (mask_array > 0.5).astype(np.uint8),
-                            cv2.RETR_EXTERNAL,
-                            cv2.CHAIN_APPROX_SIMPLE,
-                        )
-
-                        if contours:
-                            epsilon = 0.005 * cv2.arcLength(contours[0], True)
-                            approx = cv2.approxPolyDP(contours[0], epsilon, True)
-                            polygon = approx.flatten().tolist()
-
-                            # Scale the polygon coordinates
-                            scaled_polygon = []
-                            for i in range(0, len(polygon), 2):
-                                x = polygon[i] * scale_x
-                                y = polygon[i + 1] * scale_y
-                                scaled_polygon.extend([x, y])
-
-                            temp_class_name = f"Temp-{class_name}"
-                            if temp_class_name not in temp_annotations:
-                                temp_annotations[temp_class_name] = []
-
-                            temp_annotation = {
-                                "segmentation": scaled_polygon,
-                                "category_name": temp_class_name,
-                                "score": score,
-                                "temp": True,
-                            }
-                            temp_annotations[temp_class_name].append(temp_annotation)
-                    except IndexError:
-                        QMessageBox.warning(
-                            self,
-                            "Class Mismatch",
-                            "There is a mismatch between the model and the YAML file classes. "
-                            "Please check that the YAML file corresponds to the loaded model.",
-                        )
-                        return
-
-        except Exception as e:
-            QMessageBox.warning(
-                self,
-                "Prediction Error",
-                f"An error occurred during prediction: {str(e)}\n\n"
-                "This might be due to a mismatch between the model and the YAML file classes. "
-                "Please check that the YAML file corresponds to the loaded model.",
-            )
-            return
-
-        self.add_temp_classes(temp_annotations)
-        self.update_class_list()
-        self.image_label.update()
-
-        if temp_annotations:
-            total_predictions = sum(len(anns) for anns in temp_annotations.values())
-            QMessageBox.information(
-                self,
-                "Review Predictions",
-                f"Found {total_predictions} predictions for {len(temp_annotations)} classes.\n"
-                "Use class visibility checkboxes to review.\n"
-                "Press Enter to accept or Esc to reject visible predictions.",
-            )
-        else:
-            QMessageBox.information(
-                self, "No Predictions", "No predictions were found for this image."
-            )
-
-        # Deactivate SAM tool
-        self.deactivate_sam_magic_wand()
+        return self.yolo_controller.process_yolo_results(results, image_name)
 
     def add_temp_classes(self, temp_annotations):
         return self.dino_controller.add_temp_classes(temp_annotations)

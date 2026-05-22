@@ -56,6 +56,7 @@ from shapely.validation import make_valid
 from .controllers import io_controller
 from .controllers.image_controller import ImageController
 from .controllers.project_controller import ProjectController
+from .controllers.sam_controller import SAMController
 from .core import image_utils
 from .ui import theme
 from .dialogs.annotation_statistics import show_annotation_statistics
@@ -69,7 +70,7 @@ from .dialogs.help_window import HelpWindow
 from .dialogs.image_augmenter import show_image_augmenter
 from .widgets.image_label import ImageLabel
 from .dialogs.image_patcher import show_image_patcher
-from .inference.sam_utils import InferenceBusyError, SAMUtils
+from .inference.sam_utils import SAMUtils
 from .dialogs.slice_registration import SliceRegistrationTool
 from .dialogs.snake_game import SnakeGame
 from .dialogs.stack_interpolator import StackInterpolator
@@ -208,6 +209,8 @@ class ImageAnnotator(QMainWindow):
         # debounce timer can fire while an earlier inference is still
         # pumping inside _run_sync. See apply_sam_prediction().
         self._sam_inference_in_flight = False
+
+        self.sam_controller = SAMController(self)
 
         # Create sam_magic_wand_button
         self.sam_magic_wand_button = QPushButton("Magic Wand")
@@ -415,183 +418,25 @@ class ImageAnnotator(QMainWindow):
         return self.image_controller.load_multi_slice_image(image_path, dimensions, shape)
 
     def activate_sam_magic_wand(self):
-        # Uncheck all other tools
-        for button in self.tool_group.buttons():
-            if button != self.sam_magic_wand_button:
-                button.setChecked(False)
-
-        # Set the current tool
-        self.image_label.current_tool = "sam_magic_wand"
-        self.image_label.sam_magic_wand_active = True
-        self.image_label.setCursor(Qt.CursorShape.CrossCursor)
-
-        # Update UI based on the current tool
-        self.update_ui_for_current_tool()
-
-        # If a class is not selected, select the first one (if available)
-        if self.current_class is None and self.class_list.count() > 0:
-            self.class_list.setCurrentRow(0)
-            self.current_class = self.class_list.currentItem().text()
-        elif self.class_list.count() == 0:
-            QMessageBox.warning(
-                self,
-                "No Class Selected",
-                "Please add a class before using annotation tools.",
-            )
-            self.sam_magic_wand_button.setChecked(False)
-            self.deactivate_sam_magic_wand()
+        return self.sam_controller.activate_sam_magic_wand()
 
     def deactivate_sam_magic_wand(self):
-        self.image_label.current_tool = None
-        self.image_label.sam_magic_wand_active = False
-        self.sam_magic_wand_button.setChecked(False)
-        self.sam_magic_wand_button.setEnabled(False)  # Disable the button
-        self.image_label.setCursor(Qt.CursorShape.ArrowCursor)
-
-        # Clear any SAM-related temporary data
-        self.image_label.sam_bbox = None
-        self.image_label.drawing_sam_bbox = False
-        self.image_label.temp_sam_prediction = None
-
-        # Update UI based on the current tool
-        self.update_ui_for_current_tool()
+        return self.sam_controller.deactivate_sam_magic_wand()
 
     def toggle_sam_assisted(self):
-        if not self.current_sam_model:
-            QMessageBox.warning(
-                self,
-                "No SAM Model Selected",
-                "Please pick a SAM model before using the SAM-Assisted tool.",
-            )
-            self.sam_magic_wand_button.setChecked(False)
-            return
-
-        if self.sam_magic_wand_button.isChecked():
-            self.activate_sam_magic_wand()
-        else:
-            self.deactivate_sam_magic_wand()
-
-        self.image_label.clear_temp_sam_prediction()  # Clear temporary prediction
+        return self.sam_controller.toggle_sam_assisted()
 
     def toggle_sam_magic_wand(self):
-        if self.sam_magic_wand_button.isChecked():
-            if self.current_class is None:
-                QMessageBox.warning(
-                    self,
-                    "No Class Selected",
-                    "Please select a class before using SAM2 Magic Wand.",
-                )
-                self.sam_magic_wand_button.setChecked(False)
-                return
-            self.image_label.setCursor(Qt.CursorShape.CrossCursor)
-            self.image_label.sam_magic_wand_active = True
-        else:
-            self.image_label.setCursor(Qt.CursorShape.ArrowCursor)
-            self.image_label.sam_magic_wand_active = False
-            self.image_label.sam_bbox = None
-
-        self.image_label.clear_temp_sam_prediction()  # Clear temporary prediction
+        return self.sam_controller.toggle_sam_magic_wand()
 
     def schedule_sam_prediction(self):
-        """Restart the debounce timer; inference fires 1s after last click."""
-        self.sam_inference_timer.stop()
-        self.sam_inference_timer.start(1000)
+        return self.sam_controller.schedule_sam_prediction()
 
     def apply_sam_prediction(self):
-        # Re-entry guard: if a previous SAM call is still in flight, the
-        # event-loop pump inside _run_sync can deliver this timer fire
-        # before the first call returns. Bail and rely on the user
-        # clicking again (which restarts the debounce) to issue a fresh
-        # inference with the up-to-date point set.
-        if self._sam_inference_in_flight:
-            return
-        self._sam_inference_in_flight = True
-        try:
-            try:
-                if self.image_label.current_tool == "sam_box":
-                    if self.image_label.sam_bbox is None:
-                        print("SAM bbox is None")
-                        return
-                    x1, y1, x2, y2 = self.image_label.sam_bbox
-                    bbox = [min(x1, x2), min(y1, y2), max(x1, x2), max(y1, y2)]
-                    prediction = self.sam_utils.apply_sam_prediction(self.current_image, bbox)
-                    self.image_label.sam_bbox = None
-                elif self.image_label.current_tool == "sam_points":
-                    # Always use all points!
-                    pos_points = self.image_label.sam_positive_points
-                    neg_points = self.image_label.sam_negative_points
-                    print(
-                        f"[SAM-POINTS] Predicting with {len(pos_points)} positive points: {pos_points} "
-                        f"and {len(neg_points)} negative points: {neg_points}"
-                    )
-                    if not pos_points:
-                        print("No positive points for SAM-points")
-                        return
-                    prediction = self.sam_utils.apply_sam_points(
-                        self.current_image,
-                        pos_points,
-                        neg_points,
-                    )
-                else:
-                    return
-            except InferenceBusyError:
-                # Re-entry safety net from sam_utils. The call-site flag
-                # above should catch this first, but if a different
-                # caller drives inference concurrently we just skip —
-                # the user keeps interacting; their next click will
-                # restart the debounce.
-                return
-            except Exception as exc:
-                traceback.print_exc()
-                QMessageBox.critical(
-                    self,
-                    "SAM Error",
-                    f"SAM inference failed:\n\n{exc}\n\n"
-                    "See the log for details.",
-                )
-                return
-
-            if prediction:
-                temp_annotation = {
-                    "segmentation": prediction["segmentation"],
-                    "category_id": self.class_mapping[self.current_class],
-                    "category_name": self.current_class,
-                    "score": prediction["score"],
-                }
-                self.image_label.temp_sam_prediction = temp_annotation
-                self.image_label.update()
-            elif prediction is None:
-                QMessageBox.information(
-                    self,
-                    "SAM",
-                    "No mask matches the given constraints. "
-                    "Try adjusting the box or point positions."
-                )
-            else:
-                print("Failed to generate prediction")
-
-            # Only clear box/points for box mode, not for points mode!
-            if self.image_label.current_tool == "sam_box":
-                self.image_label.sam_bbox = None
-                self.image_label.update()
-        finally:
-            self._sam_inference_in_flight = False
+        return self.sam_controller.apply_sam_prediction()
 
     def accept_sam_prediction(self):
-        if self.image_label.temp_sam_prediction:
-            new_annotation = self.image_label.temp_sam_prediction
-            self.image_label.annotations.setdefault(
-                new_annotation["category_name"], []
-            ).append(new_annotation)
-            self.add_annotation_to_list(new_annotation)
-            self.save_current_annotations()
-            self.update_slice_list_colors()
-            self.image_label.temp_sam_prediction = None
-            # --- Clear points after accepting
-            self.image_label.sam_positive_points = []
-            self.image_label.sam_negative_points = []
-            self.image_label.update()
-            print("SAM prediction accepted, points cleared, and added to annotations.")
+        return self.sam_controller.accept_sam_prediction()
 
     def setup_slice_list(self):
         return self.image_controller.setup_slice_list()
@@ -1387,35 +1232,10 @@ class ImageAnnotator(QMainWindow):
         self.sidebar_layout.addWidget(annotation_widget)
 
     def toggle_sam_box(self):
-        if self.sam_box_button.isChecked():
-            self.sam_points_button.setChecked(False)
-            self.image_label.current_tool = "sam_box"
-            self.image_label.sam_box_active = True
-            self.image_label.sam_points_active = False
-            self.image_label.setCursor(Qt.CursorShape.CrossCursor)
-        else:
-            self.image_label.current_tool = None
-            self.image_label.sam_box_active = False
-            self.image_label.setCursor(Qt.CursorShape.ArrowCursor)
-        self.update_ui_for_current_tool()
+        return self.sam_controller.toggle_sam_box()
 
     def toggle_sam_points(self):
-        if self.sam_points_button.isChecked():
-            self.sam_box_button.setChecked(False)
-            self.image_label.current_tool = "sam_points"
-            self.image_label.sam_points_active = True
-            self.image_label.sam_box_active = False
-            self.image_label.setCursor(Qt.CursorShape.CrossCursor)
-            self.image_label.sam_positive_points = []
-            self.image_label.sam_negative_points = []
-        else:
-            self.sam_inference_timer.stop()
-            self.image_label.current_tool = None
-            self.image_label.sam_points_active = False
-            self.image_label.setCursor(Qt.CursorShape.ArrowCursor)
-            self.image_label.sam_positive_points = []
-            self.image_label.sam_negative_points = []
-        self.update_ui_for_current_tool()
+        return self.sam_controller.toggle_sam_points()
 
     def sort_annotations_by_class(self):
         current_name = self.current_slice or self.image_file_name
@@ -1478,36 +1298,7 @@ class ImageAnnotator(QMainWindow):
         self.image_label.update()
 
     def change_sam_model(self, model_name):
-        try:
-            self.sam_utils.change_sam_model(model_name)
-        except Exception as e:
-            QMessageBox.critical(
-                self,
-                "SAM Model Error",
-                f"Failed to load SAM model '{model_name}':\n\n{str(e)}\n\n"
-                "Check that the model weights are downloadable and that torch "
-                "is correctly installed for your platform / GPU."
-            )
-            self.sam_model_selector.setCurrentIndex(0)
-            return
-
-        self.current_sam_model = self.sam_utils.current_sam_model
-
-        if model_name != "Pick a SAM Model":
-            # Enable the SAM Magic Wand button
-            self.sam_magic_wand_button.setEnabled(True)
-
-            # Activate the SAM Magic Wand tool
-            self.sam_magic_wand_button.setChecked(True)
-            self.activate_sam_magic_wand()
-
-            print(f"Changed SAM model to: {model_name}")
-        else:
-            # Disable and deactivate the SAM Magic Wand button
-            self.sam_magic_wand_button.setEnabled(False)
-            self.sam_magic_wand_button.setChecked(False)
-            self.deactivate_sam_magic_wand()
-            print("SAM model unset")
+        return self.sam_controller.change_sam_model(model_name)
 
     # --- DINO / LLM-Assisted Detection Methods ---
 

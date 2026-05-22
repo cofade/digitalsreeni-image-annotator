@@ -243,7 +243,7 @@ class ImageAnnotator(QMainWindow):
         il.samPredictionRequested.connect(sc.schedule_sam_prediction)
         il.samPredictionApplyRequested.connect(sc.apply_sam_prediction)
         il.samPredictionAccepted.connect(sc.accept_sam_prediction)
-        il.samPointsCleared.connect(sc.cancel_sam_prediction)
+        il.samPointsCleared.connect(sc.cancel_sam_debounce)
 
         # Tool / UI state
         il.enableToolsRequested.connect(self.enable_tools)

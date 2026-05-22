@@ -222,7 +222,6 @@ class ImageLabel(QLabel):
             contours, _ = cv2.findContours(
                 self.temp_paint_mask, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE
             )
-            committed = False
             for contour in contours:
                 if cv2.contourArea(contour) > 10:  # Minimum area threshold
                     segmentation = contour.flatten().tolist()
@@ -233,10 +232,8 @@ class ImageLabel(QLabel):
                     }
                     self.annotations.setdefault(class_name, []).append(new_annotation)
                     self.annotationCommitted.emit(new_annotation)
-                    committed = True
             self.temp_paint_mask = None
-            if committed:
-                self.annotationsBatchSaved.emit()
+            self.annotationsBatchSaved.emit()
             self.update()
 
     def discard_paint_annotation(self):
@@ -412,7 +409,6 @@ class ImageLabel(QLabel):
         painter.restore()
 
     def accept_temp_annotations(self):
-        had_annotations = bool(self.temp_annotations)
         for annotation in self.temp_annotations:
             class_name = annotation["category_name"]
 
@@ -431,8 +427,7 @@ class ImageLabel(QLabel):
             self.annotationCommitted.emit(annotation)
 
         self.temp_annotations.clear()
-        if had_annotations:
-            self.annotationsBatchSaved.emit()
+        self.annotationsBatchSaved.emit()
         self.update()
 
     def discard_temp_annotations(self):

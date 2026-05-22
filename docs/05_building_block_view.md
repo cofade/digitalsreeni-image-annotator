@@ -270,7 +270,9 @@ ImageAnnotator (main window)
     └── launches ──> Tool Dialogs (utilities)
 
 ImageLabel
-    ├── references ──> ImageAnnotator (callbacks)
+    ├── emits signals to ──> ImageAnnotator (writes; see ADR-016)
+    ├── reads via ──> CanvasContext (paint/eraser size, current class,
+    │                  class_mapping, is_class_visible, scroll_area, …)
     └── uses ──> utils (area, bbox calculations)
 
 SAMUtils

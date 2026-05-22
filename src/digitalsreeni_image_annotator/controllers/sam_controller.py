@@ -111,9 +111,11 @@ class SAMController(QObject):
         self.mw.sam_inference_timer.stop()
         self.mw.sam_inference_timer.start(1000)
 
-    def cancel_sam_prediction(self):
-        """Cancel a pending SAM points prediction. Triggered by Escape
-        in ImageLabel while sam_points mode is active."""
+    def cancel_sam_debounce(self):
+        """Stop the SAM debounce timer so a queued inference doesn't
+        fire. Does NOT abort an in-flight inference; that case is
+        handled by the _sam_inference_in_flight guard (ADR-013).
+        Triggered by Escape in ImageLabel while sam_points is active."""
         self.mw.sam_inference_timer.stop()
 
     def apply_sam_prediction(self):

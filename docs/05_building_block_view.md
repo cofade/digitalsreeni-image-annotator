@@ -184,6 +184,30 @@ DINO's xyxy boxes feed directly into `SAMUtils.apply_sam_predictions_batch()`,
 which returns segmentation polygons (xywh bbox is derived from the polygon at
 export time — see [Cross-cutting Concepts](08_crosscutting_concepts.md)).
 
+## Level 3: Controllers
+
+The seven `controllers/*` modules carve `ImageAnnotator` into
+single-responsibility owners that the orchestrator delegates to.
+Pattern: each controller is a `QObject` subclass holding `self.mw =
+main_window`. The orchestrator keeps thin pass-through methods so
+external call sites (menus, signal wiring, the test harness) don't
+need to reach into the controller graph.
+
+| Controller | Responsibility |
+|------------|----------------|
+| `ProjectController` | `.iap` save/load, auto-save, backup/restore, missing-image prompts, window-title sync. Owns the `is_loading_project` autosave guard (load/save round-trip safety, v0.8.12). |
+| `ImageController` | Open / load / switch images and slices. TIFF + CZI loaders, the multi-dim `DimensionDialog`, the `[-ndim:]` axis-slice bug fix from the v0.9.0 era. |
+| `AnnotationController` | Annotation CRUD, list sorting, highlight, edit-mode entry/exit, `finish_polygon`, `finish_rectangle`, `replace_annotations` (eraser path). Validates writes before mutating `all_annotations`. |
+| `ClassController` | Class add / delete / rename / colour / visibility. `update_slice_list_colors`, `is_class_visible`. |
+| `SAMController` | Magic-wand activation, debounce timer, `_sam_inference_in_flight` re-entrancy guard (ADR-013), model picker. |
+| `DINOController` | Single + batch detection, batch review navigation, temp-annotation accept/reject, custom-model browse, `DINOReviewEventFilter` ownership (ADR-015). |
+| `YOLOController` | Training menu, `TrainingThread`, prediction dialog, result processing. |
+| `io_controller` *(module-level functions, not a class)* | Thin UI wrappers around the pure `io/export_formats.py` and `io/import_formats.py` modules. |
+
+Communication: `ImageLabel` does not import controllers directly —
+it emits Qt signals (ADR-016) that the orchestrator connects to
+controller slots in `_connect_image_label_signals()`.
+
 ## Level 3: Export/Import Subsystem
 
 ### Export Formats (export_formats.py)

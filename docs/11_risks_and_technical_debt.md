@@ -85,26 +85,34 @@
 
 ## Technical Debt
 
-### No Automated Tests
+### Low Test Coverage of Interactive Paths
 
-**Debt Level**: High
+**Debt Level**: Medium
 
-**Description**: Zero unit tests, integration tests, or UI tests
+**Description**: A pytest + pytest-qt suite of 94 tests now exists
+(boot smoke, coordinate conversions, export-format round-trips,
+utility functions). Coverage is ~15% by line — the gap is the
+canvas event flow (mouse events → tool handler → signal emission →
+controller slot) and the SAM/DINO/YOLO inference paths.
 
 **Impact**:
-- High risk of regressions
-- Refactoring is dangerous
-- Manual testing burden
-- Slow development velocity
+- Phase 6/7/8 refactors had to lean on manual QA checklists for the
+  canvas flow because no automated test exercises it end-to-end.
+- Inference paths are exercised only via the smoke boot, not under
+  real model loads (those would slow CI prohibitively).
 
-**Effort to Resolve**: High (months)
+**Effort to Resolve**: Medium
 
 **Priority**: Medium
 
 **Plan**:
-1. Add unit tests for utility functions first (low-hanging fruit)
-2. Add integration tests for export/import
-3. Consider pytest-qt for critical UI flows
+1. Per-tool unit tests under `widgets/tools/` — each handler can be
+   tested by instantiating with a stub `label` carrying signals
+   and a fake `CanvasContext`, then feeding `QMouseEvent`s.
+2. Integration test that loads a tiny project, draws a polygon,
+   asserts the `.iap` round-trip restores state.
+3. Mock SAMUtils / DINOUtils inference returns to exercise the
+   controller signal paths without needing model weights.
 
 ---
 

@@ -149,9 +149,11 @@ def build_sidebar(window):
     # Use palette(text) so the colour follows the active stylesheet
     # (light or dark) — hardcoded #555 used to render unreadable on
     # dark mode. See "No Hardcoded Colors Rule" in CLAUDE.md.
-    window.lbl_dino_custom.setStyleSheet("font-size:10px;color:palette(text);")
+    # No font-size here — the caption follows the global ui_font_pt rule.
+    window.lbl_dino_custom.setStyleSheet("color:palette(text);")
     btn_dino_browse = QPushButton("Browse")
-    btn_dino_browse.setFixedWidth(60)
+    # No fixed width — a 60px cap clipped the caption at large UI font
+    # sizes (low-vision zoom); sizeHint tracks the active font.
     btn_dino_browse.clicked.connect(window.browse_dino_model)
     dino_browse_layout.addWidget(window.lbl_dino_custom, 1)
     dino_browse_layout.addWidget(btn_dino_browse)
@@ -164,7 +166,7 @@ def build_sidebar(window):
     # dark) provide it via QLabel rules. Hardcoded #f5f5f5 used to
     # punch a bright rectangle into the dark sidebar.
     window.lbl_dino_status.setStyleSheet(
-        "font-size:11px;padding:4px;border-radius:3px;"
+        "padding:4px;border-radius:3px;"
         "border:1px solid palette(mid);"
     )
     dino_layout.addWidget(window.lbl_dino_status)

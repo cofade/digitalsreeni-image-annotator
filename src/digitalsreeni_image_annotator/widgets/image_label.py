@@ -75,6 +75,11 @@ class ImageLabel(QLabel):
         self.temp_point = None
         self.current_tool = None
         self.zoom_factor = 1.0
+        # Low-vision UI zoom: ui_font_pt / 10 (legacy default), set by
+        # theme.apply_theme_and_font. Multiplies overlay sizes (label
+        # fonts, marker radii, pen widths) — orthogonal to zoom_factor,
+        # which keeps them constant-size on screen across image zoom.
+        self.ui_scale = 1.0
         self.class_colors = {}
         self.class_visibility = {}
         self.start_point = None
@@ -129,6 +134,18 @@ class ImageLabel(QLabel):
 
     def set_context(self, ctx):
         self._ctx = ctx
+
+    def set_ui_scale(self, scale):
+        self.ui_scale = scale
+        self.update()
+
+    def _pen_w(self, base):
+        """Overlay pen width: ui-scaled, zoom-compensated (constant on screen)."""
+        return base * self.ui_scale / self.zoom_factor
+
+    def _overlay_font(self, base=12):
+        """Overlay label font: ui-scaled, zoom-compensated (constant on screen)."""
+        return QFont("Arial", max(1, int(base * self.ui_scale / self.zoom_factor)))
 
     @property
     def active_tool_handler(self):
@@ -239,14 +256,17 @@ class ImageLabel(QLabel):
                 painter.save()
                 painter.translate(self.offset_x, self.offset_y)
                 painter.scale(self.zoom_factor, self.zoom_factor)
+                # Radii intentionally NOT zoom-compensated — the dots
+                # grow with image zoom (pre-existing behaviour).
+                dot_r = 4 * self.ui_scale
                 for pt in self.sam_positive_points:
-                    painter.setPen(QPen(Qt.GlobalColor.green, 6 / self.zoom_factor, Qt.PenStyle.SolidLine))
+                    painter.setPen(QPen(Qt.GlobalColor.green, self._pen_w(6), Qt.PenStyle.SolidLine))
                     painter.setBrush(QBrush(Qt.GlobalColor.green))
-                    painter.drawEllipse(QPointF(pt[0], pt[1]), 4, 4)
+                    painter.drawEllipse(QPointF(pt[0], pt[1]), dot_r, dot_r)
                 for pt in self.sam_negative_points:
-                    painter.setPen(QPen(Qt.GlobalColor.red, 6 / self.zoom_factor, Qt.PenStyle.SolidLine))
+                    painter.setPen(QPen(Qt.GlobalColor.red, self._pen_w(6), Qt.PenStyle.SolidLine))
                     painter.setBrush(QBrush(Qt.GlobalColor.red))
-                    painter.drawEllipse(QPointF(pt[0], pt[1]), 4, 4)
+                    painter.drawEllipse(QPointF(pt[0], pt[1]), dot_r, dot_r)
                 painter.restore()
             # In-progress overlays from every tool that has state to
             # render (paint mask, eraser mask, polygon-in-progress,
@@ -268,7 +288,7 @@ class ImageLabel(QLabel):
 
         for annotation in self.temp_annotations:
             color = QColor(255, 165, 0, 128)  # Semi-transparent orange
-            painter.setPen(QPen(color, 2 / self.zoom_factor, Qt.PenStyle.DashLine))
+            painter.setPen(QPen(color, self._pen_w(2), Qt.PenStyle.DashLine))
             painter.setBrush(QBrush(color))
 
             # Prefer segmentation polygon over bbox when both are present
@@ -288,7 +308,7 @@ class ImageLabel(QLabel):
                 painter.drawRect(QRectF(x, y, w, h))
 
             # Draw label and score
-            painter.setFont(QFont("Arial", int(12 / self.zoom_factor)))
+            painter.setFont(self._overlay_font())
             label = f"{annotation['category_name']} {annotation['score']:.2f}"
             if points is not None:
                 centroid = self.calculate_centroid(points)
@@ -351,7 +371,7 @@ class ImageLabel(QLabel):
 
             # Draw circle outline with full opacity
             painter.setOpacity(1.0)
-            painter.setPen(QPen(color.darker(150), 1 / self.zoom_factor, Qt.PenStyle.SolidLine))
+            painter.setPen(QPen(color.darker(150), self._pen_w(1), Qt.PenStyle.SolidLine))
             painter.setBrush(Qt.BrushStyle.NoBrush)
             painter.drawEllipse(
                 QPointF(self.cursor_pos[0], self.cursor_pos[1]), size, size
@@ -361,7 +381,9 @@ class ImageLabel(QLabel):
             # Reset the transform to ensure text is drawn at screen coordinates
             painter.resetTransform()
             font = QFont()
-            font.setPointSize(10)
+            # Screen-space text (transform was reset above): scale with
+            # the UI font setting only, not with image zoom.
+            font.setPointSize(max(1, int(10 * self.ui_scale)))
             painter.setFont(font)
             painter.setPen(QPen(Qt.GlobalColor.black))  # Use black color for better visibility
 
@@ -386,7 +408,7 @@ class ImageLabel(QLabel):
         painter.save()
         painter.translate(self.offset_x, self.offset_y)
         painter.scale(self.zoom_factor, self.zoom_factor)
-        painter.setPen(QPen(Qt.GlobalColor.red, 2 / self.zoom_factor, Qt.PenStyle.SolidLine))
+        painter.setPen(QPen(Qt.GlobalColor.red, self._pen_w(2), Qt.PenStyle.SolidLine))
         x1, y1, x2, y2 = self.sam_bbox
         painter.drawRect(QRectF(min(x1, x2), min(y1, y2), abs(x2 - x1), abs(y2 - y1)))
         painter.restore()
@@ -464,7 +486,7 @@ class ImageLabel(QLabel):
                 fill_color.setAlphaF(self.fill_opacity)
 
                 text_color = Qt.GlobalColor.white if self.dark_mode else Qt.GlobalColor.black
-                painter.setPen(QPen(border_color, 2 / self.zoom_factor, Qt.PenStyle.SolidLine))
+                painter.setPen(QPen(border_color, self._pen_w(2), Qt.PenStyle.SolidLine))
                 painter.setBrush(QBrush(fill_color))
 
                 if "segmentation" in annotation:
@@ -490,11 +512,9 @@ class ImageLabel(QLabel):
                         if points:
                             centroid = self.calculate_centroid(points)
                             if centroid:
-                                painter.setFont(
-                                    QFont("Arial", int(12 / self.zoom_factor))
-                                )
+                                painter.setFont(self._overlay_font())
                                 painter.setPen(
-                                    QPen(text_color, 2 / self.zoom_factor, Qt.PenStyle.SolidLine)
+                                    QPen(text_color, self._pen_w(2), Qt.PenStyle.SolidLine)
                                 )
                                 painter.drawText(
                                     centroid,
@@ -504,7 +524,7 @@ class ImageLabel(QLabel):
                 elif "bbox" in annotation:
                     x, y, width, height = annotation["bbox"]
                     painter.drawRect(QRectF(x, y, width, height))
-                    painter.setPen(QPen(text_color, 2 / self.zoom_factor, Qt.PenStyle.SolidLine))
+                    painter.setPen(QPen(text_color, self._pen_w(2), Qt.PenStyle.SolidLine))
                     painter.drawText(
                         QPointF(x, y), f"{class_name} {annotation.get('number', '')}"
                     )
@@ -515,7 +535,7 @@ class ImageLabel(QLabel):
         # Draw temporary SAM prediction
         if self.temp_sam_prediction:
             temp_color = QColor(255, 165, 0, 128)  # Semi-transparent orange
-            painter.setPen(QPen(temp_color, 2 / self.zoom_factor, Qt.PenStyle.DashLine))
+            painter.setPen(QPen(temp_color, self._pen_w(2), Qt.PenStyle.DashLine))
             painter.setBrush(QBrush(temp_color))
 
             segmentation = self.temp_sam_prediction["segmentation"]
@@ -527,7 +547,7 @@ class ImageLabel(QLabel):
                 painter.drawPolygon(QPolygonF(points))
                 centroid = self.calculate_centroid(points)
                 if centroid:
-                    painter.setFont(QFont("Arial", int(12 / self.zoom_factor)))
+                    painter.setFont(self._overlay_font())
                     painter.drawText(
                         centroid, f"SAM: {self.temp_sam_prediction['score']:.2f}"
                     )
@@ -553,7 +573,7 @@ class ImageLabel(QLabel):
         fill_color = QColor(color)
         fill_color.setAlphaF(self.fill_opacity)
 
-        painter.setPen(QPen(color, 2 / self.zoom_factor, Qt.PenStyle.SolidLine))
+        painter.setPen(QPen(color, self._pen_w(2), Qt.PenStyle.SolidLine))
         painter.setBrush(QBrush(fill_color))
         painter.drawPolygon(QPolygonF(points))  # Changed QPolygon to QPolygonF - Sreeni
 
@@ -562,7 +582,8 @@ class ImageLabel(QLabel):
                 painter.setBrush(QColor(255, 0, 0))
             else:
                 painter.setBrush(QColor(0, 255, 0))
-            painter.drawEllipse(point, 5 / self.zoom_factor, 5 / self.zoom_factor)
+            r = 5 * self.ui_scale / self.zoom_factor
+            painter.drawEllipse(point, r, r)
 
         painter.restore()
 
@@ -855,7 +876,7 @@ class ImageLabel(QLabel):
             )
         ]
         for i, point in enumerate(points):
-            if self.distance(pos, point) < 10 / self.zoom_factor:
+            if self.distance(pos, point) < 10 * self.ui_scale / self.zoom_factor:
                 if event.modifiers() & Qt.KeyboardModifier.ShiftModifier:
                     # Delete point
                     del self.editing_polygon["segmentation"][i * 2 : i * 2 + 2]
@@ -884,7 +905,7 @@ class ImageLabel(QLabel):
         ]
         self.hover_point_index = None
         for i, point in enumerate(points):
-            if self.distance(pos, point) < 10 / self.zoom_factor:
+            if self.distance(pos, point) < 10 * self.ui_scale / self.zoom_factor:
                 self.hover_point_index = i
                 break
         if self.editing_point_index is not None:

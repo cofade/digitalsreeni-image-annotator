@@ -15,11 +15,8 @@ class HelpWindow(QDialog):
         layout.addWidget(self.text_browser)
         self.setLayout(layout)
         
-        if dark_mode:
-            self.setStyleSheet(soft_dark_stylesheet)
-        else:
-            self.setStyleSheet(default_stylesheet)
-        
+        self._base_stylesheet = soft_dark_stylesheet if dark_mode else default_stylesheet
+
         self.font_size = font_size
         self.apply_font_size()
         self.load_help_content()
@@ -30,7 +27,11 @@ class HelpWindow(QDialog):
         self.show()
     
     def apply_font_size(self):
-        self.setStyleSheet(f"QWidget {{ font-size: {self.font_size}pt; }}")
+        # Append the font rule to the theme stylesheet — replacing the
+        # whole sheet here used to wipe the dark/light theme.
+        self.setStyleSheet(
+            f"{self._base_stylesheet}\nQWidget {{ font-size: {self.font_size}pt; }}"
+        )
         font = self.text_browser.font()
         font.setPointSize(self.font_size)
         self.text_browser.setFont(font)
@@ -144,6 +145,9 @@ class HelpWindow(QDialog):
             <li><strong>Ctrl + Shift + S:</strong> Open Annotation Statistics</li>
             <li><strong>F1:</strong> Open this help window</li>
             <li><strong>Ctrl + Wheel:</strong> Zoom in/out</li>
+            <li><strong>Ctrl + Shift + = (or Ctrl + +):</strong> Increase application font size</li>
+            <li><strong>Ctrl + Shift + - (or Ctrl + -):</strong> Decrease application font size</li>
+            <li><strong>Ctrl + Shift + 0:</strong> Reset application font size</li>
             <li><strong>Esc:</strong> Cancel current annotation, exit edit mode, or exit SAM-assisted annotation</li>
             <li><strong>Enter:</strong> Finish current annotation, exit edit mode, or accept SAM-generated mask</li>
             <li><strong>Up/Down Arrow Keys:</strong> Navigate through slices in multi-dimensional images</li>

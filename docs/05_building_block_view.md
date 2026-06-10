@@ -29,6 +29,7 @@
 src/digitalsreeni_image_annotator/
 ├── main.py                        # Entry point, initializes QApplication
 	├── annotator_window.py            # ImageAnnotator - main window orchestrator
+	├── app_settings.py                # QSettings-backed UI prefs (font size, dark mode) — ADR-020
 	├── utils.py                       # Cross-cutting utilities
 	├── core/                          # Constants, annotation utils, image utils
 	│   ├── constants.py

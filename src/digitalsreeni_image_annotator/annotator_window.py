@@ -16,6 +16,7 @@ from PyQt6.QtWidgets import (
     QWidget,
 )
 
+from .app_settings import load_ui_prefs
 from .controllers import io_controller
 from .controllers.annotation_controller import AnnotationController
 from .controllers.class_controller import ClassController
@@ -127,7 +128,9 @@ class ImageAnnotator(QMainWindow):
         self.image_label.set_context(CanvasContext(self))
         self._connect_image_label_signals()
 
-        # Font size control
+        # Font size control. Presets are named entry points into the
+        # continuous 8-24pt range; `ui_font_pt` (int) is the single
+        # source of truth — see theme.set_font_pt.
         self.font_sizes = {
             "Small": 8,
             "Medium": 10,
@@ -135,12 +138,12 @@ class ImageAnnotator(QMainWindow):
             "XL": 14,
             "XXL": 16,
         }  # When adding a new option here, also add it to the Font Size submenu in ui/menu_bar.build_menu_bar.
-        self.current_font_size = "Medium"
 
-        # Dark mode control. Default on — matches the look most users
-        # expect from a 2025-era desktop annotation tool; toggle with
-        # Settings → Toggle Dark Mode (Ctrl+D).
-        self.dark_mode = True
+        # UI prefs persist app-globally via QSettings (not in the .iap
+        # project file). Dark mode defaults on — matches the look most
+        # users expect from a 2025-era desktop annotation tool; toggle
+        # with Settings → Toggle Dark Mode (Ctrl+D).
+        self.ui_font_pt, self.dark_mode = load_ui_prefs()
 
         # Default annotations sorting
         self.current_sort_method = "class"  # Default sorting method
@@ -522,6 +525,12 @@ class ImageAnnotator(QMainWindow):
     def change_font_size(self, size):
         theme.change_font_size(self, size)
 
+    def step_font_size(self, delta):
+        theme.step_font_pt(self, delta)
+
+    def reset_font_size(self):
+        theme.reset_font_pt(self)
+
     def unload_ai_models(self):
         """Drop cached SAM/DINO model objects to free GPU/CPU memory.
 
@@ -620,12 +629,6 @@ class ImageAnnotator(QMainWindow):
     def reject_dino_results(self):
         return self.dino_controller.reject_dino_results()
 
-    def setup_font_size_selector(self):
-        theme.setup_font_size_selector(self)
-
-    def on_font_size_changed(self, size):
-        theme.on_font_size_changed(self, size)
-
     def apply_theme_and_font(self):
         theme.apply_theme_and_font(self)
 
@@ -693,7 +696,7 @@ class ImageAnnotator(QMainWindow):
     # update the show_help method:
     def show_help(self):
         self.help_window = HelpWindow(
-            dark_mode=self.dark_mode, font_size=self.font_sizes[self.current_font_size]
+            dark_mode=self.dark_mode, font_size=self.ui_font_pt
         )
         self.help_window.show_centered(self)
 

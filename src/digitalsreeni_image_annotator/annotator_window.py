@@ -57,37 +57,23 @@ from shapely.ops import unary_union
 from shapely.validation import make_valid
 from tifffile import TiffFile
 
+from .controllers import io_controller
+from .core import image_utils
+from .ui import theme
 from .dialogs.annotation_statistics import show_annotation_statistics
 from .dialogs.coco_json_combiner import show_coco_json_combiner
 from .dialogs.dino_phrase_editor import ClassThresholdTable, PhraseEditorPanel
 from .inference.dino_utils import DINOUtils, GDINO_MODEL_PATHS
 from .dialogs.dataset_splitter import DatasetSplitterTool
-from .ui.default_stylesheet import default_stylesheet
 from .dialogs.dicom_converter import DicomConverter
 from .dialogs.dino_merge_dialog import show_dino_merge_dialog
-from .io.export_formats import (
-    export_coco_json,
-    export_labeled_images,
-    export_pascal_voc_bbox,
-    export_pascal_voc_both,
-    export_semantic_labels,
-    export_yolo_v4,
-    export_yolo_v5plus,
-)
 from .dialogs.help_window import HelpWindow
 from .dialogs.image_augmenter import show_image_augmenter
 from .widgets.image_label import ImageLabel
 from .dialogs.image_patcher import show_image_patcher
-from .io.import_formats import (
-    import_coco_json,
-    import_yolo_v4,
-    import_yolo_v5plus,
-    process_import_format,
-)
 from .inference.sam_utils import InferenceBusyError, SAMUtils
 from .dialogs.slice_registration import SliceRegistrationTool
 from .dialogs.snake_game import SnakeGame
-from .ui.soft_dark_stylesheet import soft_dark_stylesheet
 from .dialogs.stack_interpolator import StackInterpolator
 from .dialogs.stack_to_slices import show_stack_to_slices
 from .utils import calculate_area, calculate_bbox
@@ -785,20 +771,7 @@ class ImageAnnotator(QMainWindow):
             self.prompt_load_missing_images(missing_images)
 
     def convert_to_serializable(self, obj):
-        if isinstance(obj, np.integer):
-            return int(obj)
-        elif isinstance(obj, np.floating):
-            return float(obj)
-        elif isinstance(obj, np.ndarray):
-            return obj.tolist()
-        elif isinstance(obj, list):
-            return [self.convert_to_serializable(item) for item in obj]
-        elif isinstance(obj, dict):
-            return {
-                key: self.convert_to_serializable(value) for key, value in obj.items()
-            }
-        else:
-            return obj
+        return image_utils.convert_to_serializable(obj)
 
     def save_project(self, show_message=True):
         if not hasattr(self, "current_project_file") or not self.current_project_file:
@@ -1258,20 +1231,7 @@ class ImageAnnotator(QMainWindow):
             self.add_images_to_list(file_names)
 
     def convert_to_8bit_rgb(self, image_array):
-        if image_array.ndim == 2:
-            # Grayscale image
-            image_8bit = self.normalize_array(image_array)
-            return np.stack((image_8bit,) * 3, axis=-1)
-        elif image_array.ndim == 3:
-            if image_array.shape[2] == 3:
-                # Already RGB, just normalize
-                return self.normalize_array(image_array)
-            elif image_array.shape[2] > 3:
-                # Multi-channel image, use first three channels
-                rgb_array = image_array[:, :, :3]
-                return self.normalize_array(rgb_array)
-
-        raise ValueError(f"Unsupported image shape: {image_array.shape}")
+        return image_utils.convert_to_8bit_rgb(image_array)
 
     def add_images_to_list(self, file_names):
         first_added_item = None
@@ -1856,36 +1816,10 @@ class ImageAnnotator(QMainWindow):
         self.slice_list.addItem(item)
 
     def normalize_array(self, array):
-        # print(f"Normalizing array. Shape: {array.shape}, dtype: {array.dtype}")
-        # print(f"Array min: {array.min()}, max: {array.max()}, mean: {array.mean()}")
-
-        array_float = array.astype(np.float32)
-
-        if array.dtype == np.uint16:
-            array_normalized = (array_float - array.min()) / (array.max() - array.min())
-        elif array.dtype == np.uint8:
-            # For 8-bit images, use a simple contrast stretching
-            p_low, p_high = np.percentile(
-                array_float, (0, 100)
-            )  # Change these to 1, 99 or something to stretch the contrast for visualizing 8 bit images
-            array_normalized = np.clip(array_float, p_low, p_high)
-            array_normalized = (array_normalized - p_low) / (p_high - p_low)
-        else:
-            array_normalized = (array_float - array.min()) / (array.max() - array.min())
-
-        # Apply gamma correction
-        gamma = 1.0  # Adjust this value to fine-tune brightness (> 1 for darker, < 1 for brighter)
-        array_normalized = np.power(array_normalized, gamma)
-
-        return (array_normalized * 255).astype(np.uint8)
+        return image_utils.normalize_array(array)
 
     def adjust_contrast(self, image, low_percentile=1, high_percentile=99):
-        if image.dtype != np.uint8:
-            p_low, p_high = np.percentile(image, (low_percentile, high_percentile))
-            image_adjusted = np.clip(image, p_low, p_high)
-            image_adjusted = (image_adjusted - p_low) / (p_high - p_low)
-            return (image_adjusted * 255).astype(np.uint8)
-        return image
+        return image_utils.adjust_contrast(image, low_percentile, high_percentile)
 
     def activate_slice(self, slice_name):
         self.current_slice = slice_name
@@ -1906,19 +1840,7 @@ class ImageAnnotator(QMainWindow):
             self.slice_list.setCurrentItem(items[0])
 
     def array_to_qimage(self, array):
-        if array.ndim == 2:
-            height, width = array.shape
-            return QImage(array.data, width, height, width, QImage.Format.Format_Grayscale8)
-        elif array.ndim == 3 and array.shape[2] == 3:
-            height, width, _ = array.shape
-            bytes_per_line = 3 * width
-            return QImage(
-                array.data, width, height, bytes_per_line, QImage.Format.Format_RGB888
-            )
-        else:
-            raise ValueError(
-                f"Unsupported array shape {array.shape} for conversion to QImage"
-            )
+        return image_utils.array_to_qimage(array)
 
     def update_slice_list(self):
         self.slice_list.clear()
@@ -2012,316 +1934,13 @@ class ImageAnnotator(QMainWindow):
         self.snake_game.setFocus()
 
     def import_annotations(self):
-        if not self.image_label.check_unsaved_changes():
-            return
-        print("Starting import_annotations")
-        import_format = self.import_format_selector.currentText()
-        print(f"Import format: {import_format}")
-
-        if import_format == "COCO JSON":
-            file_name, _ = QFileDialog.getOpenFileName(
-                self, "Import COCO JSON Annotations", "", "JSON Files (*.json)"
-            )
-            if not file_name:
-                print("No file selected, returning")
-                return
-
-            print(f"Selected file: {file_name}")
-            json_dir = os.path.dirname(file_name)
-            images_dir = os.path.join(json_dir, "images")
-            imported_annotations, image_info = import_coco_json(
-                file_name, self.class_mapping
-            )
-
-        elif import_format in ["YOLO (v4 and earlier)", "YOLO (v5+)"]:
-            yaml_file, _ = QFileDialog.getOpenFileName(
-                self, "Select YOLO Dataset YAML", "", "YAML Files (*.yaml *.yml)"
-            )
-            if not yaml_file:
-                print("No YAML file selected, returning")
-                return
-
-            print(f"Selected YAML file: {yaml_file}")
-            try:
-                imported_annotations, image_info = process_import_format(
-                    import_format, yaml_file, self.class_mapping
-                )
-                yaml_dir = os.path.dirname(yaml_file)
-                if import_format == "YOLO (v4 and earlier)":
-                    images_dir = os.path.join(yaml_dir, "train", "images")
-                else:  # YOLO (v5+)
-                    images_dir = os.path.join(
-                        yaml_dir, "images", "train"
-                    )  # Preferring train over val
-            except ValueError as e:
-                QMessageBox.warning(self, "Import Error", str(e))
-                return
-
-        else:
-            QMessageBox.warning(
-                self,
-                "Unsupported Format",
-                f"The selected format '{import_format}' is not implemented for import.",
-            )
-            return
-
-        print(
-            f"JSON/YOLO directory: {json_dir if import_format == 'COCO JSON' else os.path.dirname(yaml_file)}"
-        )
-        print(f"Images directory: {images_dir}")
-        print(f"Imported annotations count: {len(imported_annotations)}")
-        print(f"Image info count: {len(image_info)}")
-
-        images_loaded = 0
-        images_not_found = []
-
-        for info in image_info.values():
-            print(f"Processing image: {info['file_name']}")
-            image_path = os.path.join(images_dir, info["file_name"])
-
-            if os.path.exists(image_path):
-                print(f"Image found at: {image_path}")
-                self.image_paths[info["file_name"]] = image_path
-                self.all_images.append(
-                    {
-                        "file_name": info["file_name"],
-                        "height": info["height"],
-                        "width": info["width"],
-                        "id": info["id"],
-                        "is_multi_slice": False,
-                    }
-                )
-                images_loaded += 1
-            else:
-                print(f"Image not found at: {image_path}")
-                images_not_found.append(info["file_name"])
-
-        print(f"Images loaded: {images_loaded}")
-        print(f"Images not found: {len(images_not_found)}")
-
-        if images_not_found:
-            message = f"The following {len(images_not_found)} images were not found in the 'images' directory:\n\n"
-            message += "\n".join(images_not_found[:10])
-            if len(images_not_found) > 10:
-                message += f"\n... and {len(images_not_found) - 10} more."
-            message += "\n\nDo you want to proceed and ignore annotations for these missing images?"
-            reply = QMessageBox.question(
-                self,
-                "Missing Images",
-                message,
-                QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
-                QMessageBox.StandardButton.No,
-            )
-
-            if reply == QMessageBox.StandardButton.No:
-                print("Import cancelled due to missing images")
-                QMessageBox.information(
-                    self,
-                    "Import Cancelled",
-                    "Import cancelled. Please ensure all images are in the 'images' directory and try again.",
-                )
-                return
-
-        # Update annotations (only for found images)
-        for image_name, annotations in imported_annotations.items():
-            if image_name not in self.image_paths:
-                continue
-            self.all_annotations[image_name] = {}
-            for category_name, category_annotations in annotations.items():
-                self.all_annotations[image_name][category_name] = []
-                for i, ann in enumerate(category_annotations, start=1):
-                    new_ann = {
-                        "segmentation": ann.get("segmentation"),
-                        "bbox": ann.get("bbox"),
-                        "category_id": ann["category_id"],
-                        "category_name": category_name,
-                        "number": i,
-                        "type": ann.get("type", "polygon"),
-                    }
-                    self.all_annotations[image_name][category_name].append(new_ann)
-
-        # Update class mapping and colors
-        for annotations in self.all_annotations.values():
-            for category_name in annotations.keys():
-                if category_name not in self.class_mapping:
-                    new_id = len(self.class_mapping) + 1
-                    self.class_mapping[category_name] = new_id
-                    self.image_label.class_colors[category_name] = QColor(
-                        Qt.GlobalColor(new_id % 16 + 7)
-                    )
-
-        print("Updating UI")
-        # Update UI
-        self.update_class_list()
-        self.update_image_list()
-        self.update_annotation_list()
-
-        # Highlight and display the first image
-        if self.image_list.count() > 0:
-            self.image_list.setCurrentRow(0)
-            self.switch_image(self.image_list.item(0))
-
-        # Select the first class if available
-        if self.class_list.count() > 0:
-            self.class_list.setCurrentRow(0)
-            self.on_class_selected()
-
-        self.image_label.update()
-
-        message = f"Annotations have been imported successfully from {file_name if import_format == 'COCO JSON' else yaml_file}.\n"
-        message += f"{images_loaded} images were loaded from the 'images' directory.\n"
-        if images_not_found:
-            message += (
-                f"Annotations for {len(images_not_found)} missing images were ignored."
-            )
-
-        print("Import complete, showing message")
-        QMessageBox.information(self, "Import Complete", message)
-        self.auto_save()  # Auto-save after importing annotations
+        return io_controller.import_annotations(self)
 
     def export_annotations(self):
-        if not self.image_label.check_unsaved_changes():
-            return
-        export_format = self.export_format_selector.currentText()
-
-        supported_formats = [
-            "COCO JSON",
-            "YOLO (v4 and earlier)",
-            "YOLO (v5+)",
-            "Labeled Images",
-            "Semantic Labels",
-            "Pascal VOC (BBox)",
-            "Pascal VOC (BBox + Segmentation)",
-        ]
-
-        if export_format not in supported_formats:
-            QMessageBox.warning(
-                self,
-                "Unsupported Format",
-                f"The selected format '{export_format}' is not implemented.",
-            )
-            return
-
-        if export_format == "COCO JSON":
-            file_name, _ = QFileDialog.getSaveFileName(
-                self, "Export COCO JSON Annotations", "", "JSON Files (*.json)"
-            )
-        else:
-            file_name = QFileDialog.getExistingDirectory(
-                self, f"Select Output Directory for {export_format} Export"
-            )
-
-        if not file_name:
-            return
-
-        self.save_current_annotations()
-
-        if export_format == "COCO JSON":
-            output_dir = os.path.dirname(file_name)
-            json_filename = os.path.basename(file_name)
-            json_file, images_dir = export_coco_json(
-                self.all_annotations,
-                self.class_mapping,
-                self.image_paths,
-                self.slices,
-                self.image_slices,
-                output_dir,
-                json_filename,
-            )
-            message = (
-                "Annotations have been exported successfully in COCO JSON format.\n"
-            )
-            message += f"JSON file: {json_file}\nImages directory: {images_dir}"
-
-        elif export_format == "YOLO (v4 and earlier)":
-            labels_dir, yaml_path = export_yolo_v4(
-                self.all_annotations,
-                self.class_mapping,
-                self.image_paths,
-                self.slices,
-                self.image_slices,
-                file_name,
-            )
-            message = "Annotations have been exported successfully in YOLO (v4 and earlier) format.\n"
-            message += f"Labels: {labels_dir}\nYAML: {yaml_path}"
-
-        elif export_format == "YOLO (v5+)":
-            output_dir, yaml_path = export_yolo_v5plus(
-                self.all_annotations,
-                self.class_mapping,
-                self.image_paths,
-                self.slices,
-                self.image_slices,
-                file_name,
-            )
-            message = (
-                "Annotations have been exported successfully in YOLO (v5+) format.\n"
-            )
-            message += f"Output directory: {output_dir}\nYAML: {yaml_path}"
-
-        elif export_format == "Labeled Images":
-            labeled_images_dir = export_labeled_images(
-                self.all_annotations,
-                self.class_mapping,
-                self.image_paths,
-                self.slices,
-                self.image_slices,
-                file_name,
-            )
-            message = f"Labeled images have been exported successfully.\nLabeled Images: {labeled_images_dir}\n"
-            message += f"A class summary has been saved in: {os.path.join(labeled_images_dir, 'class_summary.txt')}"
-
-        elif export_format == "Semantic Labels":
-            semantic_labels_dir = export_semantic_labels(
-                self.all_annotations,
-                self.class_mapping,
-                self.image_paths,
-                self.slices,
-                self.image_slices,
-                file_name,
-            )
-            message = f"Semantic labels have been exported successfully.\nSemantic Labels: {semantic_labels_dir}\n"
-            message += f"A class-pixel mapping has been saved in: {os.path.join(semantic_labels_dir, 'class_pixel_mapping.txt')}"
-
-        elif export_format == "Pascal VOC (BBox)":
-            voc_dir = export_pascal_voc_bbox(
-                self.all_annotations,
-                self.class_mapping,
-                self.image_paths,
-                self.slices,
-                self.image_slices,
-                file_name,
-            )
-            message = "Annotations have been exported successfully in Pascal VOC format (BBox only).\n"
-            message += f"Pascal VOC Annotations: {voc_dir}"
-
-        elif export_format == "Pascal VOC (BBox + Segmentation)":
-            voc_dir = export_pascal_voc_both(
-                self.all_annotations,
-                self.class_mapping,
-                self.image_paths,
-                self.slices,
-                self.image_slices,
-                file_name,
-            )
-            message = "Annotations have been exported successfully in Pascal VOC format (BBox + Segmentation).\n"
-            message += f"Pascal VOC Annotations: {voc_dir}"
-
-        QMessageBox.information(self, "Export Complete", message)
+        return io_controller.export_annotations(self)
 
     def save_slices(self, directory):
-        slices_saved = False
-        for image_file, image_slices in self.image_slices.items():
-            for slice_name, qimage in image_slices:
-                if (
-                    slice_name in self.all_annotations
-                    and self.all_annotations[slice_name]
-                ):
-                    file_path = os.path.join(directory, f"{slice_name}.png")
-                    qimage.save(file_path, "PNG")
-                    slices_saved = True
-
-        return slices_saved
+        return io_controller.save_slices(self, directory)
 
     def create_coco_annotation(self, ann, image_id, annotation_id):
         coco_ann = {
@@ -2654,8 +2273,7 @@ class ImageAnnotator(QMainWindow):
         help_menu.addAction(help_action)
 
     def change_font_size(self, size):
-        self.current_font_size = size
-        self.apply_theme_and_font()
+        theme.change_font_size(self, size)
 
     def unload_ai_models(self):
         """Drop cached SAM/DINO model objects to free GPU/CPU memory.
@@ -3679,64 +3297,22 @@ class ImageAnnotator(QMainWindow):
     # --- END DINO Methods ---
 
     def setup_font_size_selector(self):
-        font_size_label = QLabel("Font Size:")
-        self.font_size_selector = QComboBox()
-        self.font_size_selector.addItems(["Small", "Medium", "Large"])
-        self.font_size_selector.setCurrentText("Medium")
-        self.font_size_selector.currentTextChanged.connect(self.on_font_size_changed)
-
-        self.sidebar_layout.addWidget(font_size_label)
-        self.sidebar_layout.addWidget(self.font_size_selector)
+        theme.setup_font_size_selector(self)
 
     def on_font_size_changed(self, size):
-        self.current_font_size = size
-        self.apply_theme_and_font()
+        theme.on_font_size_changed(self, size)
 
     def apply_theme_and_font(self):
-        font_size = self.font_sizes[self.current_font_size]
-        if self.dark_mode:
-            style = soft_dark_stylesheet
-        else:
-            style = default_stylesheet
-
-        # Combine the theme stylesheet with font size
-        combined_style = f"{style}\nQWidget {{ font-size: {font_size}pt; }}"
-        self.setStyleSheet(combined_style)
-
-        # Apply font size to all widgets
-        for widget in self.findChildren(QWidget):
-            font = widget.font()
-            font.setPointSize(font_size)
-            widget.setFont(font)
-
-        self.image_label.setFont(QFont("Arial", font_size))
-        self.update()
+        theme.apply_theme_and_font(self)
 
     def toggle_dark_mode(self):
-        self.dark_mode = not self.dark_mode
-        self.apply_theme_and_font()
-
-        # Update slice list colors
-        self.update_slice_list_colors()
-
-        # Update other UI elements if necessary
-        self.update_class_list()
-        self.update_annotation_list()
-
-        # Force a repaint of the main window
-        self.repaint()
+        theme.toggle_dark_mode(self)
 
     def apply_stylesheet(self):
-        if self.dark_mode:
-            self.setStyleSheet(soft_dark_stylesheet)
-        else:
-            self.setStyleSheet(default_stylesheet)
+        theme.apply_stylesheet(self)
 
     def update_ui_colors(self):
-        # Update colors for elements that need to retain their functionality
-        self.update_annotation_list_colors()
-        self.update_slice_list_colors()
-        self.image_label.update()
+        theme.update_ui_colors(self)
 
     def setup_image_area(self):
         """Set up the main image area."""

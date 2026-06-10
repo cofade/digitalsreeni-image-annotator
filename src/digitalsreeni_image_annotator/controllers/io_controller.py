@@ -1,0 +1,338 @@
+"""Import / export / save-slices orchestration extracted from `ImageAnnotator`.
+
+The actual format readers and writers live in `io.import_formats` and
+`io.export_formats` and are pure functions parameterised on annotation
+state. The wrappers here are the UI glue: file dialogs, state mutation
+on the main window, status message boxes, auto-save trigger.
+
+Functions take the main window as the first argument so call sites
+inside `annotator_window.py` delegate trivially.
+"""
+
+import os
+
+from PyQt6.QtCore import Qt
+from PyQt6.QtGui import QColor
+from PyQt6.QtWidgets import QFileDialog, QMessageBox
+
+from ..io.export_formats import (
+    export_coco_json,
+    export_labeled_images,
+    export_pascal_voc_bbox,
+    export_pascal_voc_both,
+    export_semantic_labels,
+    export_yolo_v4,
+    export_yolo_v5plus,
+)
+from ..io.import_formats import import_coco_json, process_import_format
+
+
+def import_annotations(mw):
+    if not mw.image_label.check_unsaved_changes():
+        return
+    print("Starting import_annotations")
+    import_format = mw.import_format_selector.currentText()
+    print(f"Import format: {import_format}")
+
+    if import_format == "COCO JSON":
+        file_name, _ = QFileDialog.getOpenFileName(
+            mw, "Import COCO JSON Annotations", "", "JSON Files (*.json)"
+        )
+        if not file_name:
+            print("No file selected, returning")
+            return
+
+        print(f"Selected file: {file_name}")
+        json_dir = os.path.dirname(file_name)
+        images_dir = os.path.join(json_dir, "images")
+        imported_annotations, image_info = import_coco_json(file_name, mw.class_mapping)
+
+    elif import_format in ["YOLO (v4 and earlier)", "YOLO (v5+)"]:
+        yaml_file, _ = QFileDialog.getOpenFileName(
+            mw, "Select YOLO Dataset YAML", "", "YAML Files (*.yaml *.yml)"
+        )
+        if not yaml_file:
+            print("No YAML file selected, returning")
+            return
+
+        print(f"Selected YAML file: {yaml_file}")
+        try:
+            imported_annotations, image_info = process_import_format(
+                import_format, yaml_file, mw.class_mapping
+            )
+            yaml_dir = os.path.dirname(yaml_file)
+            if import_format == "YOLO (v4 and earlier)":
+                images_dir = os.path.join(yaml_dir, "train", "images")
+            else:
+                images_dir = os.path.join(yaml_dir, "images", "train")
+        except ValueError as e:
+            QMessageBox.warning(mw, "Import Error", str(e))
+            return
+
+    else:
+        QMessageBox.warning(
+            mw,
+            "Unsupported Format",
+            f"The selected format '{import_format}' is not implemented for import.",
+        )
+        return
+
+    print(
+        f"JSON/YOLO directory: {json_dir if import_format == 'COCO JSON' else os.path.dirname(yaml_file)}"
+    )
+    print(f"Images directory: {images_dir}")
+    print(f"Imported annotations count: {len(imported_annotations)}")
+    print(f"Image info count: {len(image_info)}")
+
+    images_loaded = 0
+    images_not_found = []
+
+    for info in image_info.values():
+        print(f"Processing image: {info['file_name']}")
+        image_path = os.path.join(images_dir, info["file_name"])
+
+        if os.path.exists(image_path):
+            print(f"Image found at: {image_path}")
+            mw.image_paths[info["file_name"]] = image_path
+            mw.all_images.append(
+                {
+                    "file_name": info["file_name"],
+                    "height": info["height"],
+                    "width": info["width"],
+                    "id": info["id"],
+                    "is_multi_slice": False,
+                }
+            )
+            images_loaded += 1
+        else:
+            print(f"Image not found at: {image_path}")
+            images_not_found.append(info["file_name"])
+
+    print(f"Images loaded: {images_loaded}")
+    print(f"Images not found: {len(images_not_found)}")
+
+    if images_not_found:
+        message = f"The following {len(images_not_found)} images were not found in the 'images' directory:\n\n"
+        message += "\n".join(images_not_found[:10])
+        if len(images_not_found) > 10:
+            message += f"\n... and {len(images_not_found) - 10} more."
+        message += "\n\nDo you want to proceed and ignore annotations for these missing images?"
+        reply = QMessageBox.question(
+            mw,
+            "Missing Images",
+            message,
+            QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
+            QMessageBox.StandardButton.No,
+        )
+
+        if reply == QMessageBox.StandardButton.No:
+            print("Import cancelled due to missing images")
+            QMessageBox.information(
+                mw,
+                "Import Cancelled",
+                "Import cancelled. Please ensure all images are in the 'images' directory and try again.",
+            )
+            return
+
+    for image_name, annotations in imported_annotations.items():
+        if image_name not in mw.image_paths:
+            continue
+        mw.all_annotations[image_name] = {}
+        for category_name, category_annotations in annotations.items():
+            mw.all_annotations[image_name][category_name] = []
+            for i, ann in enumerate(category_annotations, start=1):
+                new_ann = {
+                    "segmentation": ann.get("segmentation"),
+                    "bbox": ann.get("bbox"),
+                    "category_id": ann["category_id"],
+                    "category_name": category_name,
+                    "number": i,
+                    "type": ann.get("type", "polygon"),
+                }
+                mw.all_annotations[image_name][category_name].append(new_ann)
+
+    for annotations in mw.all_annotations.values():
+        for category_name in annotations.keys():
+            if category_name not in mw.class_mapping:
+                new_id = len(mw.class_mapping) + 1
+                mw.class_mapping[category_name] = new_id
+                mw.image_label.class_colors[category_name] = QColor(
+                    Qt.GlobalColor(new_id % 16 + 7)
+                )
+
+    print("Updating UI")
+    mw.update_class_list()
+    mw.update_image_list()
+    mw.update_annotation_list()
+
+    if mw.image_list.count() > 0:
+        mw.image_list.setCurrentRow(0)
+        mw.switch_image(mw.image_list.item(0))
+
+    if mw.class_list.count() > 0:
+        mw.class_list.setCurrentRow(0)
+        mw.on_class_selected()
+
+    mw.image_label.update()
+
+    message = (
+        f"Annotations have been imported successfully from "
+        f"{file_name if import_format == 'COCO JSON' else yaml_file}.\n"
+    )
+    message += f"{images_loaded} images were loaded from the 'images' directory.\n"
+    if images_not_found:
+        message += f"Annotations for {len(images_not_found)} missing images were ignored."
+
+    print("Import complete, showing message")
+    QMessageBox.information(mw, "Import Complete", message)
+    mw.auto_save()
+
+
+def export_annotations(mw):
+    if not mw.image_label.check_unsaved_changes():
+        return
+    export_format = mw.export_format_selector.currentText()
+
+    supported_formats = [
+        "COCO JSON",
+        "YOLO (v4 and earlier)",
+        "YOLO (v5+)",
+        "Labeled Images",
+        "Semantic Labels",
+        "Pascal VOC (BBox)",
+        "Pascal VOC (BBox + Segmentation)",
+    ]
+
+    if export_format not in supported_formats:
+        QMessageBox.warning(
+            mw,
+            "Unsupported Format",
+            f"The selected format '{export_format}' is not implemented.",
+        )
+        return
+
+    if export_format == "COCO JSON":
+        file_name, _ = QFileDialog.getSaveFileName(
+            mw, "Export COCO JSON Annotations", "", "JSON Files (*.json)"
+        )
+    else:
+        file_name = QFileDialog.getExistingDirectory(
+            mw, f"Select Output Directory for {export_format} Export"
+        )
+
+    if not file_name:
+        return
+
+    mw.save_current_annotations()
+
+    if export_format == "COCO JSON":
+        output_dir = os.path.dirname(file_name)
+        json_filename = os.path.basename(file_name)
+        json_file, images_dir = export_coco_json(
+            mw.all_annotations,
+            mw.class_mapping,
+            mw.image_paths,
+            mw.slices,
+            mw.image_slices,
+            output_dir,
+            json_filename,
+        )
+        message = "Annotations have been exported successfully in COCO JSON format.\n"
+        message += f"JSON file: {json_file}\nImages directory: {images_dir}"
+
+    elif export_format == "YOLO (v4 and earlier)":
+        labels_dir, yaml_path = export_yolo_v4(
+            mw.all_annotations,
+            mw.class_mapping,
+            mw.image_paths,
+            mw.slices,
+            mw.image_slices,
+            file_name,
+        )
+        message = "Annotations have been exported successfully in YOLO (v4 and earlier) format.\n"
+        message += f"Labels: {labels_dir}\nYAML: {yaml_path}"
+
+    elif export_format == "YOLO (v5+)":
+        output_dir, yaml_path = export_yolo_v5plus(
+            mw.all_annotations,
+            mw.class_mapping,
+            mw.image_paths,
+            mw.slices,
+            mw.image_slices,
+            file_name,
+        )
+        message = "Annotations have been exported successfully in YOLO (v5+) format.\n"
+        message += f"Output directory: {output_dir}\nYAML: {yaml_path}"
+
+    elif export_format == "Labeled Images":
+        labeled_images_dir = export_labeled_images(
+            mw.all_annotations,
+            mw.class_mapping,
+            mw.image_paths,
+            mw.slices,
+            mw.image_slices,
+            file_name,
+        )
+        message = (
+            f"Labeled images have been exported successfully.\n"
+            f"Labeled Images: {labeled_images_dir}\n"
+        )
+        message += (
+            f"A class summary has been saved in: "
+            f"{os.path.join(labeled_images_dir, 'class_summary.txt')}"
+        )
+
+    elif export_format == "Semantic Labels":
+        semantic_labels_dir = export_semantic_labels(
+            mw.all_annotations,
+            mw.class_mapping,
+            mw.image_paths,
+            mw.slices,
+            mw.image_slices,
+            file_name,
+        )
+        message = (
+            f"Semantic labels have been exported successfully.\n"
+            f"Semantic Labels: {semantic_labels_dir}\n"
+        )
+        message += (
+            f"A class-pixel mapping has been saved in: "
+            f"{os.path.join(semantic_labels_dir, 'class_pixel_mapping.txt')}"
+        )
+
+    elif export_format == "Pascal VOC (BBox)":
+        voc_dir = export_pascal_voc_bbox(
+            mw.all_annotations,
+            mw.class_mapping,
+            mw.image_paths,
+            mw.slices,
+            mw.image_slices,
+            file_name,
+        )
+        message = "Annotations have been exported successfully in Pascal VOC format (BBox only).\n"
+        message += f"Pascal VOC Annotations: {voc_dir}"
+
+    elif export_format == "Pascal VOC (BBox + Segmentation)":
+        voc_dir = export_pascal_voc_both(
+            mw.all_annotations,
+            mw.class_mapping,
+            mw.image_paths,
+            mw.slices,
+            mw.image_slices,
+            file_name,
+        )
+        message = "Annotations have been exported successfully in Pascal VOC format (BBox + Segmentation).\n"
+        message += f"Pascal VOC Annotations: {voc_dir}"
+
+    QMessageBox.information(mw, "Export Complete", message)
+
+
+def save_slices(mw, directory):
+    slices_saved = False
+    for image_file, image_slices in mw.image_slices.items():
+        for slice_name, qimage in image_slices:
+            if slice_name in mw.all_annotations and mw.all_annotations[slice_name]:
+                file_path = os.path.join(directory, f"{slice_name}.png")
+                qimage.save(file_path, "PNG")
+                slices_saved = True
+    return slices_saved

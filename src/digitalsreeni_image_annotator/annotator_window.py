@@ -1,12 +1,10 @@
 import os
-import traceback
 import warnings
 from PyQt6.QtCore import Qt, QTimer
 from PyQt6.QtGui import (
     QAction,
     QColor,
     QFont,
-    QIcon,
     QImage,
     QKeySequence,
     QPalette,
@@ -17,19 +15,13 @@ from PyQt6.QtWidgets import (
     QAbstractItemView,
     QApplication,
     QButtonGroup,
-    QCheckBox,
-    QColorDialog,
     QComboBox,
     QDialog,
-    QDialogButtonBox,
     QFileDialog,
-    QGridLayout,
     QHBoxLayout,
-    QInputDialog,
     QLabel,
     QLineEdit,
     QListWidget,
-    QListWidgetItem,
     QMainWindow,
     QMenu,
     QMessageBox,
@@ -44,6 +36,7 @@ from PyQt6.QtWidgets import (
 
 from .controllers import io_controller
 from .controllers.annotation_controller import AnnotationController
+from .controllers.class_controller import ClassController
 from .controllers.dino_controller import DINOController, _DINOReviewEventFilter
 from .controllers.image_controller import ImageController
 from .controllers.project_controller import ProjectController
@@ -146,6 +139,7 @@ class ImageAnnotator(QMainWindow):
         self.dino_controller = DINOController(self)
         self.yolo_controller = YOLOController(self)
         self.annotation_controller = AnnotationController(self)
+        self.class_controller = ClassController(self)
 
         # Create sam_magic_wand_button
         self.sam_magic_wand_button = QPushButton("Magic Wand")
@@ -276,37 +270,13 @@ class ImageAnnotator(QMainWindow):
         return self.image_controller.update_image_list()
 
     def select_class(self, index):
-        if 0 <= index < self.class_list.count():
-            item = self.class_list.item(index)
-            self.class_list.setCurrentItem(item)
-            self.current_class = item.text()
-            print(f"Selected class: {self.current_class}")
-        else:
-            print("Invalid class index")
+        return self.class_controller.select_class(index)
 
     def close_project(self):
         return self.project_controller.close_project()
 
     def delete_selected_class(self):
-        selected_items = self.class_list.selectedItems()
-        if not selected_items:
-            QMessageBox.warning(
-                self, "No Selection", "Please select a class to delete."
-            )
-            return
-
-        class_name = selected_items[0].text()
-        reply = QMessageBox.question(
-            self,
-            "Delete Class",
-            f"Are you sure you want to delete the class '{class_name}'?",
-            QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
-            QMessageBox.StandardButton.No,
-        )
-        if reply == QMessageBox.StandardButton.Yes:
-            self.delete_class(
-                class_name
-            )  # Sreeni note: Implement this method to handle class deletion
+        return self.class_controller.delete_selected_class()
 
     def check_missing_images(self):
         return self.project_controller.check_missing_images()
@@ -566,49 +536,7 @@ class ImageAnnotator(QMainWindow):
         return self.annotation_controller.update_annotation_list(image_name)
 
     def update_slice_list_colors(self):
-        # Set the background color of the entire list widget
-        if self.dark_mode:
-            self.slice_list.setStyleSheet(
-                "QListWidget { background-color: rgb(40, 40, 40); }"
-            )
-        else:
-            self.slice_list.setStyleSheet(
-                "QListWidget { background-color: rgb(240, 240, 240); }"
-            )
-
-        for i in range(self.slice_list.count()):
-            item = self.slice_list.item(i)
-            slice_name = item.text()
-
-            if self.dark_mode:
-                # Dark mode (annotated colors match add_slice_to_list —
-                # muted steel-blue, light text; not the prior glaring
-                # light-blue bg)
-                if slice_name in self.all_annotations and any(
-                    self.all_annotations[slice_name].values()
-                ):
-                    item.setForeground(QColor(235, 235, 235))
-                    item.setBackground(QColor(58, 95, 140))
-                else:
-                    item.setForeground(QColor(200, 200, 200))  # Light gray text
-                    item.setBackground(QColor(40, 40, 40))  # Very dark gray background
-            else:
-                # Light mode
-                if slice_name in self.all_annotations and any(
-                    self.all_annotations[slice_name].values()
-                ):
-                    item.setForeground(QColor(255, 255, 255))  # White text
-                    item.setBackground(
-                        QColor(70, 130, 180)
-                    )  # Medium-dark blue background
-                else:
-                    item.setForeground(QColor(0, 0, 0))  # Black text
-                    item.setBackground(
-                        QColor(240, 240, 240)
-                    )  # Very light gray background
-
-        # Force the list to repaint
-        self.slice_list.repaint()
+        return self.class_controller.update_slice_list_colors()
 
     def update_annotation_list_colors(self, class_name=None, color=None):
         return self.annotation_controller.update_annotation_list_colors(class_name, color)
@@ -1471,144 +1399,19 @@ class ImageAnnotator(QMainWindow):
         self.update_image_info()
 
     def add_class(self, class_name=None, color=None):
-        if not self.image_label.check_unsaved_changes():
-            return
-
-        if class_name is None:
-            while True:
-                class_name, ok = QInputDialog.getText(
-                    self, "Add Class", "Enter class name:"
-                )
-                if not ok:
-                    print("Class addition cancelled")
-                    return
-                if not class_name.strip():
-                    QMessageBox.warning(
-                        self,
-                        "Invalid Input",
-                        "Please enter a class name or press Cancel.",
-                    )
-                    continue
-                if class_name in self.class_mapping:
-                    QMessageBox.warning(
-                        self,
-                        "Duplicate Class",
-                        f"The class '{class_name}' already exists. Please choose a different name.",
-                    )
-                    continue
-                break
-        else:
-            # For programmatic addition (e.g., from YOLO predictions)
-            if class_name in self.class_mapping:
-                print(f"Class '{class_name}' already exists. Skipping addition.")
-                return
-
-        if not isinstance(class_name, str):
-            print(
-                f"Warning: class_name is not a string. Converting {class_name} to string."
-            )
-            class_name = str(class_name)
-
-        if color is None:
-            color = QColor(Qt.GlobalColor(len(self.image_label.class_colors) % 16 + 7))
-        elif isinstance(color, str):
-            color = QColor(color)
-
-        print(f"Adding class: {class_name}, color: {color.name()}")
-
-        self.image_label.class_colors[class_name] = color
-        self.class_mapping[class_name] = len(self.class_mapping) + 1
-
-        try:
-            item = QListWidgetItem(class_name)
-
-            # Create a color indicator
-            pixmap = QPixmap(16, 16)
-            pixmap.fill(color)
-            item.setIcon(QIcon(pixmap))
-
-            # Set visibility state
-            item.setData(Qt.ItemDataRole.UserRole, True)
-
-            # Set checkbox
-            item.setFlags(item.flags() | Qt.ItemFlag.ItemIsUserCheckable)
-            item.setCheckState(Qt.CheckState.Checked)
-
-            self.class_list.addItem(item)
-
-            self.class_list.setCurrentItem(item)
-            self.current_class = class_name
-            print(f"Class added successfully: {class_name}")
-
-            # Sync DINO phrase/threshold state. Select the newly added
-            # row so the phrase editor below the table reveals itself —
-            # it hides by default and only becomes visible when a row is
-            # selected (set_active_class). Skip the row-select during
-            # project load: classes are added in a loop and we don't want
-            # N row-selection signals firing during bulk restoration; the
-            # caller will select an appropriate row after load completes.
-            row_added = self.dino_class_table.add_class(class_name)
-            self.dino_phrase_panel.on_class_added(class_name)
-            if row_added and not self.is_loading_project:
-                self.dino_class_table.selectRow(self.dino_class_table.rowCount() - 1)
-
-            if not self.is_loading_project:
-                self.auto_save()
-        except Exception as e:
-            print(f"Error adding class: {e}")
-            traceback.print_exc()
+        return self.class_controller.add_class(class_name, color)
 
     def update_class_item_color(self, item, color):
-        pixmap = QPixmap(16, 16)
-        pixmap.fill(color)
-        item.setIcon(QIcon(pixmap))
+        return self.class_controller.update_class_item_color(item, color)
 
     def update_class_list(self):
-        self.class_list.clear()
-        for class_name, color in self.image_label.class_colors.items():
-            item = QListWidgetItem(class_name)
-
-            # Create a color indicator
-            pixmap = QPixmap(16, 16)
-            pixmap.fill(color)
-            item.setIcon(QIcon(pixmap))
-
-            # Store the visibility state
-            item.setData(
-                Qt.ItemDataRole.UserRole, self.image_label.class_visibility.get(class_name, True)
-            )
-
-            # Set checkbox
-            item.setFlags(item.flags() | Qt.ItemFlag.ItemIsUserCheckable)
-            item.setCheckState(Qt.CheckState.Checked if item.data(Qt.ItemDataRole.UserRole) else Qt.CheckState.Unchecked)
-
-            self.class_list.addItem(item)
-
-        # Re-select the current class if it exists
-        if self.current_class:
-            items = self.class_list.findItems(self.current_class, Qt.MatchFlag.MatchExactly)
-            if items:
-                self.class_list.setCurrentItem(items[0])
-        elif self.class_list.count() > 0:
-            # If no class is selected, select the first one
-            self.class_list.setCurrentItem(self.class_list.item(0))
-
-        print(f"Updated class list with {self.class_list.count()} items")
+        return self.class_controller.update_class_list()
 
     def update_class_selection(self):
-        for i in range(self.class_list.count()):
-            item = self.class_list.item(i)
-            if item.text() == self.current_class:
-                item.setSelected(True)
-            else:
-                item.setSelected(False)
+        return self.class_controller.update_class_selection()
 
     def toggle_class_visibility(self, item):
-        class_name = item.text()
-        is_visible = item.checkState() == Qt.CheckState.Checked
-        self.image_label.set_class_visibility(class_name, is_visible)
-        item.setData(Qt.ItemDataRole.UserRole, is_visible)
-        self.image_label.update()
+        return self.class_controller.toggle_class_visibility(item)
 
     def change_annotation_class(self):
         return self.annotation_controller.change_annotation_class()
@@ -1722,23 +1525,7 @@ class ImageAnnotator(QMainWindow):
             self.image_label.setCursor(Qt.CursorShape.ArrowCursor)
 
     def on_class_selected(self, current=None, previous=None):
-        if not self.image_label.check_unsaved_changes():
-            return
-
-        if current is None:
-            current = self.class_list.currentItem()
-
-        if current:
-            self.current_class = current.text()
-            print(f"Class selected: {self.current_class}")
-
-            if self.current_class.startswith("Temp-"):
-                self.disable_annotation_tools()
-            else:
-                self.enable_annotation_tools()
-        else:
-            self.current_class = None
-            self.disable_annotation_tools()
+        return self.class_controller.on_class_selected(current, previous)
 
     def disable_annotation_tools(self):
         for button in self.tool_group.buttons():
@@ -1751,169 +1538,16 @@ class ImageAnnotator(QMainWindow):
             button.setEnabled(True)
 
     def show_class_context_menu(self, position):
-        menu = QMenu()
-        rename_action = menu.addAction("Rename Class")
-        change_color_action = menu.addAction("Change Color")
-        delete_action = menu.addAction("Delete Class")
-
-        item = self.class_list.itemAt(position)
-        if item:
-            action = menu.exec(self.class_list.mapToGlobal(position))
-
-            if action == rename_action:
-                self.rename_class(item)
-            elif action == change_color_action:
-                self.change_class_color(item)
-            elif action == delete_action:
-                self.delete_class(item)
-        else:
-            QMessageBox.warning(
-                self, "No Selection", "Please select a class to perform actions."
-            )
+        return self.class_controller.show_class_context_menu(position)
 
     def change_class_color(self, item):
-        class_name = item.text()
-        current_color = self.image_label.class_colors.get(class_name, QColor(Qt.GlobalColor.white))
-        color = QColorDialog.getColor(
-            current_color, self, f"Select Color for {class_name}"
-        )
-
-        if color.isValid():
-            self.image_label.class_colors[class_name] = color
-
-            # Update the color indicator
-            pixmap = QPixmap(16, 16)
-            pixmap.fill(color)
-            item.setIcon(QIcon(pixmap))
-
-            self.update_annotation_list_colors(class_name, color)
-            self.image_label.update()
-            self.auto_save()  # Auto-save after changing class color
+        return self.class_controller.change_class_color(item)
 
     def rename_class(self, item):
-        old_name = item.text()
-        new_name, ok = QInputDialog.getText(
-            self, "Rename Class", "Enter new class name:", text=old_name
-        )
-        if ok and new_name and new_name != old_name:
-            # Update class mapping
-            if old_name in self.class_mapping:
-                old_id = self.class_mapping[old_name]
-                self.class_mapping[new_name] = old_id
-                del self.class_mapping[old_name]
-            else:
-                print(f"Warning: Class '{old_name}' not found in class_mapping")
-                return
-
-            # Update class colors
-            if old_name in self.image_label.class_colors:
-                self.image_label.class_colors[new_name] = (
-                    self.image_label.class_colors.pop(old_name)
-                )
-            else:
-                print(f"Warning: Class '{old_name}' not found in class_colors")
-                return
-
-            # Update annotations for all images and slices
-            for image_name, image_annotations in self.all_annotations.items():
-                if old_name in image_annotations:
-                    image_annotations[new_name] = image_annotations.pop(old_name)
-                    for annotation in image_annotations[new_name]:
-                        annotation["category_name"] = new_name
-
-            # Update current image annotations
-            if old_name in self.image_label.annotations:
-                self.image_label.annotations[new_name] = (
-                    self.image_label.annotations.pop(old_name)
-                )
-                for annotation in self.image_label.annotations[new_name]:
-                    annotation["category_name"] = new_name
-
-            # Update current class if it's the renamed one
-            if self.current_class == old_name:
-                self.current_class = new_name
-
-            # Update annotation list for all images and slices
-            self.update_all_annotation_lists()
-
-            # Update class list
-            item.setText(new_name)
-
-            # Update the image label
-            self.image_label.update()
-            self.auto_save()  # Auto-save after renaming a class
-
-            print(f"Class renamed from '{old_name}' to '{new_name}'")
+        return self.class_controller.rename_class(item)
 
     def delete_class(self, item=None):
-        if item is None:
-            item = self.class_list.currentItem()
-
-        if item is None:
-            QMessageBox.warning(
-                self, "No Selection", "Please select a class to delete."
-            )
-            return
-
-        class_name = item.text()
-
-        # Show confirmation dialog
-        reply = QMessageBox.question(
-            self,
-            "Delete Class",
-            f"Are you sure you want to delete the class '{class_name}'?\n\n"
-            "This will remove all annotations associated with this class.",
-            QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
-            QMessageBox.StandardButton.No,
-        )
-
-        if reply == QMessageBox.StandardButton.Yes:
-            # Proceed with deletion
-            # Remove class color
-            self.image_label.class_colors.pop(class_name, None)
-
-            # Remove class from mapping
-            self.class_mapping.pop(class_name, None)
-
-            # Remove annotations for this class from all images
-            for image_annotations in self.all_annotations.values():
-                image_annotations.pop(class_name, None)
-
-            # Remove annotations for this class from current image
-            self.image_label.annotations.pop(class_name, None)
-
-            # Sync DINO state
-            self.dino_class_table.remove_class(class_name)
-            self.dino_phrase_panel.on_class_removed(class_name)
-
-            # Update annotation list
-            self.update_annotation_list()
-
-            # Remove class from list
-            row = self.class_list.row(item)
-            self.class_list.takeItem(row)
-
-            # Update current_class
-            if self.current_class == class_name:
-                self.current_class = None
-                if self.class_list.count() > 0:
-                    self.class_list.setCurrentRow(0)
-                    self.on_class_selected(self.class_list.item(0))
-                else:
-                    self.disable_annotation_tools()
-
-            self.image_label.update()
-
-            # Inform the user
-            QMessageBox.information(
-                self, "Class Deleted", f"The class '{class_name}' has been deleted."
-            )
-            self.auto_save()  # Auto-save after deleting a class
-        else:
-            # User cancelled the operation
-            QMessageBox.information(
-                self, "Deletion Cancelled", "The class deletion was cancelled."
-            )
+        return self.class_controller.delete_class(item)
 
     def finish_polygon(self):
         return self.annotation_controller.finish_polygon()
@@ -2028,10 +1662,7 @@ class ImageAnnotator(QMainWindow):
         return self.dino_controller.reject_visible_temp_classes()
 
     def is_class_visible(self, class_name):
-        items = self.class_list.findItems(class_name, Qt.MatchFlag.MatchExactly)
-        if items:
-            return items[0].checkState() == Qt.CheckState.Checked
-        return False
+        return self.class_controller.is_class_visible(class_name)
 
     def check_temp_annotations(self):
         return self.dino_controller.check_temp_annotations()

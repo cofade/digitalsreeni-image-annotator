@@ -1,10 +1,8 @@
 import copy
 import json
 import os
-import shutil
 import traceback
 import warnings
-from datetime import datetime
 
 import cv2
 import numpy as np
@@ -58,6 +56,7 @@ from shapely.validation import make_valid
 from tifffile import TiffFile
 
 from .controllers import io_controller
+from .controllers.project_controller import ProjectController
 from .core import image_utils
 from .ui import theme
 from .dialogs.annotation_statistics import show_annotation_statistics
@@ -183,6 +182,8 @@ class ImageAnnotator(QMainWindow):
 
         self.is_loading_project = False
         self.backup_project_path = None
+
+        self.project_controller = ProjectController(self)
 
         self.setWindowTitle("Image Annotator")
         self.setGeometry(100, 100, 1400, 800)
@@ -333,56 +334,10 @@ class ImageAnnotator(QMainWindow):
         self.update_ui_for_current_tool()
 
     def update_window_title(self):
-        base_title = "Image Annotator"
-        if hasattr(self, "current_project_file"):
-            project_name = os.path.basename(self.current_project_file)
-            project_name = os.path.splitext(project_name)[
-                0
-            ]  # Remove the file extension
-            self.setWindowTitle(f"{base_title} - {project_name}")
-        else:
-            self.setWindowTitle(base_title)
+        return self.project_controller.update_window_title()
 
     def new_project(self):
-        self.remove_all_temp_annotations()  # Remove temp annotations from the previous project
-        project_file, _ = QFileDialog.getSaveFileName(
-            self, "Create New Project", "", "Image Annotator Project (*.iap)"
-        )
-        if project_file:
-            # Ensure the file has the correct extension
-            if not project_file.lower().endswith(".iap"):
-                project_file += ".iap"
-
-            self.current_project_file = project_file
-            self.current_project_dir = os.path.dirname(project_file)
-
-            # Create the images directory
-            images_dir = os.path.join(self.current_project_dir, "images")
-            os.makedirs(images_dir, exist_ok=True)
-
-            # Clear existing data without showing messages
-            self.clear_all(new_project=True, show_messages=False)
-
-            # Prompt for initial project notes
-            notes, ok = QInputDialog.getMultiLineText(
-                self, "Project Notes", "Enter initial project notes:"
-            )
-            if ok:
-                self.project_notes = notes
-            else:
-                self.project_notes = ""
-
-            self.project_creation_date = datetime.now().isoformat()
-
-            # Save the empty project without showing a message
-            self.save_project(show_message=False)
-
-            # Keep only this message
-            self.show_info(
-                "New Project", f"New project created at {self.current_project_file}"
-            )
-            self.initialize_yolo_trainer()
-            self.update_window_title()
+        return self.project_controller.new_project()
 
     def show_project_search(self):
         from .dialogs.project_search import show_project_search
@@ -390,313 +345,31 @@ class ImageAnnotator(QMainWindow):
         show_project_search(self)
 
     def open_project(self):
-        print("open_project method called")  # Debug print
-        self.remove_all_temp_annotations()  # Remove temp annotations from the previous project
-        project_file, _ = QFileDialog.getOpenFileName(
-            self, "Open Project", "", "Image Annotator Project (*.iap)"
-        )
-        print(f"Selected project file: {project_file}")  # Debug print
-        if project_file:
-            try:
-                self.backup_project_before_open(project_file)
-                self.open_specific_project(project_file)
-            except Exception as e:
-                self.restore_project_from_backup()
-                QMessageBox.critical(
-                    self,
-                    "Error",
-                    f"An error occurred while opening the project: {str(e)}\n"
-                    f"The project file has been restored from backup.",
-                )
-        else:
-            print("No project file selected")  # Debug print
+        return self.project_controller.open_project()
 
     def backup_project_before_open(self, project_file):
-        """Create a backup of the project file before opening it."""
-        import os
-        import shutil
-
-        timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-        backup_dir = os.path.join(os.path.dirname(project_file), ".project_backups")
-        os.makedirs(backup_dir, exist_ok=True)
-
-        self.backup_project_path = os.path.join(
-            backup_dir, f"{os.path.basename(project_file)}.{timestamp}.backup"
-        )
-        shutil.copy2(project_file, self.backup_project_path)
+        return self.project_controller.backup_project_before_open(project_file)
 
     def restore_project_from_backup(self):
-        """Restore the project file from its backup if available."""
-        if self.backup_project_path and os.path.exists(self.backup_project_path):
-            try:
-                shutil.copy2(self.backup_project_path, self.current_project_file)
-                print(f"Project restored from backup: {self.backup_project_path}")
-            except Exception as e:
-                print(f"Failed to restore from backup: {str(e)}")
+        return self.project_controller.restore_project_from_backup()
 
     def open_specific_project(self, project_file):
-        print(f"Opening specific project: {project_file}")  # Debug print
-        if os.path.exists(project_file):
-            try:
-                self.is_loading_project = True  # Set loading flag
-
-                with open(project_file, "r") as f:
-                    project_data = json.load(f)
-
-                self.clear_all(show_messages=False)
-                self.current_project_file = project_file
-                self.current_project_dir = os.path.dirname(project_file)
-
-                # Load project notes and metadata
-                self.project_notes = project_data.get("notes", "")
-                self.project_creation_date = project_data.get("creation_date", "")
-                self.last_modified = project_data.get("last_modified", "")
-
-                # Parse dates
-                if self.project_creation_date:
-                    self.project_creation_date = datetime.fromisoformat(
-                        self.project_creation_date
-                    ).strftime("%Y-%m-%d %H:%M:%S")
-                if self.last_modified:
-                    self.last_modified = datetime.fromisoformat(
-                        self.last_modified
-                    ).strftime("%Y-%m-%d %H:%M:%S")
-
-                # Load all data without triggering auto-saves
-                self.load_project_data(project_data)
-
-                # Now save once after everything is loaded
-                self.is_loading_project = False  # Clear loading flag
-                # Reveal the phrase editor if any classes exist — the
-                # per-class selectRow inside add_class was skipped during
-                # load (see add_class). Selecting row 0 is enough; the
-                # user can switch rows freely afterwards.
-                if self.dino_class_table.rowCount() > 0:
-                    self.dino_class_table.selectRow(0)
-                self.save_project(show_message=False)  # Save once after loading
-
-                self.initialize_yolo_trainer()
-                self.update_window_title()
-
-                print(f"Project opened successfully: {project_file}")
-                QMessageBox.information(
-                    self,
-                    "Project Opened",
-                    f"Project opened successfully: {os.path.basename(project_file)}",
-                )
-
-            except Exception as e:
-                self.is_loading_project = False  # Make sure to clear flag on error
-                raise e
-        else:
-            print(f"Project file not found: {project_file}")
-            QMessageBox.critical(
-                self, "Error", f"Project file not found: {project_file}"
-            )
+        return self.project_controller.open_specific_project(project_file)
 
     def load_project_data(self, project_data):
-        """Load project data without triggering auto-saves."""
-        # Load classes
-        self.class_mapping.clear()
-        self.image_label.class_colors.clear()
-        for class_info in project_data.get("classes", []):
-            self.add_class(class_info["name"], QColor(class_info["color"]))
-
-        # Load images
-        self.all_images = project_data.get("images", [])
-        self.image_paths = project_data.get("image_paths", {})
-
-        # Load all annotations first
-        self.all_annotations.clear()
-        for image_info in project_data["images"]:
-            if image_info.get("is_multi_slice", False):
-                for slice_info in image_info.get("slices", []):
-                    self.all_annotations[slice_info["name"]] = slice_info["annotations"]
-            else:
-                self.all_annotations[image_info["file_name"]] = image_info.get(
-                    "annotations", {}
-                )
-
-        # Handle missing images
-        missing_images = []
-        for image_info in project_data["images"]:
-            image_path = os.path.join(
-                self.current_project_dir, "images", image_info["file_name"]
-            )
-
-            if not os.path.exists(image_path):
-                missing_images.append(image_info["file_name"])
-                continue
-
-            # Update image_paths
-            self.image_paths[image_info["file_name"]] = image_path
-
-            if image_info.get("is_multi_slice", False):
-                dimensions = image_info.get("dimensions", [])
-                shape = image_info.get("shape", [])
-                self.load_multi_slice_image(image_path, dimensions, shape)
-            else:
-                self.add_images_to_list([image_path])
-
-        # Restore DINO configuration if present. Classes were created above
-        # via add_class(), so the threshold table already has rows for them;
-        # we just push the saved values into the existing widgets. Filter
-        # out any keys that reference classes no longer in the project
-        # (hand-edited .iap, class deleted between sessions) so stale state
-        # doesn't get round-tripped on the next save.
-        dino_cfg = project_data.get("dino_config", {})
-        valid_classes = set(self.class_mapping.keys())
-
-        phrases = dino_cfg.get("phrases", {})
-        if phrases:
-            kept = {k: v for k, v in phrases.items() if k in valid_classes}
-            for orphan in phrases.keys() - kept.keys():
-                print(f"  Skipped saved DINO phrases for unknown class "
-                      f"'{orphan}' — class is not in the current project.")
-            self.dino_phrase_panel.set_phrases(kept)
-
-        for cls_name, thr in dino_cfg.get("thresholds", {}).items():
-            ok = self.dino_class_table.set_thresholds(
-                cls_name,
-                thr.get("box", 0.25),
-                thr.get("txt", 0.25),
-                thr.get("nms", 0.50),
-            )
-            if not ok:
-                print(f"  Skipped saved DINO thresholds for unknown class "
-                      f"'{cls_name}' — class is not in the current project.")
-
-        # Update UI
-        self.update_ui()
-
-        # Handle missing images if any
-        if missing_images:
-            self.handle_missing_images(missing_images)
-
-        # Select the first image if available
-        if self.image_list.count() > 0:
-            self.image_list.setCurrentRow(0)
-            first_item = self.image_list.item(0)
-            if first_item:
-                self.switch_image(first_item)
-
-        # Select the first class if available
-        if self.class_list.count() > 0:
-            self.class_list.setCurrentRow(0)
-            self.on_class_selected()
+        return self.project_controller.load_project_data(project_data)
 
     def handle_missing_images(self, missing_images):
-        message = "The following images have annotations but were not found in the project directory:\n\n"
-        message += "\n".join(missing_images[:10])  # Show first 10 missing images
-        if len(missing_images) > 10:
-            message += f"\n... and {len(missing_images) - 10} more."
-        message += "\n\nWould you like to locate these images now?"
-
-        reply = QMessageBox.question(
-            self,
-            "Missing Images",
-            message,
-            QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
-            QMessageBox.StandardButton.Yes,
-        )
-
-        if reply == QMessageBox.StandardButton.Yes:
-            self.load_missing_images(missing_images)
-        else:
-            self.remove_missing_images(missing_images)
+        return self.project_controller.handle_missing_images(missing_images)
 
     def remove_missing_images(self, missing_images):
-        for image_name in missing_images:
-            # Remove from all_images
-            self.all_images = [
-                img for img in self.all_images if img["file_name"] != image_name
-            ]
-
-            # Remove from image_paths
-            self.image_paths.pop(image_name, None)
-
-            # Remove from all_annotations
-            self.all_annotations.pop(image_name, None)
-
-            # If it's a multi-slice image, remove all related slices
-            base_name = os.path.splitext(image_name)[0]
-            if base_name in self.image_slices:
-                for slice_name, _ in self.image_slices[base_name]:
-                    self.all_annotations.pop(slice_name, None)
-                del self.image_slices[base_name]
-
-        self.update_ui()
-        QMessageBox.information(
-            self,
-            "Images Removed",
-            f"{len(missing_images)} missing images and their annotations have been removed from the project.",
-        )
+        return self.project_controller.remove_missing_images(missing_images)
 
     def prompt_load_missing_images(self, missing_images):
-        message = "The following images have annotations but were not found in the project directory:\n\n"
-        message += "\n".join(missing_images[:10])  # Show first 10 missing images
-        if len(missing_images) > 10:
-            message += f"\n... and {len(missing_images) - 10} more."
-        message += "\n\nWould you like to locate these images now?"
-
-        reply = QMessageBox.question(
-            self,
-            "Load Missing Images",
-            message,
-            QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
-            QMessageBox.StandardButton.Yes,
-        )
-
-        if reply == QMessageBox.StandardButton.Yes:
-            self.load_missing_images(missing_images)
+        return self.project_controller.prompt_load_missing_images(missing_images)
 
     def load_missing_images(self, missing_images):
-        files, _ = QFileDialog.getOpenFileNames(
-            self,
-            "Select Missing Images",
-            "",
-            "Image Files (*.png *.jpg *.bmp *.tif *.tiff *.czi)",
-        )
-        if files:
-            images_loaded = 0
-            for file_path in files:
-                file_name = os.path.basename(file_path)
-                if file_name in missing_images:
-                    dst_path = os.path.join(
-                        self.current_project_dir, "images", file_name
-                    )
-                    shutil.copy2(file_path, dst_path)
-                    self.image_paths[file_name] = dst_path
-
-                    # Add the image to all_images if it's not already there
-                    if not any(
-                        img["file_name"] == file_name for img in self.all_images
-                    ):
-                        self.all_images.append(
-                            {
-                                "file_name": file_name,
-                                "height": 0,
-                                "width": 0,
-                                "id": len(self.all_images) + 1,
-                                "is_multi_slice": False,
-                            }
-                        )
-                    images_loaded += 1
-                    missing_images.remove(file_name)
-
-            self.update_image_list()
-            if images_loaded > 0:
-                self.image_list.setCurrentRow(0)  # Select the first image
-                self.switch_image(self.image_list.item(0))  # Display the first image
-            QMessageBox.information(
-                self,
-                "Images Loaded",
-                f"Successfully copied and loaded {images_loaded} out of {len(files)} selected images.",
-            )
-
-            # If there are still missing images, prompt again
-            if missing_images:
-                self.prompt_load_missing_images(missing_images)
+        return self.project_controller.load_missing_images(missing_images)
 
     def update_image_list(self):
         self.image_list.clear()
@@ -713,31 +386,7 @@ class ImageAnnotator(QMainWindow):
             print("Invalid class index")
 
     def close_project(self):
-        if hasattr(self, "current_project_file"):
-            reply = QMessageBox.question(
-                self,
-                "Close Project",
-                "Do you want to save the current project before closing?",
-                QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No | QMessageBox.StandardButton.Cancel,
-            )
-
-            if reply == QMessageBox.StandardButton.Yes:
-                self.remove_all_temp_annotations()  # Remove temp annotations before saving
-                self.save_project(show_message=False)  # Save without showing a message
-            elif reply == QMessageBox.StandardButton.Cancel:
-                return  # User cancelled the operation
-
-        # Clear all data
-        self.clear_all(new_project=True, show_messages=False)
-
-        # Reset project-related attributes
-        if hasattr(self, "current_project_file"):
-            del self.current_project_file
-        if hasattr(self, "current_project_dir"):
-            del self.current_project_dir
-
-        # Update the window title
-        self.update_window_title()
+        return self.project_controller.close_project()
 
     def delete_selected_class(self):
         selected_items = self.class_list.selectedItems()
@@ -761,200 +410,19 @@ class ImageAnnotator(QMainWindow):
             )  # Sreeni note: Implement this method to handle class deletion
 
     def check_missing_images(self):
-        missing_images = [
-            img["file_name"]
-            for img in self.all_images
-            if img["file_name"] not in self.image_paths
-            or not os.path.exists(self.image_paths[img["file_name"]])
-        ]
-        if missing_images:
-            self.prompt_load_missing_images(missing_images)
+        return self.project_controller.check_missing_images()
 
     def convert_to_serializable(self, obj):
         return image_utils.convert_to_serializable(obj)
 
     def save_project(self, show_message=True):
-        if not hasattr(self, "current_project_file") or not self.current_project_file:
-            self.current_project_file, _ = QFileDialog.getSaveFileName(
-                self, "Save Project", "", "Image Annotator Project (*.iap)"
-            )
-            if not self.current_project_file:
-                return  # User cancelled the save dialog
-
-        self.current_project_dir = os.path.dirname(self.current_project_file)
-
-        # Check if images are in the correct directory structure
-        images_dir = os.path.join(self.current_project_dir, "images")
-        os.makedirs(images_dir, exist_ok=True)
-
-        images_to_copy = []
-        for file_name, src_path in self.image_paths.items():
-            dst_path = os.path.join(images_dir, file_name)
-            if os.path.abspath(src_path) != os.path.abspath(dst_path):
-                if not os.path.exists(dst_path):
-                    images_to_copy.append((file_name, src_path, dst_path))
-
-        if images_to_copy:
-            reply = QMessageBox.question(
-                self,
-                "Image Directory Structure",
-                f"The project structure requires all images to be in an 'images' subdirectory. "
-                f"{len(images_to_copy)} images need to be copied to the correct location. "
-                f"Do you want to copy these images?",
-                QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
-                QMessageBox.StandardButton.Yes,
-            )
-
-            if reply == QMessageBox.StandardButton.Yes:
-                for file_name, src_path, dst_path in images_to_copy:
-                    try:
-                        shutil.copy2(src_path, dst_path)
-                        self.image_paths[file_name] = dst_path
-                    except Exception as e:
-                        QMessageBox.warning(
-                            self, "Copy Failed", f"Failed to copy {file_name}: {str(e)}"
-                        )
-                        return
-            else:
-                QMessageBox.warning(
-                    self,
-                    "Save Cancelled",
-                    "Project cannot be saved without the correct directory structure.",
-                )
-                return
-
-        # Prepare image data
-        images_data = []
-        for image_info in self.all_images:
-            file_name = image_info["file_name"]
-            image_data = {
-                "file_name": file_name,
-                "width": image_info["width"],
-                "height": image_info["height"],
-                "is_multi_slice": image_info["is_multi_slice"],
-            }
-
-            if image_data["is_multi_slice"]:
-                base_name_without_ext = os.path.splitext(file_name)[0]
-                image_data["slices"] = []
-                for slice_name, _ in self.image_slices.get(base_name_without_ext, []):
-                    slice_data = {
-                        "name": slice_name,
-                        "annotations": self.convert_to_serializable(
-                            self.all_annotations.get(slice_name, {})
-                        ),
-                    }
-                    image_data["slices"].append(slice_data)
-
-                image_data["dimensions"] = self.convert_to_serializable(
-                    self.image_dimensions.get(base_name_without_ext, [])
-                )
-                image_data["shape"] = self.convert_to_serializable(
-                    self.image_shapes.get(base_name_without_ext, [])
-                )
-            else:
-                image_data["annotations"] = {}
-                for class_name, annotations in self.all_annotations.get(
-                    file_name, {}
-                ).items():
-                    image_data["annotations"][class_name] = [
-                        ann.copy() for ann in annotations
-                    ]
-
-            images_data.append(image_data)
-
-        # Create project data
-        project_data = {
-            "classes": [
-                {"name": name, "color": color.name()}
-                for name, color in self.image_label.class_colors.items()
-            ],
-            "images": images_data,
-            "image_paths": {
-                k: v for k, v in self.image_paths.items() if os.path.exists(v)
-            },
-            "notes": getattr(self, "project_notes", ""),
-            "creation_date": getattr(
-                self, "project_creation_date", datetime.now().isoformat()
-            ),
-            "last_modified": datetime.now().isoformat(),
-        }
-
-        # Persist DINO configuration by snapshotting the widgets that own it.
-        dino_cfg = {
-            "phrases": self.dino_phrase_panel.get_all_phrases(),
-            "thresholds": self.dino_class_table.get_thresholds_dict(),
-        }
-        if dino_cfg["phrases"] or dino_cfg["thresholds"]:
-            project_data["dino_config"] = dino_cfg
-
-        # Save project data
-        with open(self.current_project_file, "w") as f:
-            json.dump(self.convert_to_serializable(project_data), f, indent=2)
-
-        if show_message:
-            self.show_info(
-                "Project Saved", f"Project saved to {self.current_project_file}"
-            )
-
-        # Update the window title
-        self.update_window_title()
-
-        # Update image_paths to reflect the correct locations
-        for file_name in self.image_paths.keys():
-            self.image_paths[file_name] = os.path.join(images_dir, file_name)
+        return self.project_controller.save_project(show_message=show_message)
 
     def save_project_as(self):
-        new_project_file, _ = QFileDialog.getSaveFileName(
-            self, "Save Project As", "", "Image Annotator Project (*.iap)"
-        )
-        if new_project_file:
-            # Ensure the file has the correct extension
-            if not new_project_file.lower().endswith(".iap"):
-                new_project_file += ".iap"
-
-            # Store the original project file
-            original_project_file = getattr(self, "current_project_file", None)
-
-            # Set the new project file as the current one
-            self.current_project_file = new_project_file
-            self.current_project_dir = os.path.dirname(new_project_file)
-
-            # Save the project with the new name
-            self.save_project(show_message=False)
-
-            # Update the window title
-            self.update_window_title()
-
-            # Show a success message
-            QMessageBox.information(
-                self, "Project Saved As", f"Project saved as:\n{new_project_file}"
-            )
-
-            # If this was originally a new unsaved project, update the original project file
-            if original_project_file is None:
-                self.current_project_file = new_project_file
+        return self.project_controller.save_project_as()
 
     def auto_save(self):
-        if self.is_loading_project:
-            return  # Skip auto-save during project loading
-
-        if not hasattr(self, "current_project_file"):
-            reply = QMessageBox.question(
-                self,
-                "No Project",
-                "You need to save the project before auto-saving. Would you like to save now?",
-                QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
-                QMessageBox.StandardButton.Yes,
-            )
-            if reply == QMessageBox.StandardButton.Yes:
-                self.save_project()
-            else:
-                return
-
-        if hasattr(self, "current_project_file"):
-            self.save_project(show_message=False)
-            print("Project auto-saved.")
+        return self.project_controller.auto_save()
 
     def show_project_details(self):
         if not hasattr(self, "current_project_file"):

@@ -60,7 +60,7 @@ from tifffile import TiffFile
 from .dialogs.annotation_statistics import show_annotation_statistics
 from .dialogs.coco_json_combiner import show_coco_json_combiner
 from .dialogs.dino_phrase_editor import ClassThresholdTable, PhraseEditorPanel
-from .inference.dino_utils import DINOUtils
+from .inference.dino_utils import DINOUtils, GDINO_MODEL_PATHS
 from .dialogs.dataset_splitter import DatasetSplitterTool
 from .ui.default_stylesheet import default_stylesheet
 from .dialogs.dicom_converter import DicomConverter
@@ -399,7 +399,7 @@ class ImageAnnotator(QMainWindow):
             self.update_window_title()
 
     def show_project_search(self):
-        from .project_search import show_project_search
+        from .dialogs.project_search import show_project_search
 
         show_project_search(self)
 
@@ -990,8 +990,8 @@ class ImageAnnotator(QMainWindow):
             )
             return
 
-        from .annotation_statistics import AnnotationStatisticsDialog
-        from .project_details import ProjectDetailsDialog
+        from .dialogs.annotation_statistics import AnnotationStatisticsDialog
+        from .dialogs.project_details import ProjectDetailsDialog
 
         # Generate annotation statistics
         stats_dialog = AnnotationStatisticsDialog(self)
@@ -3057,7 +3057,6 @@ class ImageAnnotator(QMainWindow):
 
     def _resolve_dino_model_path(self, model_name: str) -> str | None:
         """Return the canonical local path for a preset DINO model, or None if unknown."""
-        from .dino_utils import GDINO_MODEL_PATHS
         # GDINO_MODEL_PATHS now returns absolute paths from models_base_dir().
         return GDINO_MODEL_PATHS.get(model_name)
 
@@ -3186,6 +3185,10 @@ class ImageAnnotator(QMainWindow):
         self.btn_detect_single.setEnabled(False)
         self.btn_detect_batch.setEnabled(False)
 
+        # Clear any stale temp annotations before starting detection so an
+        # accept from a previous run doesn't bleed into the results handler.
+        self.image_label.temp_annotations = []
+
         if not self._ensure_dino_model_downloaded(model_name):
             self.btn_detect_single.setEnabled(True)
             self.btn_detect_batch.setEnabled(True)
@@ -3264,7 +3267,12 @@ class ImageAnnotator(QMainWindow):
             self.dino_batch_mode.currentText() == "Auto-accept all detections"
         )
         if auto_accept:
-            self._commit_dino_results(image_name, results, sam_results)
+            print(f"[DINO] detect_single: auto_accept=True, committing {len(results)} result(s)")
+            try:
+                self._commit_dino_results(image_name, results, sam_results)
+            except Exception as e:
+                print(f"[DINO] _commit_dino_results failed: {e}")
+                traceback.print_exc()
             n_committed = sum(1 for s in sam_results if "error" not in s)
             self.image_label.temp_annotations = []
             self.image_label.update()
@@ -3329,10 +3337,15 @@ class ImageAnnotator(QMainWindow):
                                 "Please add at least one class with phrases.")
             return
 
+        # Prevent stale temp annotations from a prior single-image review from
+        # confusing the batch results handler or the _DINOReviewEventFilter.
+        self.image_label.temp_annotations = []
+
         if not self._ensure_dino_model_downloaded(model_name):
             return
 
         auto_accept = self.dino_batch_mode.currentText() == "Auto-accept all detections"
+        print(f"[DINO] detect_batch: auto_accept={auto_accept}")
 
         # Build a flat list of (display_name, qimage) work items covering
         # both regular images (loaded from disk) and multi-dim image

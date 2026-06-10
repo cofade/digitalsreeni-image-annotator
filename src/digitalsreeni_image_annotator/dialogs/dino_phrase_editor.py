@@ -67,7 +67,8 @@ class ClassThresholdTable(QTableWidget):
         # across the top of the panel in dark mode.
         self.setStyleSheet(
             "QTableWidget { font-size: 11px; }"
-            "QHeaderView::section { font-size: 11px; font-weight: bold; padding: 2px; }"
+            "QHeaderView::section { font-size: 11px; font-weight: bold; "
+            "  padding: 2px; background-color: palette(mid); color: palette(text); }"
         )
 
     def _make_spin(self, value=0.25):

@@ -4,33 +4,32 @@ Phase 0 gate: confirm PyQt6 and PyTorch can coexist in one process.
 Why this exists
 ---------------
 The historical ADR-011 documented that on Windows + Python 3.14,
-importing PyQt5 first and then loading PyTorch triggers
-``WinError 1114`` (DLL load-order conflict between Qt's and Torch's
-native deps). That motivated the now-deleted subprocess isolation
-layer (sam_worker.py, dino_worker.py, check_worker_isolation.py).
+importing PyQt first and then loading PyTorch triggers
+``WinError 1114`` (DLL load-order conflict). It was thought that
+migrating to PyQt6 (ADR-014) eliminated the conflict, but
+real-world testing with torch 2.11.0 + PyQt6 6.10.2 shows the
+conflict still surfaces when Qt DLLs are loaded BEFORE torch.
+The workaround is simple and confirmed: import torch eagerly
+before QApplication is created so torch claims its DLL slot first.
+See ADR-017.
 
-Migrating to PyQt6 *should* eliminate the conflict — Qt6 reshuffled
-its DLL packaging — but that is a hypothesis. This script is the
-mechanical check. Run it before deleting any worker code.
-
-The crucial bit: ``import PyQt6.QtCore`` alone does NOT load Qt's
-native platform plugin (qwindows.dll on Windows, libqxcb on Linux).
-The plugin is loaded lazily by ``QApplication.__init__``. That's
-where the WinError 1114 actually triggers. So this script
-constructs a ``QApplication`` after importing both PyQt6 and torch
-to exercise the real interaction.
+The crucial bit: plain ``import PyQt6`` does NOT load Qt's native
+platform plugin (qwindows.dll on Windows, libqxcb on Linux).  The
+plugin is loaded lazily by ``QApplication.__init__``.  So this
+script tests BOTH orders to document the real failure mode and
+confirm safe order.
 
 Usage
 -----
     python tools/check_pyqt6_torch_coexistence.py
 
-Run it especially on Windows + Python 3.14. Exit code 0 means the
-combination loads cleanly *and* QApplication constructs without
-crashing; exit code 1 means at least one stage failed.
+Exit code 0 means torch-first works (production order).
+Exit code 1 means torch-first also fails → return to subprocess.
 """
 
 from __future__ import annotations
 
+import multiprocessing
 import platform
 import sys
 import traceback
@@ -67,37 +66,127 @@ def _construct_qapplication():
     return app
 
 
+def _check_torch_then_qt() -> bool:
+    """
+    Production import order: torch first, then QApplication.
+    This is what main.py does (see ADR-017).
+    """
+    ok = True
+    ok &= _try("(torch-first) torch", lambda: __import__("torch"))
+    ok &= _try("(torch-first) torchvision", lambda: __import__("torchvision"))
+    ok &= _try("(torch-first) transformers", lambda: __import__("transformers"))
+    ok &= _try("(torch-first) ultralytics", lambda: __import__("ultralytics"))
+    ok &= _try(
+        "(torch-first) QApplication construct (loads Qt platform plugin)",
+        _construct_qapplication,
+    )
+    return ok
+
+
+def _check_qt_then_torch() -> bool:
+    """
+    The import order that ADR-014 thought was fixed.  On some torch
+    versions this still fails (WinError 1114).  We check it so we
+    can warn if the 'safe' environment regressed.
+    """
+    ok = True
+    ok &= _try("(qt-first) PyQt6.QtCore", lambda: __import__("PyQt6.QtCore", fromlist=["QtCore"]))
+    ok &= _try("(qt-first) PyQt6.QtWidgets", lambda: __import__("PyQt6.QtWidgets", fromlist=["QtWidgets"]))
+    ok &= _try("(qt-first) PyQt6.QtGui", lambda: __import__("PyQt6.QtGui", fromlist=["QtGui"]))
+    # Force platform plugin load BEFORE torch — this is where the
+    # failure appeared.
+    ok &= _try(
+        "(qt-first) QApplication construct (loads Qt platform plugin)",
+        _construct_qapplication,
+    )
+    if not ok:
+        print("[qt-first] Qt failed to load — can't test torch-after-Qt.")
+        return False
+    ok &= _try("(qt-first) torch", lambda: __import__("torch"))
+    ok &= _try("(qt-first) torchvision", lambda: __import__("torchvision"))
+    ok &= _try("(qt-first) ultralytics", lambda: __import__("ultralytics"))
+    return ok
+
+
 def main() -> int:
     print(f"Python:   {sys.version}")
     print(f"Platform: {platform.platform()}")
     print(f"Machine:  {platform.machine()}")
     print("-" * 60)
 
-    # Order matters: PyQt first, then Torch, then Transformers.
-    # This is the exact order the running app loads them in
-    # (annotator_window imports PyQt at startup; torch is pulled
-    # in by ultralytics/transformers when the user picks a model).
+    safe_ok = _check_torch_then_qt()
+    print("-" * 60)
+
+    # We run qt-first check in a FRESH process because the preceding
+    # torch-first test may have already loaded DLLs that would mask
+    # the issue.
+    print("\nChecking Qt-first order in a fresh subprocess...")
+    import subprocess as sp
+
+    worker_src = """
+import ast, sys, traceback
+
+
+def _try(label, fn):
+    print(f"[{label}] running ...", flush=True)
+    try:
+        result = fn()
+    except BaseException:
+        print(f"[{label}] FAILED:")
+        traceback.print_exc()
+        return False
+    print(f"[{label}] OK", flush=True)
+    return True
+
+
+def _construct_qapplication():
+    import os
+    os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
+    from PyQt6.QtWidgets import QApplication
+    app = QApplication.instance() or QApplication(sys.argv)
+    return app
+
+
+def _check_qt_then_torch():
     ok = True
-    ok &= _try("PyQt6.QtCore", lambda: __import__("PyQt6.QtCore", fromlist=["QtCore"]))
-    ok &= _try("PyQt6.QtWidgets", lambda: __import__("PyQt6.QtWidgets", fromlist=["QtWidgets"]))
-    ok &= _try("PyQt6.QtGui", lambda: __import__("PyQt6.QtGui", fromlist=["QtGui"]))
-    ok &= _try("torch", lambda: __import__("torch"))
-    ok &= _try("torchvision", lambda: __import__("torchvision"))
-    ok &= _try("transformers", lambda: __import__("transformers"))
-    ok &= _try("ultralytics", lambda: __import__("ultralytics"))
-    # THIS is the real test — load the Qt platform plugin AFTER torch
-    # is in the address space. Pure import_module above does not load
-    # the platform plugin, so a green result without this step would
-    # be a false positive.
-    ok &= _try("QApplication construct (loads Qt platform plugin)", _construct_qapplication)
+    ok &= _try("(qt-first) PyQt6.QtCore", lambda: __import__("PyQt6.QtCore", fromlist=["QtCore"]))
+    ok &= _try("(qt-first) PyQt6.QtWidgets", lambda: __import__("PyQt6.QtWidgets", fromlist=["QtWidgets"]))
+    ok &= _try("(qt-first) PyQt6.QtGui", lambda: __import__("PyQt6.QtGui", fromlist=["QtGui"]))
+    ok &= _try("(qt-first) QApplication", _construct_qapplication)
+    if not ok:
+        print("[qt-first] Qt failed — can't test torch-after-Qt.")
+        return False
+    ok &= _try("(qt-first) torch", lambda: __import__("torch"))
+    ok &= _try("(qt-first) torchvision", lambda: __import__("torchvision"))
+    ok &= _try("(qt-first) ultralytics", lambda: __import__("ultralytics"))
+    return ok
+
+ok = _check_qt_then_torch()
+print("OK" if ok else "FAIL")
+"""
+    proc = sp.run(
+        [sys.executable, "-c", worker_src],
+        capture_output=True,
+        text=True,
+        timeout=120,
+    )
+    print(proc.stdout, end="")
+    if proc.stderr:
+        print(proc.stderr, end="", file=sys.stderr)
+    qt_first_ok = proc.stdout.strip().endswith("OK") and proc.returncode == 0
 
     print("-" * 60)
-    if ok:
-        print("RESULT: PyQt6 + Torch coexist cleanly, QApplication constructs.")
-        print("        Subprocess removal unblocked.")
-        return 0
-    print("RESULT: at least one stage failed. Investigate before merging.")
-    return 1
+    if not safe_ok:
+        print("RESULT: torch-first order FAILED.")
+        print("        Return to subprocess isolation (ADR-011).")
+        return 1
+    if not qt_first_ok:
+        print("RESULT: torch-first OK.  Qt-first FAILED (known with some versions).")
+        print("        Keep main.py eager torch import (ADR-017).")
+    else:
+        print("RESULT: both orders clean.  Qt packaging has fixed the conflict.")
+        print("        Consider removing main.py eager torch import if confirmed stable.")
+    return 0
 
 
 if __name__ == "__main__":

@@ -378,6 +378,103 @@ no active modal widget, focus not on `QLineEdit`/`QTextEdit`.
 
 ---
 
+## ADR-018: Decouple ImageLabel from ImageAnnotator via Signals + CanvasContext
+
+**Status**: Accepted (Phase 6 of the modular refactor)
+
+**Context**: Before Phase 6, `ImageLabel.set_main_window(main_window)`
+injected the orchestrator into the canvas widget, and the widget poked
+~50 sites on `main_window` directly — both reading state
+(`paint_brush_size`, `class_mapping`, `current_class`, `scroll_area`,
+`current_slice`, `image_file_name`) and mutating it
+(`all_annotations[name] = …`, `add_class(…)`,
+`update_annotation_list()`, `save_current_annotations()`,
+`update_slice_list_colors()`, `schedule_sam_prediction()`,
+`zoom_in()`, `enable_tools()`, etc.). The coupling made:
+- ImageLabel impossible to test in isolation without a
+  whole-`ImageAnnotator` fixture.
+- Every controller extraction (Phases 3–5) leak through `main_window`
+  delegation pass-throughs, because deleting them would break the
+  widget.
+- The Phase 7 per-tool split (paint / eraser / polygon / rectangle
+  handler classes) impractical, because each handler would need the
+  same `main_window` reference and would multiply the coupling.
+
+Three options were considered:
+
+1. **Protocol / duck-typed callback object** — pass a small protocol
+   with the methods ImageLabel needs. Strict, type-safe, but writes
+   are still synchronous direct calls; the widget still knows the
+   exact method names on the orchestrator.
+2. **Defer the fix** — leave `main_window` for one more phase, accept
+   the debt. Cheapest, but each subsequent refactor pays the cost.
+3. **Qt signals for every write + a narrow read accessor object** —
+   ImageLabel emits typed signals; the orchestrator connects each to
+   a controller slot during `__init__`. Reads go through a
+   `CanvasContext` object with method-style accessors.
+
+**Decision**: Option 3. ImageLabel declares ~20 `pyqtSignal`s covering
+annotation lifecycle, SAM, class, tool/UI state, navigation, and
+batch finalisation. Reads go via a `CanvasContext` instance passed in
+through `set_context(ctx)`. The previous `set_main_window` /
+`self.main_window` field is removed entirely.
+
+The connection block lives in `ImageAnnotator._connect_image_label_signals`,
+called once at the end of `__init__` after every controller exists.
+`CanvasContext` wraps the main window rather than copying state, so
+the source of truth stays on `ImageAnnotator` and controllers see
+their writes reflected on the next read.
+
+**Consequences**:
+- ✅ ImageLabel has zero `main_window` references; signals form the
+  documented public write surface at the top of the class.
+- ✅ ImageLabel is now testable in isolation by connecting signals
+  to stub slots; no controller fixture needed.
+- ✅ Phase 7 (per-tool handlers) can carve `mousePressEvent` /
+  `mouseMoveEvent` etc. without each handler needing the orchestrator.
+- ✅ Signal connections are explicit and grep-able — searching for
+  `il.annotationCommitted.connect` finds the single wiring site.
+- ⚠️ Two parallel mechanisms (signals for writes, `CanvasContext` for
+  reads) need to be kept in step. The widget's signal block and
+  `_connect_image_label_signals` must stay in sync; a missing
+  connection is a silent no-op write.
+- ⚠️ Signal connections rely on Qt's default `AutoConnection` semantics,
+  which is synchronous within a single thread. Consumers that depend
+  on a write taking effect before the next read (e.g. `classRequested`
+  emit followed by `_ctx.class_id(name)` read) must stay on the GUI
+  thread.
+- ⚠️ The synchronous batch-save signal (`annotationsBatchSaved`)
+  preserves the original O(1)-save-per-batch behaviour. Replacing it
+  with per-annotation save would silently turn paint commits into
+  O(N) saves. Future refactors must keep the batch boundary.
+
+**Pattern for adding a new ImageLabel → orchestrator interaction**:
+
+1. Add a `pyqtSignal(<args>)` to `ImageLabel`.
+2. Add a slot method on a controller (or main window) with matching
+   signature.
+3. Wire it in `_connect_image_label_signals`.
+4. Replace the previous direct call site in ImageLabel with
+   `self.<signal>.emit(<args>)`.
+
+**Pattern for adding a new read accessor**:
+
+1. Add a method on `CanvasContext` returning the value.
+2. Use `self._ctx.<accessor>()` at the read site in ImageLabel.
+
+**Related**:
+- Implementation: `widgets/canvas_context.py`,
+  `widgets/image_label.py` (signal block lines 42–70),
+  `annotator_window.py:_connect_image_label_signals`.
+- Cross-cuts: documented in
+  [Cross-cutting Concepts → Canvas Decoupling](08_crosscutting_concepts.md#canvas-decoupling--signals--canvascontext).
+- Predecessor pattern: ADR-015 (DINO event filter) showed that
+  ImageLabel can't reliably observe global keyboard state without
+  help; ADR-016 generalises "explicit interaction surface, narrow
+  read surface" to all canvas ↔ orchestrator traffic.
+
+---
+
 ## ADR-016: Static AST Inspection of Inline Imports as Quality Gate for Refactor PRs
 
 **Status**: Accepted
@@ -454,6 +551,7 @@ Real-world testing with `torch 2.11.0+cu126 + PyQt6 6.10.2 + Python 3.14.2` on W
 - Unblocks: ADR-013 in-process inference on the affected Windows environment.
 - Implementation: `src/digitalsreeni_image_annotator/main.py`.
 - Gate: `tools/check_pyqt6_torch_coexistence.py`.
+
 
 ---
 

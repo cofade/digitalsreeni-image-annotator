@@ -154,29 +154,18 @@ return None
 
 ---
 
-### Tight Coupling Between ImageAnnotator and ImageLabel
+### Tight Coupling Between ImageAnnotator and ImageLabel — Resolved (Phase 6)
 
-**Debt Level**: Medium
+**Status**: Resolved. `ImageLabel.main_window` and `set_main_window()`
+were removed; every write path is now a `pyqtSignal` emission and every
+read goes through a narrow `CanvasContext` accessor.
 
-**Description**: ImageLabel has `main_window` reference and calls methods directly
+**Pattern**: see `widgets/canvas_context.py` and
+`ImageAnnotator._connect_image_label_signals`. ImageLabel emits ~20
+signals (annotation lifecycle, SAM, class, tool/UI state, navigation);
+the orchestrator wires each to the matching controller slot.
 
-**Examples**:
-```python
-# In ImageLabel
-self.main_window.add_annotation(polygon)
-self.main_window.update_annotation_list()
-```
-
-**Impact**:
-- Hard to test ImageLabel independently
-- Changes ripple between classes
-- Circular dependency concerns
-
-**Effort to Resolve**: Medium (refactor to signals/slots)
-
-**Priority**: Low
-
-**Plan**: Refactor to Qt signals for loose coupling
+**ADR**: see ADR-016 in `09_architecture_decisions.md`.
 
 ---
 

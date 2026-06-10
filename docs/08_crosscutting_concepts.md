@@ -444,3 +444,54 @@ if image_path is None:
 The substring fallback is kept for backward compatibility with old
 projects that may have stored normalised image names (e.g. without
 extension); new code should prefer the exact-key path.
+
+## Canvas Decoupling — Signals + CanvasContext
+
+`ImageLabel` (the canvas widget) does **not** hold a reference to
+`ImageAnnotator`. Communication is split:
+
+- **Writes** (committing an annotation, requesting a SAM prediction,
+  asking for tools to be re-enabled, etc.) leave the widget as Qt
+  `pyqtSignal` emissions. The signal block at the top of `ImageLabel`
+  documents every outbound interaction. `ImageAnnotator` connects
+  each signal to the right controller slot once, in
+  `_connect_image_label_signals` (called at the end of
+  `ImageAnnotator.__init__`).
+- **Reads** (`paint_brush_size`, `current_class`, `class_mapping`,
+  `is_class_visible`, `scroll_area`, etc.) go through a
+  `CanvasContext` object passed in via
+  `image_label.set_context(CanvasContext(self))`.
+  `CanvasContext` wraps the main window rather than copying state,
+  so updates made by controllers are visible on the next read.
+
+**Why both mechanisms.** Signals are inherently one-way (fire and
+forget); a synchronous read like "is this class visible" needs a
+return value, which signals don't provide. Trying to express reads
+as request/response signals adds latency and ordering bugs. The
+`CanvasContext` accessor list is small (~10 methods) and stable.
+
+**Rules for adding traffic in either direction**:
+
+- New write from canvas → orchestrator: declare a `pyqtSignal` on
+  `ImageLabel`, add a slot on a controller, wire it in
+  `_connect_image_label_signals`. Do not add a back-reference to
+  `ImageAnnotator`.
+- New read from canvas → orchestrator: add a method on
+  `CanvasContext`. Do not expose `_ctx._mw` directly.
+
+**Synchronous-emit ordering**. Qt's default `AutoConnection` runs the
+slot synchronously when the sender and receiver share a thread (true
+for everything on the GUI thread). Code that emits a signal and then
+reads state expected to be updated by it is correct — the slot has
+already run by the time `.emit()` returns. This is load-bearing for
+`accept_temp_annotations`, where `classRequested` must complete
+before the subsequent class lookup.
+
+**Batch save signal**. Paint commits and accept-temp commits emit
+`annotationCommitted` per annotation but `annotationsBatchSaved` only
+once at the end. The single batch save preserves O(1) `.iap` writes
+per user action; replacing it with a per-annotation save would turn
+paint commits into O(N). See ADR-016.
+
+See ADR-016 in `09_architecture_decisions.md` for the rationale and
+the full pattern.

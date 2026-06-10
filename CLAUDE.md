@@ -68,7 +68,9 @@ See [Building Block View](docs/05_building_block_view.md) for detailed class doc
 2. Set `image_label.current_tool` on click
 3. Handle mouse events in `ImageLabel` (mousePressEvent, mouseMoveEvent)
 4. Render in `ImageLabel.paintEvent()`
-5. Call `main_window.add_annotation()` to commit
+5. Commit via `self.annotationCommitted.emit(annotation_dict)` — the
+   orchestrator routes it to `AnnotationController.add_annotation_to_list`
+   (see ADR-016)
 
 ### Working with Annotations
 

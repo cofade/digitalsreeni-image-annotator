@@ -152,6 +152,16 @@ class AnnotationController(QObject):
 
         self.mw.update_slice_list_colors()
 
+    def replace_annotations(self, image_key: str, annotations: dict) -> None:
+        """Replace the full per-class annotation dict for one image.
+        Used by the eraser path which has already cut polygons in
+        ImageLabel.annotations. Triggers list refresh, save, and slice
+        colour update atomically."""
+        self.mw.all_annotations[image_key] = annotations
+        self.update_annotation_list()
+        self.save_current_annotations()
+        self.mw.class_controller.update_slice_list_colors()
+
     # --- Sorting ---
 
     def sort_annotations_by_class(self):

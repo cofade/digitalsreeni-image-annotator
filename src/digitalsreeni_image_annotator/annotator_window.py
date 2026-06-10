@@ -414,31 +414,11 @@ class ImageAnnotator(QMainWindow):
         return self.image_controller.update_all_images(new_image_info)
 
     def closeEvent(self, event):
+        # check_unsaved_changes prompts and commits/discards as the
+        # user chooses; returns False on Cancel.
         if not self.image_label.check_unsaved_changes():
             event.ignore()
             return
-        event.accept()
-
-        if (
-            self.image_label.temp_paint_mask is not None
-            or self.image_label.temp_eraser_mask is not None
-        ):
-            reply = QMessageBox.question(
-                self,
-                "Unsaved Changes",
-                "You have unsaved changes. Do you want to save them before closing?",
-                QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No | QMessageBox.StandardButton.Cancel,
-            )
-            if reply == QMessageBox.StandardButton.Yes:
-                if self.image_label.temp_paint_mask is not None:
-                    self.image_label.commit_paint_annotation()
-                if self.image_label.temp_eraser_mask is not None:
-                    self.image_label.commit_eraser_changes()
-            elif reply == QMessageBox.StandardButton.Cancel:
-                event.ignore()
-                return
-
-        # Perform any other cleanup or saving operations here
         event.accept()
 
     def switch_slice(self, item):
@@ -1331,7 +1311,7 @@ class ImageAnnotator(QMainWindow):
         self.zoom_slider.setValue(100)
 
         # Reset tools
-        self.image_label.current_tool = None
+        self.image_label.set_active_tool(None)
         self.polygon_button.setChecked(False)
         self.rectangle_button.setChecked(False)
         self.sam_magic_wand_button.setChecked(False)
@@ -1513,20 +1493,20 @@ class ImageAnnotator(QMainWindow):
 
             # Set the current tool based on the checked button
             if sender == self.polygon_button:
-                self.image_label.current_tool = "polygon"
+                self.image_label.set_active_tool("polygon")
             elif sender == self.rectangle_button:
-                self.image_label.current_tool = "rectangle"
+                self.image_label.set_active_tool("rectangle")
             elif sender == self.sam_magic_wand_button:
-                self.image_label.current_tool = "sam_magic_wand"
+                self.image_label.set_active_tool("sam_magic_wand")
                 self.activate_sam_magic_wand()
             elif sender == self.paint_brush_button:
-                self.image_label.current_tool = "paint_brush"
+                self.image_label.set_active_tool("paint_brush")
                 self.image_label.setFocus()  # Set focus on the image label
             elif sender == self.eraser_button:
-                self.image_label.current_tool = "eraser"
+                self.image_label.set_active_tool("eraser")
                 self.image_label.setFocus()  # Set focus on the image label
         else:
-            self.image_label.current_tool = None
+            self.image_label.set_active_tool(None)
             if sender == self.sam_magic_wand_button:
                 self.deactivate_sam_magic_wand()
 
@@ -1586,7 +1566,7 @@ class ImageAnnotator(QMainWindow):
         for button in self.tool_group.buttons():
             button.setChecked(False)
             button.setEnabled(False)
-        self.image_label.current_tool = None
+        self.image_label.set_active_tool(None)
 
     def enable_annotation_tools(self):
         for button in self.tool_group.buttons():

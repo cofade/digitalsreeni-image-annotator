@@ -470,8 +470,135 @@ their writes reflected on the next read.
   [Cross-cutting Concepts → Canvas Decoupling](08_crosscutting_concepts.md#canvas-decoupling--signals--canvascontext).
 - Predecessor pattern: ADR-015 (DINO event filter) showed that
   ImageLabel can't reliably observe global keyboard state without
-  help; ADR-016 generalises "explicit interaction surface, narrow
+  help; ADR-018 generalises "explicit interaction surface, narrow
   read surface" to all canvas ↔ orchestrator traffic.
+
+---
+
+## ADR-019: Per-Tool Handler Classes inside ImageLabel
+
+**Status**: Accepted (Phase 7 of the modular refactor)
+
+**Context**: After Phase 6, `ImageLabel` no longer held a back-reference
+to `ImageAnnotator`, but it still embedded four distinct annotation
+tools (polygon, rectangle, paint_brush, eraser) as if/elif branches
+spread across six event methods (`mousePressEvent`, `mouseMoveEvent`,
+`mouseReleaseEvent`, `mouseDoubleClickEvent`, `keyPressEvent`,
+`paintEvent`). Each tool also owned helper methods on the widget
+(`start_painting`, `commit_paint_annotation`, `commit_eraser_changes`,
+`finish_polygon`, `cancel_current_annotation`, …). Adding a new tool
+meant touching all six event methods plus the widget's helper layer,
+and the file had reached ~1,240 LOC.
+
+Three options were considered:
+
+1. **Keep tools as if/elif branches** — cheapest, but the widget keeps
+   accruing every new tool's behaviour.
+2. **Per-tool widget subclass** (one `QWidget` per tool, swap on tool
+   change) — too heavy: tool switches would require teardown of the
+   pixmap, scroll context, zoom factor, and the SAM/DINO/edit-mode
+   sub-states that cut across tool selection.
+3. **Per-tool handler classes** with a thin dispatcher on the widget.
+   Plain Python objects (not QObjects); the widget keeps a
+   `_tools: dict[str, ToolHandler]` and routes events to
+   `active_tool_handler`. Tools emit through the widget's existing
+   Phase 6 signals.
+
+**Decision**: Option 3. Each tool becomes a subclass of `ToolHandler`
+in `widgets/tools/`. The contract:
+
+- Event hooks return `True` when consumed: `on_mouse_press`,
+  `on_mouse_move`, `on_mouse_release`, `on_double_click`, `on_enter`,
+  `on_escape`.
+- `paint_overlay(painter)` renders in-progress state (paint mask,
+  eraser mask, polygon-in-progress, rectangle preview).
+- `has_unsaved_state()` / `commit()` / `discard()` participate in
+  the widget's `check_unsaved_changes()` dialog.
+- `deactivate()` runs when the user switches away from this tool;
+  default is no-op (matches the pre-Phase-7 "silently drop temp state
+  mid-stroke" behaviour).
+
+**Deliberate non-decision: state ownership.** Tool handlers contain
+only *behaviour*; the temp-state fields (`current_rectangle`,
+`current_annotation`, `temp_paint_mask`, `temp_eraser_mask`,
+`drawing_polygon`, `drawing_rectangle`, `is_painting`, `is_erasing`)
+remain on `ImageLabel`. Reason: `AnnotationController.finish_rectangle`
+and `finish_polygon` (Phase 5a) read `mw.image_label.current_rectangle`
+and `mw.image_label.current_annotation` directly. Moving the state
+onto the handlers would have required a parallel controller refactor.
+Handlers mutate `self.label.X` for those fields; pure-tool state
+(e.g. future tool-internal counters) can live on the handler. See
+the architectural-smell note below.
+
+**What stays on `ImageLabel` (intentional non-extraction)**:
+
+- Navigation (zoom, pan, offset, scaled pixmap) — cross-cutting.
+- SAM bbox / points / magic-wand state — activates from any tool via
+  the magic-wand toggle, cuts across the main tools.
+- Polygon edit mode (`editing_polygon`, `handle_editing_click`,
+  `handle_editing_move`, `draw_editing_polygon`) — modal state
+  orthogonal to tool selection; sets `current_tool = None` while
+  active. Promoting this to a handler would tangle the modal flow.
+- DINO `temp_annotations` + `accept_temp_annotations` —
+  cross-cutting; already touched by ADR-015's event filter.
+- `draw_tool_size_indicator` — small enough that splitting it across
+  paint/eraser handlers buys nothing.
+
+**`paintEvent` overlay pass**. Iterates **all** handlers'
+`paint_overlay()`, not just the active one. Reason: pre-Phase-7 the
+temp paint mask, temp eraser mask, and polygon-in-progress rendered
+whenever their state was populated, regardless of `current_tool`.
+Each handler's `paint_overlay` short-circuits when its state is empty,
+so the iteration is cheap and the user can switch tools mid-stroke
+without losing visual feedback.
+
+**Consequences**:
+- ✅ `image_label.py` shrinks from 1,239 to ~960 LOC. Adding a new
+  tool now means: create one file in `widgets/tools/`, register it
+  in `_tools`, wire a button in `annotator_window.py`. No event-method
+  edits.
+- ✅ Each tool can be unit-tested by instantiating the handler with
+  a stub `label` carrying signals and `_ctx` — no controller fixture
+  needed.
+- ✅ Phase 6's signal contract (ADR-018) is unchanged: handlers emit
+  via `self.label.<signal>.emit(...)`.
+- ⚠️ **State leak across the widget boundary.** Handlers reach into
+  `self.label.X` for state. The contract drifts toward "handler is a
+  namespaced function bag." Mitigation: revisit if/when controllers
+  are updated to ask the handler (e.g. `polygon_tool.points()`)
+  instead of reading the widget's field.
+- ⚠️ `deactivate()` is no-op by default. If you make it
+  `discard()` later, audit the three call sites that still write
+  `current_tool = None` directly (`ImageLabel.clear()`,
+  `ImageLabel.start_polygon_edit`, three locations in
+  `SAMController`) — they bypass `set_active_tool` and therefore the
+  hook.
+- ⚠️ `check_unsaved_changes` now iterates all handlers, not just
+  paint/eraser. Polygon participates via `has_unsaved_state() = len > 2`
+  (sub-3-point polygons are silently discarded on switch — they
+  can't be saved anyway).
+
+**Pattern for adding a new mouse-driven tool**:
+
+1. Create `widgets/tools/foo_tool.py` with `class FooTool(ToolHandler):`.
+2. Override the event hooks you need; emit via
+   `self.label.<signal>.emit(...)` and read via `self.label._ctx.X()`.
+3. Register in `ImageLabel.__init__`'s `_tools = {…, "foo": FooTool(self)}`.
+4. Add a button in `ImageAnnotator.setup_tool_buttons()` and a branch
+   in the tool-toggle handler that calls
+   `self.image_label.set_active_tool("foo")`.
+
+**Related**:
+- Implementation: `widgets/tools/base.py`,
+  `widgets/tools/{rectangle,polygon,paint,eraser}_tool.py`,
+  `widgets/image_label.py:set_active_tool`,
+  `widgets/image_label.py:paintEvent` overlay-iteration block.
+- Predecessor: ADR-018 (Phase 6 signal decoupling) made this safe by
+  removing the `main_window` reference; handlers don't need an
+  orchestrator handle.
+- Cross-cuts: documented in
+  [Cross-cutting Concepts → Canvas Decoupling](08_crosscutting_concepts.md#canvas-decoupling--signals--canvascontext)
+  (extended to describe the tool dispatcher).
 
 ---
 
@@ -551,6 +678,7 @@ Real-world testing with `torch 2.11.0+cu126 + PyQt6 6.10.2 + Python 3.14.2` on W
 - Unblocks: ADR-013 in-process inference on the affected Windows environment.
 - Implementation: `src/digitalsreeni_image_annotator/main.py`.
 - Gate: `tools/check_pyqt6_torch_coexistence.py`.
+
 
 
 ---

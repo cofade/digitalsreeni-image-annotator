@@ -5,20 +5,14 @@ Tests for screen-to-image and image-to-screen coordinate conversions.
 """
 
 import pytest
-import sys
-import os
-import importlib.util
 from PyQt6.QtCore import QPoint, QSize
 from PyQt6.QtGui import QPixmap
 
-# Import image_label module directly by file path to avoid torch dependency issues
-image_label_path = os.path.join(os.path.dirname(__file__), '..', '..', 'src', 'digitalsreeni_image_annotator', 'widgets', 'image_label.py')
-spec = importlib.util.spec_from_file_location("image_label", image_label_path)
-image_label = importlib.util.module_from_spec(spec)
-sys.modules['digitalsreeni_image_annotator.widgets.image_label'] = image_label
-spec.loader.exec_module(image_label)
-
-ImageLabel = image_label.ImageLabel
+# Phase 7 introduced widgets/tools/* as a subpackage, so image_label.py
+# now uses relative imports and can no longer be loaded via spec_from_file_location.
+# The widgets/__init__.py is empty and doesn't pull in torch, so a normal import
+# is safe here.
+from src.digitalsreeni_image_annotator.widgets.image_label import ImageLabel
 
 
 @pytest.fixture

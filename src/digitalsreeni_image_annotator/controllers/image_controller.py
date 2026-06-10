@@ -175,31 +175,10 @@ class ImageController(QObject):
     def switch_slice(self, item):
         if item is None:
             return
+        # check_unsaved_changes prompts the user and commits/discards
+        # all dirty tool handlers; returns False on Cancel.
         if not self.mw.image_label.check_unsaved_changes():
             return
-
-        if (
-            self.mw.image_label.temp_paint_mask is not None
-            or self.mw.image_label.temp_eraser_mask is not None
-        ):
-            reply = QMessageBox.question(
-                self.mw,
-                "Unsaved Changes",
-                "You have unsaved changes. Do you want to save them?",
-                QMessageBox.StandardButton.Yes
-                | QMessageBox.StandardButton.No
-                | QMessageBox.StandardButton.Cancel,
-            )
-            if reply == QMessageBox.StandardButton.Yes:
-                if self.mw.image_label.temp_paint_mask is not None:
-                    self.mw.image_label.commit_paint_annotation()
-                if self.mw.image_label.temp_eraser_mask is not None:
-                    self.mw.image_label.commit_eraser_changes()
-            elif reply == QMessageBox.StandardButton.Cancel:
-                return
-            else:
-                self.mw.image_label.discard_paint_annotation()
-                self.mw.image_label.discard_eraser_changes()
 
         self.mw.save_current_annotations()
         self.mw.image_label.clear_temp_sam_prediction()

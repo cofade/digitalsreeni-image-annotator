@@ -214,6 +214,10 @@ class DINOController(QObject):
         self.mw.btn_detect_single.setEnabled(False)
         self.mw.btn_detect_batch.setEnabled(False)
 
+        # Clear any stale temp annotations before starting detection so an
+        # accept from a previous run doesn't bleed into the results handler.
+        self.mw.image_label.temp_annotations = []
+
         if not self._ensure_dino_model_downloaded(model_name):
             self.mw.btn_detect_single.setEnabled(True)
             self.mw.btn_detect_batch.setEnabled(True)
@@ -289,11 +293,19 @@ class DINOController(QObject):
             self.mw.dino_batch_mode.currentText() == "Auto-accept all detections"
         )
         if auto_accept:
-            self._commit_dino_results(image_name, results, sam_results)
+            print(f"[DINO] detect_single: auto_accept=True, committing {len(results)} result(s)")
+            try:
+                self._commit_dino_results(image_name, results, sam_results)
+            except Exception as e:
+                print(f"[DINO] _commit_dino_results failed: {e}")
+                traceback.print_exc()
             n_committed = sum(1 for s in sam_results if "error" not in s)
             self.mw.image_label.temp_annotations = []
             self.mw.image_label.update()
             self.mw.update_annotation_list()
+            # Refresh slice list so the freshly-annotated slice picks
+            # up the highlight color; review-mode's accept_dino_results
+            # already does this, the auto-accept path didn't.
             self.mw.update_slice_list_colors()
             self.mw.auto_save()
             self.mw.lbl_dino_status.setText(
@@ -348,13 +360,26 @@ class DINOController(QObject):
                                 "Please add at least one class with phrases.")
             return
 
+        # Prevent stale temp annotations from a prior single-image review from
+        # confusing the batch results handler or the _DINOReviewEventFilter.
+        self.mw.image_label.temp_annotations = []
+
         if not self._ensure_dino_model_downloaded(model_name):
             return
 
         auto_accept = (
             self.mw.dino_batch_mode.currentText() == "Auto-accept all detections"
         )
+        print(f"[DINO] detect_batch: auto_accept={auto_accept}")
 
+        # Build a flat list of (display_name, qimage) work items covering
+        # both regular images (loaded from disk) and multi-dim image
+        # slices (already QImages in memory). Slices live in
+        # self.mw.image_slices[base_name], indexed by their slice_name
+        # (e.g. "stack_T1_Z1_C1"). The earlier implementation only
+        # iterated self.all_images and skipped multi-slice entries with
+        # a console warning, leaving slice-based projects unable to use
+        # Detect All.
         work_items = self._collect_dino_batch_work_items()
         if not work_items:
             QMessageBox.information(

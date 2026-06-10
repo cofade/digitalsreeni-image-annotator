@@ -3,7 +3,7 @@ Base class for per-tool mouse / key event handlers in ImageLabel.
 
 Each handler owns its tool-specific temp state. ImageLabel keeps a
 dispatcher that routes events to the active handler. Handlers emit
-back through the ImageLabel's Phase 6 signals (see ADR-016) — they
+back through the ImageLabel's Phase 6 signals (see ADR-018) — they
 never call into the orchestrator directly.
 
 Plain Python objects, not QObjects: no need for their own signals,
@@ -36,8 +36,8 @@ class ToolHandler:
         return False
 
     # --- Key hooks. ImageLabel routes Enter/Escape here only after the
-    # higher-priority modal branches (DINO temp, sam_points, editing
-    # polygon, magic wand) have had their turn. ---
+    # higher-priority modal branches (DINO temp, sam_points, sam_box,
+    # editing polygon) have had their turn. ---
 
     def on_enter(self) -> bool:
         return False

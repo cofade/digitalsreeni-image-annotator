@@ -119,14 +119,6 @@ def build_sidebar(window):
     sam_buttons_layout.addWidget(window.sam_points_button)
     sam_layout.addLayout(sam_buttons_layout)
 
-    # Magic-wand button is constructed inside the sidebar so the
-    # tool_group can reference it without an early-init step in
-    # ImageAnnotator.__init__.
-    window.sam_magic_wand_button = QPushButton("Magic Wand")
-    window.sam_magic_wand_button.setCheckable(True)
-    window.sam_magic_wand_button.setEnabled(False)
-    sam_layout.addWidget(window.sam_magic_wand_button)
-
     # SAM model selector
     window.sam_model_selector = QComboBox()
     window.sam_model_selector.addItem("Pick a SAM Model")
@@ -210,9 +202,9 @@ def build_sidebar(window):
     annotation_layout.addWidget(dino_widget)
     # --- END DINO section ---
 
-    # Tool group — must include all checkable tool buttons (incl. the
-    # magic-wand) so update_ui_for_current_tool / enable_tools /
-    # disable_tools can iterate.
+    # Tool group — must include all checkable tool buttons so
+    # update_ui_for_current_tool / enable_tools / disable_tools can
+    # iterate.
     window.tool_group = QButtonGroup(window)
     window.tool_group.setExclusive(False)
     window.tool_group.addButton(window.polygon_button)
@@ -221,13 +213,11 @@ def build_sidebar(window):
     window.tool_group.addButton(window.eraser_button)
     window.tool_group.addButton(window.sam_box_button)
     window.tool_group.addButton(window.sam_points_button)
-    window.tool_group.addButton(window.sam_magic_wand_button)
 
     window.polygon_button.clicked.connect(window.toggle_tool)
     window.rectangle_button.clicked.connect(window.toggle_tool)
     window.paint_brush_button.clicked.connect(window.toggle_tool)
     window.eraser_button.clicked.connect(window.toggle_tool)
-    window.sam_magic_wand_button.clicked.connect(window.toggle_tool)
 
     # Annotations list subsection
     annotation_layout.addWidget(QLabel("Annotations"))

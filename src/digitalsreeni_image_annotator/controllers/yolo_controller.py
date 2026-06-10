@@ -420,7 +420,7 @@ class YOLOController(QObject):
             )
             return
 
-        self.mw.deactivate_sam_magic_wand()
+        self.mw.deactivate_sam_tools()
 
         image_path = self.mw.image_paths[file_name]
         try:
@@ -536,4 +536,4 @@ class YOLOController(QObject):
                 "No predictions were found for this image.",
             )
 
-        self.mw.deactivate_sam_magic_wand()
+        self.mw.deactivate_sam_tools()

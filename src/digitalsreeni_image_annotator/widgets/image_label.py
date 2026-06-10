@@ -106,7 +106,6 @@ class ImageLabel(QLabel):
         self.cursor_pos = None
 
         # SAM
-        self.sam_magic_wand_active = False
         self.sam_bbox = None
         self.drawing_sam_bbox = False
         self.temp_sam_prediction = None
@@ -234,8 +233,6 @@ class ImageLabel(QLabel):
             if self.editing_polygon:
                 self.draw_editing_polygon(painter)
             # SAM overlays (cross-cutting; not part of the tool handlers)
-            if self.sam_magic_wand_active and self.sam_bbox:
-                self.draw_sam_bbox(painter)
             if self.sam_box_active and self.sam_bbox:
                 self.draw_sam_bbox(painter)
             if self.sam_points_active:
@@ -662,9 +659,6 @@ class ImageLabel(QLabel):
             if self.current_tool == "sam_box" and self.sam_box_active:
                 self.sam_bbox = [pos[0], pos[1], pos[0], pos[1]]
                 self.drawing_sam_bbox = True
-            elif self.sam_magic_wand_active:
-                self.sam_bbox = [pos[0], pos[1], pos[0], pos[1]]
-                self.drawing_sam_bbox = True
             elif self.editing_polygon:
                 self.handle_editing_click(pos, event)
             else:
@@ -699,13 +693,6 @@ class ImageLabel(QLabel):
         ):
             self.sam_bbox[2] = pos[0]
             self.sam_bbox[3] = pos[1]
-        elif (
-            self.sam_magic_wand_active
-            and self.drawing_sam_bbox
-            and self.sam_bbox is not None
-        ):
-            self.sam_bbox[2] = pos[0]
-            self.sam_bbox[3] = pos[1]
         elif self.editing_polygon:
             self.handle_editing_move(pos)
         else:
@@ -726,15 +713,6 @@ class ImageLabel(QLabel):
             if event.button() == Qt.MouseButton.LeftButton:
                 if (
                     self.sam_box_active
-                    and self.drawing_sam_bbox
-                    and self.sam_bbox is not None
-                ):
-                    self.sam_bbox[2] = pos[0]
-                    self.sam_bbox[3] = pos[1]
-                    self.drawing_sam_bbox = False
-                    self.samPredictionApplyRequested.emit()
-                elif (
-                    self.sam_magic_wand_active
                     and self.drawing_sam_bbox
                     and self.sam_bbox is not None
                 ):
@@ -808,7 +786,7 @@ class ImageLabel(QLabel):
             # non-DINO temp state only.
             elif self.temp_annotations:
                 self.discard_temp_annotations()
-            elif self.sam_magic_wand_active:
+            elif self.sam_box_active:
                 self.sam_bbox = None
                 self.clear_temp_sam_prediction()
             elif self.editing_polygon:

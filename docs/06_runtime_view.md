@@ -66,7 +66,7 @@ User presses Enter
     └─> update() to show final annotation
 ```
 
-## SAM-Assisted Annotation
+## SAM-Assisted Annotation (SAM-box / SAM-points)
 
 ```
 User selects SAM model

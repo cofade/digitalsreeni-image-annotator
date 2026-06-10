@@ -330,7 +330,7 @@ class AnnotationController(QObject):
     # --- Highlighting / selection ---
 
     def clear_highlighted_annotation(self):
-        self.mw.image_label.highlighted_annotation = None
+        self.mw.image_label.highlighted_annotations.clear()
         self.mw.image_label.update()
 
     def update_highlighted_annotations(self):
@@ -342,10 +342,6 @@ class AnnotationController(QObject):
 
         self.mw.merge_button.setEnabled(len(selected_items) >= 2)
         self.mw.change_class_button.setEnabled(len(selected_items) > 0)
-
-    def highlight_annotation(self, item):
-        self.mw.image_label.highlighted_annotation = item.data(Qt.ItemDataRole.UserRole)
-        self.mw.image_label.update()
 
     def highlight_annotation_in_list(self, annotation):
         for i in range(self.mw.annotation_list.count()):
@@ -384,7 +380,7 @@ class AnnotationController(QObject):
             self.mw.annotation_list.takeItem(
                 self.mw.annotation_list.row(current_item)
             )
-            self.mw.image_label.highlighted_annotation = None
+            self.mw.image_label.highlighted_annotations.clear()
             self.mw.image_label.update()
 
     def delete_selected_annotations(self):

@@ -68,6 +68,21 @@ You Only Look Once - object detection format. Uses `.txt` files with normalized 
 ### Z-Stack
 A series of 2D images taken at different focal depths (Z positions), used in microscopy to capture 3D structure.
 
+### CanvasContext
+Narrow read-only view of main-window state exposed to `ImageLabel`. Introduced in Phase 6 (ADR-018) to replace the old `image_label.main_window` back-reference. Method-style accessors (`paint_brush_size()`, `current_class()`, `is_class_visible(name)`, `scroll_area()`, …) so future state migrations can re-route reads without touching the widget. Constructed once in `ImageAnnotator.__init__` and passed via `image_label.set_context(ctx)`.
+
+### Controller
+Architectural pattern used across `controllers/*`. A controller is a `QObject` subclass holding `self.mw = main_window` that owns a single responsibility cluster carved out of the old monolithic `ImageAnnotator` — project I/O, image loading, annotations, classes, SAM, DINO, or YOLO. The orchestrator delegates to the controllers via thin pass-through methods, keeping external entry points (menu actions, signal connections) stable across refactors. Seven controllers exist as of Phase 8.
+
+### ToolHandler
+Base class for per-tool mouse / key / paint behaviour inside `ImageLabel`. Plain Python object (not a `QObject`); holds a back-reference to the widget for signal emission and `CanvasContext` reads. Subclasses (`RectangleTool`, `PolygonTool`, `PaintBrushTool`, `EraserTool`) live in `widgets/tools/` and are dispatched to by `ImageLabel.active_tool_handler`. Introduced in Phase 7 (ADR-019).
+
+### Tool subclasses (`RectangleTool`, `PolygonTool`, `PaintBrushTool`, `EraserTool`)
+Concrete `ToolHandler` implementations, one per mouse-driven annotation tool. Each overrides the event hooks defined on the base class (`on_mouse_press`, `on_mouse_move`, `on_mouse_release`, `on_double_click`, `on_enter`, `on_escape`, `paint_overlay`, `deactivate`) and participates in the `has_unsaved_state()` / `commit()` / `discard()` contract used by the `check_unsaved_changes` dialog.
+
+### UI builders (`build_menu_bar`, `build_sidebar`, `build_image_area`, `build_image_list`)
+Functions under `ui/` that construct widget trees at startup. Each takes the `ImageAnnotator` instance as `window`, attaches widgets as `window.X = QWidget(...)` so other modules can read them, and wires signals to `window.<method>` delegate methods. Replaced the equivalent `setup_*` methods on `ImageAnnotator` in Phase 8.
+
 ## Acronyms
 
 | Acronym | Full Term |
@@ -110,12 +125,24 @@ A series of 2D images taken at different focal depths (Z positions), used in mic
 
 | Class | Module | Description |
 |-------|--------|-------------|
-| `ImageAnnotator` | annotator_window.py | Main application window (QMainWindow) |
-| `ImageLabel` | image_label.py | Custom QLabel for image display and interaction |
-| `SAMUtils` | sam_utils.py | SAM model loading and inference |
-| `DimensionDialog` | annotator_window.py | Dialog for assigning dimensions to stacks |
-| `TrainingThread` | annotator_window.py | Background thread for YOLO training |
-| `YOLOTrainer` | yolo_trainer.py | YOLO model training and prediction |
+| `ImageAnnotator` | annotator_window.py | Thin orchestrator (QMainWindow). Holds controllers, wires signals, delegates almost everything. |
+| `ImageLabel` | widgets/image_label.py | Canvas widget — display, zoom/pan, event dispatch to tool handlers. |
+| `CanvasContext` | widgets/canvas_context.py | Narrow read view of main-window state for ImageLabel (ADR-018). |
+| `ToolHandler` | widgets/tools/base.py | Base class for per-tool mouse/key handlers (ADR-019). |
+| `RectangleTool` / `PolygonTool` / `PaintBrushTool` / `EraserTool` | widgets/tools/ | Per-tool handler subclasses. |
+| `ProjectController` | controllers/project_controller.py | `.iap` save/load, auto-save, `is_loading_project` guard. |
+| `ImageController` | controllers/image_controller.py | TIFF/CZI loading, multi-dim slicing, image/slice switching. |
+| `AnnotationController` | controllers/annotation_controller.py | Annotation CRUD, sort, edit-mode, finish_polygon/rectangle. |
+| `ClassController` | controllers/class_controller.py | Class add/delete/rename/colour/visibility. |
+| `SAMController` | controllers/sam_controller.py | SAM model picker + debounce + ADR-013 re-entrancy guard. |
+| `DINOController` | controllers/dino_controller.py | DINO single + batch detection, batch review, temp-class workflow. |
+| `YOLOController` | controllers/yolo_controller.py | YOLO training menu + prediction wiring. |
+| `SAMUtils` | inference/sam_utils.py | SAM model loading and inference. |
+| `DINOUtils` | inference/dino_utils.py | Grounding-DINO model loading and inference. |
+| `DimensionDialog` | controllers/image_controller.py | Dialog for assigning dimensions to multi-dim stacks. |
+| `TrainingThread` | controllers/yolo_controller.py | Background thread for YOLO training. |
+| `YOLOTrainer` | dialogs/yolo_trainer.py | YOLO model training and prediction dialog. |
+| `DINOReviewEventFilter` | controllers/dino_controller.py | App-wide Enter/Escape filter during DINO review (ADR-015). |
 
 ## Data Structure Keys
 

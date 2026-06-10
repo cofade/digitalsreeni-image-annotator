@@ -22,7 +22,7 @@ python -m src.digitalsreeni_image_annotator.main
 
 Python 3.10+ | PyQt6 6.7+ | Ultralytics 8.3.27 (SAM 2) | NumPy | OpenCV | Shapely
 
-**Test suite**: `tests/` (pytest + pytest-qt). 65 tests pass on PyQt6.
+**Test suite**: `tests/` (pytest + pytest-qt). 94 tests pass on PyQt6.
 
 ## Documentation
 
@@ -40,23 +40,43 @@ See [docs/README.md](docs/README.md) for full documentation index.
 
 ```
 src/digitalsreeni_image_annotator/
-├── main.py                    # Entry point
-├── annotator_window.py        # ImageAnnotator - main window, project state
-├── image_label.py             # ImageLabel - display, mouse events, rendering
-├── sam_utils.py               # SAMUtils - SAM model management
-├── utils.py                   # Utility functions
-├── export_formats.py          # COCO, YOLO, Pascal VOC exporters
-├── import_formats.py          # COCO, YOLO importers
-└── [tool dialogs]             # Standalone utility windows
+├── main.py                       # Entry point
+├── annotator_window.py           # ImageAnnotator - thin orchestrator
+├── utils.py                      # Utility functions (calculate_area, …)
+├── __init__.py                   # Public API re-exports
+│
+├── core/                         # constants, annotation_utils, image_utils
+├── controllers/                  # 7 controllers (project, image, sam, dino,
+│                                 #   yolo, annotation, class) + io_controller
+├── widgets/
+│   ├── image_label.py            # ImageLabel canvas widget (dispatcher)
+│   ├── canvas_context.py         # CanvasContext read accessor (ADR-018)
+│   └── tools/                    # Per-tool handlers (ADR-019): rectangle,
+│                                 #   polygon, paint, eraser
+├── inference/                    # sam_utils.py, dino_utils.py
+├── io/                           # export_formats.py, import_formats.py
+├── ui/                           # menu_bar, sidebar, shortcuts, theme, stylesheets
+└── dialogs/                      # Standalone tool dialogs (statistics,
+                                  #   splitter, augmenter, … 16 files)
 ```
 
 ## Key Classes
 
 | Class | File | Responsibility |
 |-------|------|----------------|
-| `ImageAnnotator` | annotator_window.py | Main window, state (`all_annotations`, `class_mapping`, etc.) |
-| `ImageLabel` | image_label.py | Image display, zoom/pan, annotation interaction |
-| `SAMUtils` | sam_utils.py | Load SAM models, run inference |
+| `ImageAnnotator` | annotator_window.py | Thin orchestrator — holds controllers, wires signals, delegates almost everything |
+| `ImageLabel` | widgets/image_label.py | Canvas display, zoom/pan, event dispatch to tool handlers |
+| `CanvasContext` | widgets/canvas_context.py | Narrow read view of main-window state for ImageLabel (ADR-018) |
+| `ToolHandler` (+ 4 subclasses) | widgets/tools/ | Per-tool mouse/key handling (rectangle, polygon, paint, eraser) (ADR-019) |
+| `ProjectController` | controllers/project_controller.py | `.iap` save/load, auto-save, `is_loading_project` guard |
+| `ImageController` | controllers/image_controller.py | TIFF/CZI loading, multi-dim slicing, image/slice switching |
+| `AnnotationController` | controllers/annotation_controller.py | Annotation CRUD, sort, edit-mode, finish_polygon/rectangle |
+| `ClassController` | controllers/class_controller.py | Class add/delete/rename/colour/visibility |
+| `SAMController` | controllers/sam_controller.py | SAM model picker, debounce, in-flight guard (ADR-013) |
+| `DINOController` | controllers/dino_controller.py | DINO single/batch detection, batch review, temp-class workflow |
+| `YOLOController` | controllers/yolo_controller.py | YOLO training menu + prediction wiring |
+| `SAMUtils` | inference/sam_utils.py | Load SAM models, run inference |
+| `DINOUtils` | inference/dino_utils.py | Grounding-DINO model load + inference |
 
 See [Building Block View](docs/05_building_block_view.md) for detailed class documentation.
 
@@ -70,7 +90,7 @@ See [Building Block View](docs/05_building_block_view.md) for detailed class doc
 4. Render in `ImageLabel.paintEvent()`
 5. Commit via `self.annotationCommitted.emit(annotation_dict)` — the
    orchestrator routes it to `AnnotationController.add_annotation_to_list`
-   (see ADR-016)
+   (see ADR-018)
 
 ### Working with Annotations
 
@@ -143,7 +163,7 @@ See [Runtime View](docs/06_runtime_view.md#multi-dimensional-image-loading) for 
 | Dark mode contrast | No hardcoded `background:` / `color:` in widget `setStyleSheet(...)` | Hardcoded greys override `soft_dark_stylesheet.py` and punch bright boxes into the sidebar. Add a global rule first, then write the widget. See [No Hardcoded Colors Rule](docs/08_crosscutting_concepts.md#dark-mode--no-hardcoded-colors-rule). |
 | DINO review state | `image_label.temp_annotations` is a single field, **not** per-image — must be re-synced from `dino_batch_results` on every image/slice switch via `_refresh_dino_temp_for_current` | Otherwise the first image's masks bleed onto every subsequent slice during navigation. See [DINO Temp Annotations](docs/08_crosscutting_concepts.md#dino-temp-annotations--single-field-many-images). |
 | DINO batch over stacks | Use `_collect_dino_batch_work_items()` to flatten regular images + every loaded slice; don't iterate `self.all_images` directly | Multi-dim images appear in `all_images` as a single entry — slices live in `self.image_slices[base_name]` and were silently skipped. |
-| DINO Enter/Escape during review | Application-wide `_DINOReviewEventFilter`, gated on pending temp_annotations + no modal + no text input | `QListWidget` consumes Enter for `itemActivated` before `ImageLabel.keyPressEvent` sees it. See [ADR-015](docs/09_architecture_decisions.md#adr-015-application-wide-event-filter-for-dino-review-shortcuts). |
+| DINO Enter/Escape during review | Application-wide `DINOReviewEventFilter`, gated on pending temp_annotations + no modal + no text input | `QListWidget` consumes Enter for `itemActivated` before `ImageLabel.keyPressEvent` sees it. See [ADR-015](docs/09_architecture_decisions.md#adr-015-application-wide-event-filter-for-dino-review-shortcuts). |
 | Auto-accept dropdown | Honored by **both** `run_dino_detection_single` and `run_dino_detection_batch` | Easy to forget in the single path because the combo is labeled "batch". |
 | GPU model unload | `model.cpu()` → `gc.collect()` → `torch.cuda.empty_cache()` + `ipc_collect()` + `synchronize()` — full reclaim requires app restart due to per-process CUDA context | Setting refs to None alone leaves circular refs pinned and shows zero Task Manager drop. See [Releasing Model GPU Memory](docs/08_crosscutting_concepts.md#releasing-model-gpu-memory). |
 | Export image-path lookup | Exact-key match first, substring fallback only | `"bee.jpg" in "honeybee.jpg"` is True — substring-only matching writes the wrong file. See [Export Format Filename Matching](docs/08_crosscutting_concepts.md#export-format-filename-matching). |

@@ -82,7 +82,7 @@ current_slice: str                  # Currently displayed slice
 **Responsibility**: Canvas widget — image display, navigation
 (zoom/pan), committed-annotation rendering, SAM bbox/points overlays,
 DINO temp-annotation rendering, polygon edit mode (modal). Per-tool
-mouse/key handling lives in `widgets/tools/*` (see ADR-017); ImageLabel
+mouse/key handling lives in `widgets/tools/*` (see ADR-019); ImageLabel
 dispatches events to the active handler.
 
 **Key Attributes**:
@@ -99,7 +99,7 @@ sam_positive_points: list           # SAM positive points
 sam_negative_points: list           # SAM negative points
 editing_polygon: dict | None        # Polygon being edited (modal sub-state)
 _tools: dict[str, ToolHandler]      # Per-tool handlers
-_ctx: CanvasContext                 # Narrow read view of main-window state (ADR-016)
+_ctx: CanvasContext                 # Narrow read view of main-window state (ADR-018)
 ```
 
 **Key Methods**:
@@ -108,7 +108,7 @@ _ctx: CanvasContext                 # Narrow read view of main-window state (ADR
   then SAM/edit-mode branches, then dispatch to
   `active_tool_handler.on_mouse_X()`.
 - `keyPressEvent()`: Enter / Escape / Delete / brush-size keys. Modal
-  branches (DINO temp, sam_points, editing_polygon, sam_magic_wand)
+  branches (DINO temp, sam_points, sam_box, editing_polygon)
   consume first; otherwise routed to `handler.on_enter()` /
   `on_escape()`.
 - `paintEvent()`: image → committed annotations → editing polygon →
@@ -120,7 +120,7 @@ _ctx: CanvasContext                 # Narrow read view of main-window state (ADR
   and prompts the user.
 
 **Communication**: emits ~20 Qt signals connected to controller slots
-in `ImageAnnotator._connect_image_label_signals` (ADR-016). Reads
+in `ImageAnnotator._connect_image_label_signals` (ADR-018). Reads
 main-window state through `CanvasContext`.
 
 ### SAMUtils (sam_utils.py)
@@ -191,6 +191,33 @@ DINOUtils().detect(
 DINO's xyxy boxes feed directly into `SAMUtils.apply_sam_predictions_batch()`,
 which returns segmentation polygons (xywh bbox is derived from the polygon at
 export time — see [Cross-cutting Concepts](08_crosscutting_concepts.md)).
+
+## Level 3: Controllers
+
+Seven `QObject` controllers plus an `io_controller` helper module
+carve `ImageAnnotator` into single-responsibility owners that the
+orchestrator delegates to. Each `QObject` controller holds `self.mw
+= main_window` and owns one slice of behaviour; the
+`io_controller` is a thin module of UI-wrapper functions around the
+pure `io/` formatters and does not need to hold state. The
+orchestrator keeps pass-through methods so external call sites
+(menus, signal wiring, the test harness) don't need to reach into
+the controller graph.
+
+| Controller | Responsibility |
+|------------|----------------|
+| `ProjectController` | `.iap` save/load, auto-save, backup/restore, missing-image prompts, window-title sync. Owns the `is_loading_project` autosave guard (load/save round-trip safety, v0.8.12). |
+| `ImageController` | Open / load / switch images and slices. TIFF + CZI loaders, the multi-dim `DimensionDialog`, the `[-ndim:]` axis-slice bug fix from the v0.9.0 era. |
+| `AnnotationController` | Annotation CRUD, list sorting, highlight, edit-mode entry/exit, `finish_polygon`, `finish_rectangle`, `replace_annotations` (eraser path). Validates writes before mutating `all_annotations`. |
+| `ClassController` | Class add / delete / rename / colour / visibility. `update_slice_list_colors`, `is_class_visible`. |
+| `SAMController` | SAM box/points tool lifecycle, debounce timer, `_sam_inference_in_flight` re-entrancy guard (ADR-013), model picker. |
+| `DINOController` | Single + batch detection, batch review navigation, temp-annotation accept/reject, custom-model browse, `DINOReviewEventFilter` ownership (ADR-015). |
+| `YOLOController` | Training menu, `TrainingThread`, prediction dialog, result processing. |
+| `io_controller` *(module-level functions, not a class)* | Thin UI wrappers around the pure `io/export_formats.py` and `io/import_formats.py` modules. |
+
+Communication: `ImageLabel` does not import controllers directly —
+it emits Qt signals (ADR-018) that the orchestrator connects to
+controller slots in `_connect_image_label_signals()`.
 
 ## Level 3: Export/Import Subsystem
 
@@ -315,7 +342,7 @@ ImageAnnotator (main window)
     └── launches ──> Tool Dialogs (utilities)
 
 ImageLabel
-    ├── emits signals to ──> ImageAnnotator (writes; see ADR-016)
+    ├── emits signals to ──> ImageAnnotator (writes; see ADR-018)
     ├── reads via ──> CanvasContext (paint/eraser size, current class,
     │                  class_mapping, is_class_visible, scroll_area, …)
     └── uses ──> utils (area, bbox calculations)

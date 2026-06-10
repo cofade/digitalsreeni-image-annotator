@@ -85,6 +85,37 @@
 
 ## Technical Debt
 
+### Low Test Coverage of Interactive Paths
+
+**Debt Level**: Medium
+
+**Description**: A pytest + pytest-qt suite of 94 tests now exists
+(boot smoke, coordinate conversions, export-format round-trips,
+utility functions). Coverage is ~15% by line — the gap is the
+canvas event flow (mouse events → tool handler → signal emission →
+controller slot) and the SAM/DINO/YOLO inference paths.
+
+**Impact**:
+- Phase 6/7/8 refactors had to lean on manual QA checklists for the
+  canvas flow because no automated test exercises it end-to-end.
+- Inference paths are exercised only via the smoke boot, not under
+  real model loads (those would slow CI prohibitively).
+
+**Effort to Resolve**: Medium
+
+**Priority**: Medium
+
+**Plan**:
+1. Per-tool unit tests under `widgets/tools/` — each handler can be
+   tested by instantiating with a stub `label` carrying signals
+   and a fake `CanvasContext`, then feeding `QMouseEvent`s.
+2. Integration test that loads a tiny project, draws a polygon,
+   asserts the `.iap` round-trip restores state.
+3. Mock SAMUtils / DINOUtils inference returns to exercise the
+   controller signal paths without needing model weights.
+
+---
+
 ### Limited Coverage — Inline Imports Not Caught by Module Tests
 
 **Debt Level**: Medium
@@ -165,7 +196,7 @@ read goes through a narrow `CanvasContext` accessor.
 signals (annotation lifecycle, SAM, class, tool/UI state, navigation);
 the orchestrator wires each to the matching controller slot.
 
-**ADR**: see ADR-016 in `09_architecture_decisions.md`.
+**ADR**: see ADR-018 in `09_architecture_decisions.md`.
 
 ---
 

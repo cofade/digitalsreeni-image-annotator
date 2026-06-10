@@ -535,8 +535,8 @@ the architectural-smell note below.
 **What stays on `ImageLabel` (intentional non-extraction)**:
 
 - Navigation (zoom, pan, offset, scaled pixmap) — cross-cutting.
-- SAM bbox / points / magic-wand state — activates from any tool via
-  the magic-wand toggle, cuts across the main tools.
+- SAM bbox / points state — activates from any tool via the SAM-box /
+  SAM-points toggles, cuts across the main tools.
 - Polygon edit mode (`editing_polygon`, `handle_editing_click`,
   `handle_editing_move`, `draw_editing_polygon`) — modal state
   orthogonal to tool selection; sets `current_tool = None` while

@@ -7,7 +7,7 @@ import warnings
 import cv2
 import numpy as np
 import shapely
-from PyQt6.QtCore import QEvent, QObject, Qt, QThread, QTimer, pyqtSignal
+from PyQt6.QtCore import Qt, QThread, QTimer, pyqtSignal
 from PyQt6.QtGui import (
     QAction,
     QColor,
@@ -41,7 +41,6 @@ from PyQt6.QtWidgets import (
     QMenu,
     QMessageBox,
     QProgressBar,
-    QProgressDialog,
     QPushButton,
     QScrollArea,
     QSlider,
@@ -54,6 +53,7 @@ from shapely.ops import unary_union
 from shapely.validation import make_valid
 
 from .controllers import io_controller
+from .controllers.dino_controller import DINOController, _DINOReviewEventFilter
 from .controllers.image_controller import ImageController
 from .controllers.project_controller import ProjectController
 from .controllers.sam_controller import SAMController
@@ -99,44 +99,6 @@ class TrainingThread(QThread):
             self.finished.emit(results)
         except Exception as e:
             self.finished.emit(str(e))
-
-
-class _DINOReviewEventFilter(QObject):
-    """Application-wide event filter that lets Enter / Escape accept or
-    reject pending DINO temp_annotations regardless of which widget has
-    focus. Without this, clicking a slice/image entry in a list moves
-    focus there and Enter is consumed by the list's itemActivated
-    handler before it can reach ImageLabel.keyPressEvent.
-
-    Suppressed when a modal dialog is active or focus is on a text-input
-    widget so we don't break dialog default-button behaviour or
-    in-cell editing.
-    """
-
-    def __init__(self, main_window: "ImageAnnotator"):
-        super().__init__(main_window)
-        self.main_window = main_window
-
-    def eventFilter(self, obj, event):
-        if event.type() != QEvent.Type.KeyPress:
-            return False
-        key = event.key()
-        if key not in (Qt.Key.Key_Return, Qt.Key.Key_Enter, Qt.Key.Key_Escape):
-            return False
-        app = QApplication.instance()
-        if app is None or app.activeModalWidget() is not None:
-            return False
-        focused = app.focusWidget()
-        if isinstance(focused, (QLineEdit, QTextEdit)):
-            return False
-        temp = self.main_window.image_label.temp_annotations
-        if not temp or not any(a.get("source") == "dino" for a in temp):
-            return False
-        if key in (Qt.Key.Key_Return, Qt.Key.Key_Enter):
-            self.main_window.accept_dino_results()
-        else:
-            self.main_window.reject_dino_results()
-        return True
 
 
 class ImageAnnotator(QMainWindow):
@@ -211,6 +173,7 @@ class ImageAnnotator(QMainWindow):
         self._sam_inference_in_flight = False
 
         self.sam_controller = SAMController(self)
+        self.dino_controller = DINOController(self)
 
         # Create sam_magic_wand_button
         self.sam_magic_wand_button = QPushButton("Magic Wand")
@@ -603,11 +566,7 @@ class ImageAnnotator(QMainWindow):
             super().keyPressEvent(event)
 
     def has_visible_temp_classes(self):
-        for i in range(self.class_list.count()):
-            item = self.class_list.item(i)
-            if item.text().startswith("Temp-") and item.checkState() == Qt.CheckState.Checked:
-                return True
-        return False
+        return self.dino_controller.has_visible_temp_classes()
 
     def launch_snake_game(self):
         # print("Launching Snake game")
@@ -1304,626 +1263,53 @@ class ImageAnnotator(QMainWindow):
 
     def _resolve_dino_model_path(self, model_name: str) -> str | None:
         """Return the canonical local path for a preset DINO model, or None if unknown."""
-        # GDINO_MODEL_PATHS now returns absolute paths from models_base_dir().
-        return GDINO_MODEL_PATHS.get(model_name)
+        return self.dino_controller._resolve_dino_model_path(model_name)
 
     def _on_dino_model_changed(self, text):
-        """Selection → ready state. Downloads happen lazily on first Detect."""
-        self.dino_browse_row.setVisible(text == "Custom / fine-tuned (browse)")
+        return self.dino_controller._on_dino_model_changed(text)
 
-        if text == "Pick a DINO Model":
-            self.dino_model_loaded = False
-            self.lbl_dino_status.setText("No DINO model loaded")
-            self.btn_detect_single.setEnabled(False)
-            self.btn_detect_batch.setEnabled(False)
-            return
-
-        if text == "Custom / fine-tuned (browse)":
-            if self.dino_custom_model_path and os.path.exists(self.dino_custom_model_path):
-                self.dino_model_loaded = True
-                self.lbl_dino_status.setText(
-                    f"Ready: {os.path.basename(self.dino_custom_model_path)}"
-                )
-                self.btn_detect_single.setEnabled(True)
-                self.btn_detect_batch.setEnabled(True)
-            else:
-                self.dino_model_loaded = False
-                self.lbl_dino_status.setText("Browse for a custom model folder")
-                self.btn_detect_single.setEnabled(False)
-                self.btn_detect_batch.setEnabled(False)
-            return
-
-        # Standard preset (grounding-dino-base/tiny)
-        self.dino_model_loaded = True
-        self.btn_detect_single.setEnabled(True)
-        self.btn_detect_batch.setEnabled(True)
-        model_path = self._resolve_dino_model_path(text)
-        if model_path and os.path.exists(model_path):
-            self.lbl_dino_status.setText(f"Ready: {text}")
-        else:
-            self.lbl_dino_status.setText(f"{text} — will download on first detection")
-
-    def _ensure_dino_model_downloaded(self, model_name: str) -> bool:
-        """If the preset model isn't on disk yet, download it. Returns success."""
-        if model_name in ("Pick a DINO Model", "Custom / fine-tuned (browse)"):
-            return True  # Custom path is validated elsewhere; no download for it.
-        model_path = self._resolve_dino_model_path(model_name)
-        if model_path and os.path.exists(model_path):
-            return True
-
-        # huggingface_hub is the only way to fetch the weights. Surface the
-        # actionable install hint if it's missing rather than the generic
-        # "Could not download" message.
-        try:
-            import huggingface_hub  # noqa: F401
-        except ImportError:
-            QMessageBox.critical(
-                self, "Missing Dependency",
-                f"Cannot download {model_name}: the huggingface_hub package "
-                "is not installed.\n\nRun:\n    pip install huggingface_hub",
-            )
-            return False
-
-        self.lbl_dino_status.setText(f"Downloading {model_name}...")
-        QApplication.processEvents()
-        try:
-            downloaded = self.dino_utils.download_model(model_name)
-        except Exception as e:
-            QMessageBox.critical(self, "Download Failed", f"{model_name}:\n{e}")
-            return False
-        if not downloaded:
-            QMessageBox.critical(
-                self, "Download Failed",
-                f"Could not download {model_name} from Hugging Face Hub.",
-            )
-            return False
-        return True
+    def _ensure_dino_model_downloaded(self, model_name):
+        return self.dino_controller._ensure_dino_model_downloaded(model_name)
 
     def browse_dino_model(self):
-        path = QFileDialog.getExistingDirectory(self, "Select DINO Model Folder")
-        if path:
-            self.dino_custom_model_path = path
-            self.lbl_dino_custom.setText(os.path.basename(path))
-            # Refresh ready state now that a path is set.
-            self._on_dino_model_changed(self.dino_model_selector.currentText())
+        return self.dino_controller.browse_dino_model()
 
     def on_dino_class_row_changed(self):
-        name = self.dino_class_table.selected_class_name()
-        self.dino_phrase_panel.set_active_class(name)
+        return self.dino_controller.on_dino_class_row_changed()
 
-    def _build_dino_class_configs(self) -> list[dict]:
-        """Build class_configs from threshold table + phrase panel."""
-        configs = []
-        for cfg in self.dino_class_table.get_class_configs():
-            phrases = self.dino_phrase_panel.get_phrases_for(cfg["name"])
-            configs.append({
-                "name": cfg["name"],
-                "phrases": phrases,
-                "box_thr": cfg["box_thr"],
-                "txt_thr": cfg["txt_thr"],
-                "nms_thr": cfg["nms_thr"],
-            })
-        return configs
+    def _build_dino_class_configs(self):
+        return self.dino_controller._build_dino_class_configs()
 
     def run_dino_detection_single(self):
-        if not self.dino_model_loaded:
-            QMessageBox.warning(self, "No DINO Model",
-                                "Please pick a DINO model first.")
-            return
-        if not self.sam_utils.current_sam_model:
-            QMessageBox.warning(
-                self, "No SAM Model",
-                "DINO produces bounding boxes; SAM is needed to convert them "
-                "into segmentation masks. Please pick a SAM model first.",
-            )
-            return
-        if not self.current_image or self.current_image.isNull():
-            QMessageBox.warning(self, "No Image",
-                                "Please load an image first.")
-            return
-
-        model_name = self.dino_model_selector.currentText()
-        class_configs = self._build_dino_class_configs()
-        if not class_configs:
-            QMessageBox.warning(self, "No Classes",
-                                "Please add at least one class with phrases.")
-            return
-
-        self.btn_detect_single.setEnabled(False)
-        self.btn_detect_batch.setEnabled(False)
-
-        # Clear any stale temp annotations before starting detection so an
-        # accept from a previous run doesn't bleed into the results handler.
-        self.image_label.temp_annotations = []
-
-        if not self._ensure_dino_model_downloaded(model_name):
-            self.btn_detect_single.setEnabled(True)
-            self.btn_detect_batch.setEnabled(True)
-            return
-
-        self.lbl_dino_status.setText("Detecting...")
-        QApplication.processEvents()
-
-        print(f"[DINO] detect_single: model={model_name!r} class_configs={class_configs}")
-        try:
-            results = self.dino_utils.detect(
-                self.current_image, class_configs,
-                model_name=model_name,
-                custom_model_path=self.dino_custom_model_path,
-            )
-        except Exception as e:
-            traceback.print_exc()
-            QMessageBox.critical(self, "DINO Error", str(e))
-            self.btn_detect_single.setEnabled(True)
-            self.btn_detect_batch.setEnabled(True)
-            self.lbl_dino_status.setText("Detection failed.")
-            return
-
-        self.btn_detect_single.setEnabled(True)
-        self.btn_detect_batch.setEnabled(True)
-
-        if results is None:
-            print("[DINO] detect_single: results=None (model resolution failure)")
-            self.lbl_dino_status.setText("No detections.")
-            return
-
-        print(f"[DINO] detect_single: got {len(results)} result(s)")
-        if results:
-            for i, r in enumerate(results[:3]):
-                print(f"[DINO]   result[{i}] class={r['class_name']!r} score={r['score']:.3f} bbox={r['bbox']}")
-
-        if not results:
-            self.lbl_dino_status.setText("No detections found.")
-            return
-
-        self.lbl_dino_status.setText(f"{len(results)} detection(s). Running SAM...")
-        QApplication.processEvents()
-
-        # Batch SAM segmentation. Wrap in try/except for the same reason
-        # as the DINO call above — sam_utils raises on model load
-        # failure / CUDA OOM / re-entry now, instead of returning None.
-        bboxes = [r["bbox"] for r in results]
-        print(f"[SAM] batch call: {len(bboxes)} bbox(es), first 3 = {bboxes[:3]}")
-        try:
-            sam_results = self.sam_utils.apply_sam_predictions_batch(
-                self.current_image, bboxes
-            )
-        except Exception as e:
-            traceback.print_exc()
-            QMessageBox.critical(self, "SAM Error", str(e))
-            self.lbl_dino_status.setText("SAM segmentation failed.")
-            return
-
-        if sam_results is None:
-            print("[SAM] batch returned None (no SAM model loaded)")
-            QMessageBox.warning(self, "SAM Error",
-                                "Failed to segment detections with SAM.")
-            self.lbl_dino_status.setText("SAM segmentation failed.")
-            return
-
-        n_errors = sum(1 for s in sam_results if "error" in s)
-        n_ok = sum(1 for s in sam_results if "segmentation" in s)
-        print(f"[SAM] batch returned {len(sam_results)} result(s): {n_ok} ok, {n_errors} error(s)")
-
-        # Honor the batch-mode dropdown for the single-image case too:
-        # "Auto-accept" means commit straight to annotations without
-        # showing the temp-review overlay. The dropdown name is "batch"
-        # historically but it controls both paths.
-        image_name = self.current_slice or self.image_file_name
-        auto_accept = (
-            self.dino_batch_mode.currentText() == "Auto-accept all detections"
-        )
-        if auto_accept:
-            print(f"[DINO] detect_single: auto_accept=True, committing {len(results)} result(s)")
-            try:
-                self._commit_dino_results(image_name, results, sam_results)
-            except Exception as e:
-                print(f"[DINO] _commit_dino_results failed: {e}")
-                traceback.print_exc()
-            n_committed = sum(1 for s in sam_results if "error" not in s)
-            self.image_label.temp_annotations = []
-            self.image_label.update()
-            self.update_annotation_list()
-            # Refresh slice list so the freshly-annotated slice picks
-            # up the highlight color; review-mode's accept_dino_results
-            # already does this, the auto-accept path didn't.
-            self.update_slice_list_colors()
-            self.auto_save()
-            self.lbl_dino_status.setText(
-                f"Loaded: {model_name}  |  {n_committed} mask(s) auto-accepted"
-            )
-            print(f"[DINO] auto-accept: committed {n_committed} mask(s) to {image_name}")
-            return
-
-        # Review mode — build temp annotations and let user accept/reject
-        temp_annotations = []
-        for r, s in zip(results, sam_results):
-            if "error" in s:
-                print(f"[SAM]   failed for {r['class_name']}: {s['error']}")
-                continue
-            temp_annotations.append({
-                "segmentation": s["segmentation"],
-                "category_name": r["class_name"],
-                "score": r["score"],
-                "source": "dino",
-                "temp": True,
-            })
-
-        self.image_label.temp_annotations = temp_annotations
-        # Defer setFocus until after the click event chain settles —
-        # synchronous setFocus often loses to whatever widget is still
-        # processing the original click.
-        QTimer.singleShot(0, self.image_label.setFocus)
-        self.image_label.update()
-        self.lbl_dino_status.setText(
-            f"Loaded: {model_name}  |  {len(temp_annotations)} mask(s) ready"
-        )
-        print(f"[DINO] detection complete: {len(results)} boxes, {len(temp_annotations)} masks attached to canvas")
+        return self.dino_controller.run_dino_detection_single()
 
     def run_dino_detection_batch(self):
-        if not self.dino_model_loaded:
-            QMessageBox.warning(self, "No DINO Model",
-                                "Please pick a DINO model first.")
-            return
-        if not self.sam_utils.current_sam_model:
-            QMessageBox.warning(
-                self, "No SAM Model",
-                "DINO produces bounding boxes; SAM is needed to convert them "
-                "into segmentation masks. Please pick a SAM model first.",
-            )
-            return
-        if not self.all_images:
-            QMessageBox.warning(self, "No Images",
-                                "Please load images first.")
-            return
+        return self.dino_controller.run_dino_detection_batch()
 
-        model_name = self.dino_model_selector.currentText()
-        class_configs = self._build_dino_class_configs()
-        if not class_configs:
-            QMessageBox.warning(self, "No Classes",
-                                "Please add at least one class with phrases.")
-            return
-
-        # Prevent stale temp annotations from a prior single-image review from
-        # confusing the batch results handler or the _DINOReviewEventFilter.
-        self.image_label.temp_annotations = []
-
-        if not self._ensure_dino_model_downloaded(model_name):
-            return
-
-        auto_accept = self.dino_batch_mode.currentText() == "Auto-accept all detections"
-        print(f"[DINO] detect_batch: auto_accept={auto_accept}")
-
-        # Build a flat list of (display_name, qimage) work items covering
-        # both regular images (loaded from disk) and multi-dim image
-        # slices (already QImages in memory). Slices live in
-        # self.image_slices[base_name], indexed by their slice_name
-        # (e.g. "stack_T1_Z1_C1"). The earlier implementation only
-        # iterated self.all_images and skipped multi-slice entries with
-        # a console warning, leaving slice-based projects unable to use
-        # Detect All.
-        work_items = self._collect_dino_batch_work_items()
-        if not work_items:
-            QMessageBox.information(
-                self, "Detect All Images",
-                "No images or slices available to process."
-            )
-            return
-        total = len(work_items)
-
-        progress = QProgressDialog("Running LLM Detection...", "Cancel", 0, total, self)
-        progress.setWindowModality(Qt.WindowModality.WindowModal)
-        progress.setMinimumDuration(0)
-
-        for idx, (image_name, qimage) in enumerate(work_items):
-            if progress.wasCanceled():
-                break
-            progress.setValue(idx)
-            QApplication.processEvents()
-
-            try:
-                results = self.dino_utils.detect(
-                    qimage, class_configs,
-                    model_name=model_name,
-                    custom_model_path=self.dino_custom_model_path,
-                )
-            except Exception as e:
-                print(f"  DINO failed for {image_name}: {e}")
-                continue
-
-            if not results:
-                continue
-
-            bboxes = [r["bbox"] for r in results]
-            try:
-                sam_results = self.sam_utils.apply_sam_predictions_batch(qimage, bboxes)
-            except Exception as e:
-                print(f"  SAM failed for {image_name}: {e}")
-                continue
-            if sam_results is None:
-                continue
-
-            if auto_accept:
-                self._commit_dino_results(image_name, results, sam_results)
-            else:
-                # Store for later review
-                self._store_dino_batch_results(image_name, results, sam_results)
-
-        progress.setValue(total)
-        progress.close()
-
-        if auto_accept:
-            QMessageBox.information(
-                self, "Batch Detection Complete",
-                "Detections have been saved to annotations."
-            )
-            self.update_annotation_list()
-            # Multi-dim stacks commonly auto-accept across dozens of
-            # slices; the slice list must show which ones gained
-            # annotations or the user can't tell what happened.
-            self.update_slice_list_colors()
-            self.auto_save()
-        else:
-            self._show_dino_batch_review()
 
     def _collect_dino_batch_work_items(self):
-        """Return a flat ``[(name, QImage), …]`` list for batch DINO.
-
-        Regular images are loaded from disk via PIL → QImage. Multi-dim
-        images contribute one entry per slice from ``self.image_slices``;
-        slices that haven't been materialised yet (the parent image was
-        never opened in this session) are skipped with a console log.
-        """
-        from PIL import Image as PILImage
-        items = []
-        for img_info in self.all_images:
-            file_name = img_info["file_name"]
-            if img_info.get("is_multi_slice", False):
-                base_name = os.path.splitext(file_name)[0]
-                slices = self.image_slices.get(base_name, [])
-                if not slices:
-                    print(f"  Skipping multi-slice image '{file_name}': "
-                          "no slices loaded (open the image first to "
-                          "materialise its slices).")
-                    continue
-                for slice_name, qimage in slices:
-                    items.append((slice_name, qimage))
-            else:
-                image_path = self.image_paths.get(file_name)
-                if not image_path or not os.path.exists(image_path):
-                    print(f"  Skipping '{file_name}': missing image path.")
-                    continue
-                try:
-                    pil_img = PILImage.open(image_path).convert("RGB")
-                    qimage = QImage(
-                        pil_img.tobytes(),
-                        pil_img.width,
-                        pil_img.height,
-                        pil_img.width * 3,
-                        QImage.Format.Format_RGB888,
-                    )
-                    items.append((file_name, qimage))
-                except Exception as e:
-                    print(f"  Skipping '{file_name}': failed to load ({e}).")
-        print(f"[DINO] batch work items: {len(items)} total")
-        return items
+        return self.dino_controller._collect_dino_batch_work_items()
 
     def _commit_dino_results(self, image_name, dino_results, sam_results):
-        """Commit DINO+SAM results to annotations for a single image.
-
-        If image_name is the currently-displayed image, route through
-        image_label.annotations so the canvas reflects the change and the
-        next save_current_annotations() doesn't overwrite the additions.
-        Otherwise write directly to the project-level cache.
-        """
-        current_image = self.current_slice or self.image_file_name
-        is_current = image_name == current_image
-
-        if is_current:
-            target = self.image_label.annotations
-        else:
-            if image_name not in self.all_annotations:
-                self.all_annotations[image_name] = {}
-            target = self.all_annotations[image_name]
-
-        for r, s in zip(dino_results, sam_results):
-            if "error" in s:
-                continue
-            class_name = r["class_name"]
-            # DINO only returns labels that came from class_configs (which the
-            # parent built from the class table), so this should never trigger.
-            # Skip with a warning rather than auto-creating a class mid-batch
-            # (which would fan out auto_save() per new class).
-            if class_name not in self.class_mapping:
-                print(f"  Skipping DINO result for unknown class '{class_name}'")
-                continue
-            existing = target.get(class_name, [])
-            number = max((a.get("number", 0) for a in existing), default=0) + 1
-            ann = {
-                "segmentation": s["segmentation"],
-                "category_id": self.class_mapping[class_name],
-                "category_name": class_name,
-                "score": r["score"],
-                "source": "dino",
-                "number": number,
-            }
-            target.setdefault(class_name, []).append(ann)
-
-        if is_current:
-            # Sync image_label.annotations -> all_annotations[current] for save.
-            self.save_current_annotations()
-            self.image_label.update()
+        return self.dino_controller._commit_dino_results(image_name, dino_results, sam_results)
 
     def _store_dino_batch_results(self, image_name, dino_results, sam_results):
-        """Store results for batch review mode."""
-        valid = []
-        for r, s in zip(dino_results, sam_results):
-            if "error" not in s:
-                valid.append({
-                    "segmentation": s["segmentation"],
-                    "category_name": r["class_name"],
-                    "score": r["score"],
-                    "source": "dino",
-                    "temp": True,
-                })
-        self.dino_batch_results[image_name] = valid
+        return self.dino_controller._store_dino_batch_results(image_name, dino_results, sam_results)
 
     def _show_dino_batch_review(self):
-        """Navigate to first image with batch results for review.
+        return self.dino_controller._show_dino_batch_review()
 
-        If the next entry refers to an image/slice that's no longer in
-        the project (e.g. the source was removed between detection and
-        review), pop the orphan and try the next entry so the user
-        doesn't get stuck with un-reviewable results.
-        """
-        if not self.dino_batch_results:
-            QMessageBox.information(self, "Batch Detection",
-                                    "No detections found in any image.")
-            return
-        # Drain orphans up front. Navigate to the entry: it may be a
-        # regular image (key in image_list) or a slice (key in some
-        # image_slices[base_name]). _navigate_to_image_or_slice handles
-        # both. After the switch, switch_image / switch_slice's tail
-        # call to _refresh_dino_temp_for_current copies
-        # dino_batch_results[first] into image_label.temp_annotations
-        # and defers setFocus on the canvas — nothing to repeat here.
-        while self.dino_batch_results:
-            first = next(iter(self.dino_batch_results))
-            if self._navigate_to_image_or_slice(first):
-                return
-            print(f"[DINO] dropping orphan batch result for {first!r} "
-                  "(no matching image or slice in project)")
-            self.dino_batch_results.pop(first, None)
-        # Drained all entries without a single navigable target.
-        QMessageBox.warning(
-            self, "Batch Detection",
-            "Detections were produced but none of them map to an image "
-            "or slice still in the project. Results discarded.",
-        )
-
-    def _navigate_to_image_or_slice(self, name: str) -> bool:
-        """Switch the UI to a regular image or a slice by name.
-
-        Returns True if a match was found and the switch was issued.
-        Used by batch-review navigation, which mixes regular image
-        names and slice names in ``dino_batch_results``.
-        """
-        # Regular image — match in image_list directly
-        for i in range(self.image_list.count()):
-            item = self.image_list.item(i)
-            if item and item.text() == name:
-                self.image_list.setCurrentRow(i)
-                self.switch_image(item)
-                return True
-        # Slice — find which multi-dim image contains it, switch to
-        # that parent image first, then activate the specific slice
-        # via slice_list.
-        for base_name, slices in self.image_slices.items():
-            if not any(s_name == name for s_name, _ in slices):
-                continue
-            # Find the parent file in image_list. The file_name in the
-            # list includes the extension (e.g. "stack.tif") while
-            # base_name is the stem ("stack"), so match by stripping
-            # the extension and comparing for equality.
-            for i in range(self.image_list.count()):
-                item = self.image_list.item(i)
-                if not item:
-                    continue
-                file_name = item.text()
-                if os.path.splitext(file_name)[0] == base_name:
-                    self.image_list.setCurrentRow(i)
-                    self.switch_image(item)
-                    # switch_image populates slice_list. Now find the slice.
-                    for s_i in range(self.slice_list.count()):
-                        s_item = self.slice_list.item(s_i)
-                        if s_item and s_item.text() == name:
-                            self.slice_list.setCurrentRow(s_i)
-                            self.switch_slice(s_item)
-                            return True
-                    break
-            return False
-        return False
+    def _navigate_to_image_or_slice(self, name):
+        return self.dino_controller._navigate_to_image_or_slice(name)
 
     def _refresh_dino_temp_for_current(self):
-        """Sync ``image_label.temp_annotations`` to whatever the
-        currently-displayed image/slice has stored in
-        ``dino_batch_results``. Called from switch_slice / switch_image.
-
-        Why this exists: ``temp_annotations`` is a single field on
-        ``ImageLabel``, not a per-image cache. Without this sync, masks
-        from the previously-viewed image bleed onto every slice the
-        user navigates to. During a batch review the user expects each
-        image to show its own pending detections; outside batch review,
-        switching simply discards the pending overlay.
-        """
-        new_image = self.current_slice or self.image_file_name
-        pending = self.dino_batch_results.get(new_image, []) if new_image else []
-        if pending:
-            # Re-stamp the "temp" flag in case it was stripped by a
-            # previous accept path; this list also feeds the paintEvent
-            # which expects dicts with "segmentation" + "category_name".
-            self.image_label.temp_annotations = list(pending)
-            self.lbl_dino_status.setText(
-                f"Review: {new_image}  ({len(pending)} detection(s))"
-            )
-            QTimer.singleShot(0, self.image_label.setFocus)
-        else:
-            if self.image_label.temp_annotations:
-                print("[DINO] temp annotations cleared on switch "
-                      f"(no pending batch results for {new_image!r})")
-            self.image_label.temp_annotations = []
-        self.image_label.update()
+        return self.dino_controller._refresh_dino_temp_for_current()
 
     def accept_dino_results(self):
-        """Accept current temp_annotations (called from keyPressEvent)."""
-        if not self.image_label.temp_annotations:
-            return
-        image_name = self.current_slice or self.image_file_name
-
-        for ann in self.image_label.temp_annotations:
-            class_name = ann["category_name"]
-            # DINO only returns labels from class_configs (built from the
-            # class table), so unknown classes should never reach this point.
-            # Skip with a warning rather than auto-creating mid-accept.
-            if class_name not in self.class_mapping:
-                print(f"  Skipping DINO result for unknown class '{class_name}'")
-                continue
-            new_ann = {
-                "segmentation": ann["segmentation"],
-                "category_id": self.class_mapping[class_name],
-                "category_name": class_name,
-                "score": ann.get("score", 0.0),
-                "source": "dino",
-            }
-            # Append to the live image_label dict; save_current_annotations()
-            # below syncs it into self.all_annotations. add_annotation_to_list
-            # assigns the per-class "number" used for display.
-            self.image_label.annotations.setdefault(class_name, []).append(new_ann)
-            self.add_annotation_to_list(new_ann)
-
-        self.image_label.temp_annotations = []
-        # Clear batch results if reviewing
-        self.dino_batch_results.pop(image_name, None)
-        if self.dino_batch_results:
-            self._show_dino_batch_review()
-        self.save_current_annotations()
-        self.update_slice_list_colors()
-        self.image_label.update()
-        self.lbl_dino_status.setText("Results accepted.")
-        print("DINO results accepted.")
+        return self.dino_controller.accept_dino_results()
 
     def reject_dino_results(self):
-        """Discard current temp_annotations."""
-        self.image_label.temp_annotations = []
-        image_name = self.current_slice or self.image_file_name
-        self.dino_batch_results.pop(image_name, None)
-        if self.dino_batch_results:
-            self._show_dino_batch_review()
-        self.image_label.update()
-        self.lbl_dino_status.setText("Results discarded.")
-        print("DINO results discarded.")
-
-    # --- END DINO Methods ---
+        return self.dino_controller.reject_dino_results()
 
     def setup_font_size_selector(self):
         theme.setup_font_size_selector(self)
@@ -3783,101 +3169,19 @@ class ImageAnnotator(QMainWindow):
         self.deactivate_sam_magic_wand()
 
     def add_temp_classes(self, temp_annotations):
-        for temp_class_name, annotations in temp_annotations.items():
-            if temp_class_name not in self.image_label.class_colors:
-                color = QColor(
-                    Qt.GlobalColor(len(self.image_label.class_colors) % 16 + 7)
-                )
-                self.image_label.class_colors[temp_class_name] = color
-            self.image_label.annotations[temp_class_name] = annotations
-
-        self.update_class_list()
+        return self.dino_controller.add_temp_classes(temp_annotations)
 
     def verify_current_class(self):
-        if self.current_class is None or self.current_class not in self.class_mapping:
-            if self.class_list.count() > 0:
-                self.class_list.setCurrentRow(0)
-                self.on_class_selected(self.class_list.item(0))
-            else:
-                self.current_class = None
-                self.disable_annotation_tools()
+        return self.dino_controller.verify_current_class()
 
     def accept_visible_temp_classes(self):
-        visible_temp_classes = [
-            item.text()
-            for item in self.class_list.findItems("Temp-*", Qt.MatchFlag.MatchWildcard)
-            if item.checkState() == Qt.CheckState.Checked
-        ]
-
-        for temp_class_name in visible_temp_classes:
-            permanent_class_name = temp_class_name[5:]  # Remove "Temp-" prefix
-            if permanent_class_name not in self.image_label.annotations:
-                self.add_class(
-                    permanent_class_name, self.image_label.class_colors[temp_class_name]
-                )
-
-            # Get the current maximum number for this class
-            current_max = max(
-                [
-                    ann.get("number", 0)
-                    for ann in self.image_label.annotations.get(
-                        permanent_class_name, []
-                    )
-                ]
-                + [0]
-            )
-
-            for annotation in self.image_label.annotations[temp_class_name]:
-                current_max += 1
-                annotation["category_name"] = permanent_class_name
-                annotation["number"] = current_max
-                self.image_label.annotations.setdefault(
-                    permanent_class_name, []
-                ).append(annotation)
-
-            del self.image_label.annotations[temp_class_name]
-            del self.image_label.class_colors[temp_class_name]
-
-        self.update_class_list()
-        current_name = self.current_slice or self.image_file_name
-        self.all_annotations[current_name] = self.image_label.annotations
-        self.update_annotation_list()
-        self.image_label.update()
-        self.save_current_annotations()
-
-        # Select the first primary class
-        self.select_first_primary_class()
-        self.verify_current_class()
-
-        QMessageBox.information(
-            self,
-            "Annotations Accepted",
-            "Temporary annotations have been accepted and added to the permanent classes.",
-        )
+        return self.dino_controller.accept_visible_temp_classes()
 
     def select_first_primary_class(self):
-        for i in range(self.class_list.count()):
-            item = self.class_list.item(i)
-            if not item.text().startswith("Temp-"):
-                self.class_list.setCurrentItem(item)
-                self.on_class_selected(item)
-                break
+        return self.dino_controller.select_first_primary_class()
 
     def reject_visible_temp_classes(self):
-        visible_temp_classes = [
-            item.text()
-            for item in self.class_list.findItems("Temp-*", Qt.MatchFlag.MatchWildcard)
-            if item.checkState() == Qt.CheckState.Checked
-        ]
-
-        for temp_class_name in visible_temp_classes:
-            if temp_class_name in self.image_label.annotations:
-                del self.image_label.annotations[temp_class_name]
-            if temp_class_name in self.image_label.class_colors:
-                del self.image_label.class_colors[temp_class_name]
-
-        self.update_class_list()
-        self.image_label.update()
+        return self.dino_controller.reject_visible_temp_classes()
 
     def is_class_visible(self, class_name):
         items = self.class_list.findItems(class_name, Qt.MatchFlag.MatchExactly)
@@ -3886,41 +3190,7 @@ class ImageAnnotator(QMainWindow):
         return False
 
     def check_temp_annotations(self):
-        temp_classes = [
-            class_name
-            for class_name in self.image_label.annotations.keys()
-            if class_name.startswith("Temp-")
-        ]
-        if temp_classes:
-            reply = QMessageBox.question(
-                self,
-                "Temporary Annotations",
-                "There are temporary annotations that will be discarded. Do you want to continue?",
-                QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
-                QMessageBox.StandardButton.No,
-            )
-            if reply == QMessageBox.StandardButton.Yes:
-                for temp_class in temp_classes:
-                    del self.image_label.annotations[temp_class]
-                    del self.image_label.class_colors[temp_class]
-                self.update_class_list()
-                self.update_annotation_list()
-                return True
-            return False
-        return True
+        return self.dino_controller.check_temp_annotations()
 
     def remove_all_temp_annotations(self):
-        for image_name in list(self.all_annotations.keys()):
-            for class_name in list(self.all_annotations[image_name].keys()):
-                if class_name.startswith("Temp-"):
-                    del self.all_annotations[image_name][class_name]
-            if not self.all_annotations[image_name]:
-                del self.all_annotations[image_name]
-
-        for class_name in list(self.image_label.class_colors.keys()):
-            if class_name.startswith("Temp-"):
-                del self.image_label.class_colors[class_name]
-
-        self.update_class_list()
-        self.update_annotation_list()
-        self.image_label.update()
+        return self.dino_controller.remove_all_temp_annotations()

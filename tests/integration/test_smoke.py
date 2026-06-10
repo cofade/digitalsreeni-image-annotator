@@ -109,7 +109,7 @@ def test_annotator_window_inline_imports_are_resolvable():
         module = node.module
         # Proper subpackage imports are fine (e.g. .dialogs.foo)
         dots = module.split(".")
-        if dots[0] in ("dialogs", "inference", "io", "ui", "widgets", "core"):
+        if dots[0] in ("controllers", "dialogs", "inference", "io", "ui", "widgets", "core"):
             continue
         # Root-level modules that stayed behind: utils, annotator_window, main
         root_py = pkg_dir / f"{module}.py"

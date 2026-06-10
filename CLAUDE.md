@@ -163,17 +163,18 @@ See [Runtime View](docs/06_runtime_view.md#multi-dimensional-image-loading) for 
 | 6 | Commit: `feat: Description` or `fix: Description` | Clear, descriptive messages |
 | 7 | Push & create PR | `git push origin feature/branch` |
 
-### Testing Checklist (Manual — No Automated Tests)
+### Testing Checklist
 
 Before opening a PR, verify at minimum:
 
-1. **Launch the app** — no import errors, main window renders
-2. **Golden path** — perform the new feature's primary workflow end-to-end
-3. **Edge cases** — empty state, cancel/escape, large images, missing model files
-4. **Dark mode** — toggle and check rendering of new UI elements
-5. **Save/load roundtrip** — if the feature touches `.iap` project files, save, close, reopen, verify state restored
-6. **Adjacent features** — verify no regression in SAM, annotation tools, export formats
-7. **Inference features** — if touching `sam_utils.py` or `dino_utils.py`, verify the model loads end-to-end (no silent load failure), returns masks/boxes, and the UI stays responsive during inference (timers, redraws, progress dialog cancels keep firing — see ADR-013)
+1. **Smoke tests pass** — `pytest tests/integration/test_smoke.py -v`. This includes the AST-based `test_annotator_window_inline_imports_are_resolvable` which catches stale relative imports inside function bodies after any module move (see ADR-016). A launch that "looks clean" is NOT sufficient — inline imports fail only when the function is called at runtime.
+2. **Launch the app** — no import errors, main window renders
+3. **Golden path** — perform the new feature's primary workflow end-to-end
+4. **Edge cases** — empty state, cancel/escape, large images, missing model files
+5. **Dark mode** — toggle and check rendering of new UI elements
+6. **Save/load roundtrip** — if the feature touches `.iap` project files, save, close, reopen, verify state restored
+7. **Adjacent features** — verify no regression in SAM, annotation tools, export formats
+8. **Inference features** — if touching `sam_utils.py` or `dino_utils.py`, verify the model loads end-to-end (no silent load failure), returns masks/boxes, and the UI stays responsive during inference (timers, redraws, progress dialog cancels keep firing — see ADR-013)
 
 ### arc42 Documentation Update Rules
 

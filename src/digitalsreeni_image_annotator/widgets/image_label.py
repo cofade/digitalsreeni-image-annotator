@@ -837,7 +837,7 @@ class ImageLabel(QLabel):
                 new_size = max(1, self._ctx.eraser_size() - 1)
                 self.toolSizeChanged.emit("eraser", new_size)
                 print(f"Eraser size: {new_size}")
-        elif event.key() == Qt.Key.Key_Equal:
+        elif event.key() in (Qt.Key.Key_Equal, Qt.Key.Key_Plus):
             if self.current_tool == "paint_brush":
                 new_size = self._ctx.paint_brush_size() + 1
                 self.toolSizeChanged.emit("paint", new_size)

@@ -30,7 +30,10 @@ def test_public_api_exports():
 
 INTERNAL_MODULES = [
     # Core
-    "digitalsreeni_image_annotator.main",
+    # NOTE: 'main' is deliberately omitted — it eagerly imports torch before
+    # QApplication is created (ADR-017). In a pytest-qt process Qt is already
+    # loaded; importing torch afterward triggers WinError 1114.  main is the
+    # entry point and is validated by the CLI smoke tests instead.
     "digitalsreeni_image_annotator.annotator_window",
     "digitalsreeni_image_annotator.utils",
     # Widgets
@@ -71,3 +74,50 @@ INTERNAL_MODULES = [
 def test_internal_module_imports(module_name):
     """Every internal module must import without raising."""
     importlib.import_module(module_name)
+
+
+def test_annotator_window_inline_imports_are_resolvable():
+    """Parse annotator_window.py AST, verify every bare relative import
+    (from .module) resolves to a file still in the package root.
+
+    This catches stale inline imports inside function bodies that are
+    invisible to test_internal_module_imports because Python defers
+    execution until the function is called. Phase 1 moved 25 modules
+    into subpackages; four inline imports in annotator_window.py were
+    missed and only surfaced at runtime (e.g. from .dino_utils import
+    GDINO_MODEL_PATHS which needed to be .inference.dino_utils).
+    """
+    import ast
+    import pathlib
+
+    # Package root — modules that stayed at root live here
+    pkg_dir = (
+        pathlib.Path(__file__).parents[2]
+        / "src"
+        / "digitalsreeni_image_annotator"
+    )
+    source = (pkg_dir / "annotator_window.py").read_text(encoding="utf-8")
+    tree = ast.parse(source)
+
+    bad = []
+    for node in ast.walk(tree):
+        if not isinstance(node, ast.ImportFrom):
+            continue
+        # Only bare relative imports at level 1 (from .module)
+        if node.level != 1 or not node.module:
+            continue
+        module = node.module
+        # Proper subpackage imports are fine (e.g. .dialogs.foo)
+        dots = module.split(".")
+        if dots[0] in ("controllers", "dialogs", "inference", "io", "ui", "widgets", "core"):
+            continue
+        # Root-level modules that stayed behind: utils, annotator_window, main
+        root_py = pkg_dir / f"{module}.py"
+        root_pkg = pkg_dir / module / "__init__.py"
+        if not root_py.exists() and not root_pkg.exists():
+            bad.append((node.lineno, f"from .{module} import ..."))
+
+    assert not bad, (
+        f"Stale inline imports in annotator_window.py at lines: {bad}. "
+        f"The module was likely moved into a subpackage; update the import path."
+    )

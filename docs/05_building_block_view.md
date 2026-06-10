@@ -29,9 +29,44 @@
 src/digitalsreeni_image_annotator/
 ├── main.py                        # Entry point, initializes QApplication
 ├── annotator_window.py            # ImageAnnotator - main window
-├── image_label.py                 # ImageLabel - custom display widget
-├── sam_utils.py                   # SAMUtils - SAM model management
-└── utils.py                       # Utility functions
+├── utils.py                       # Utility functions
+│
+├── core/                          # Shared constants and helpers
+│   ├── constants.py
+│   └── annotation_utils.py
+│
+├── widgets/                       # Custom display widgets
+│   └── image_label.py             # ImageLabel - display, zoom, annotation interaction
+│
+├── inference/                     # AI model management (SAM / DINO)
+│   ├── sam_utils.py               # SAMUtils - SAM model loading and inference
+│   └── dino_utils.py              # DINOUtils - DINO detection + SAM-to-mask
+│
+├── io/                            # Import / export format handlers
+│   ├── export_formats.py          # COCO, YOLO, Pascal VOC, semantic / labeled images
+│   └── import_formats.py          # COCO and YOLO importers
+│
+├── ui/                            # Stylesheets for light / dark themes
+│   ├── default_stylesheet.py
+│   └── soft_dark_stylesheet.py
+│
+└── dialogs/                       # Standalone tool windows
+    ├── annotation_statistics.py
+    ├── coco_json_combiner.py
+    ├── dataset_splitter.py
+    ├── dicom_converter.py
+    ├── dino_merge_dialog.py
+    ├── dino_phrase_editor.py
+    ├── help_window.py
+    ├── image_augmenter.py
+    ├── image_patcher.py
+    ├── project_details.py
+    ├── project_search.py
+    ├── slice_registration.py
+    ├── snake_game.py
+    ├── stack_interpolator.py
+    ├── stack_to_slices.py
+    └── yolo_trainer.py
 ```
 
 ### ImageAnnotator (annotator_window.py)

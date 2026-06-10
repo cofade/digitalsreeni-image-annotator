@@ -62,7 +62,7 @@ from .ui import theme
 from .dialogs.annotation_statistics import show_annotation_statistics
 from .dialogs.coco_json_combiner import show_coco_json_combiner
 from .dialogs.dino_phrase_editor import ClassThresholdTable, PhraseEditorPanel
-from .inference.dino_utils import DINOUtils
+from .inference.dino_utils import DINOUtils, GDINO_MODEL_PATHS
 from .dialogs.dataset_splitter import DatasetSplitterTool
 from .dialogs.dicom_converter import DicomConverter
 from .dialogs.dino_merge_dialog import show_dino_merge_dialog
@@ -1261,7 +1261,8 @@ class ImageAnnotator(QMainWindow):
 
     # --- DINO / LLM-Assisted Detection Methods ---
 
-    def _resolve_dino_model_path(self, model_name):
+    def _resolve_dino_model_path(self, model_name: str) -> str | None:
+        """Return the canonical local path for a preset DINO model, or None if unknown."""
         return self.dino_controller._resolve_dino_model_path(model_name)
 
     def _on_dino_model_changed(self, text):
@@ -1284,6 +1285,7 @@ class ImageAnnotator(QMainWindow):
 
     def run_dino_detection_batch(self):
         return self.dino_controller.run_dino_detection_batch()
+
 
     def _collect_dino_batch_work_items(self):
         return self.dino_controller._collect_dino_batch_work_items()

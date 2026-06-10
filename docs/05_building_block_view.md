@@ -28,23 +28,31 @@
 ```
 src/digitalsreeni_image_annotator/
 ├── main.py                        # Entry point, initializes QApplication
-├── annotator_window.py            # ImageAnnotator - main window orchestrator
-├── utils.py                       # Cross-cutting utilities
-├── core/                          # Constants, annotation utils, image utils
-├── widgets/
-│   ├── image_label.py             # ImageLabel - canvas widget; dispatcher
-│   ├── canvas_context.py          # CanvasContext - narrow read view (ADR-016)
-│   └── tools/                     # Per-tool handlers (ADR-017)
-│       ├── base.py                # ToolHandler base
-│       ├── rectangle_tool.py
-│       ├── polygon_tool.py
-│       ├── paint_tool.py
-│       └── eraser_tool.py
-├── controllers/                   # Project/Image/SAM/DINO/YOLO/Annotation/Class
-├── inference/                     # sam_utils.py, dino_utils.py
-├── io/                            # export_formats.py, import_formats.py
-├── ui/                            # menu_bar, sidebar, shortcuts, theme, stylesheets
-└── dialogs/                       # Standalone tool dialogs (statistics, …)
+	├── annotator_window.py            # ImageAnnotator - main window orchestrator
+	├── utils.py                       # Cross-cutting utilities
+	├── core/                          # Constants, annotation utils, image utils
+	│   ├── constants.py
+	│   └── annotation_utils.py
+	├── widgets/
+	│   ├── image_label.py             # ImageLabel - canvas widget; dispatcher
+	│   ├── canvas_context.py          # CanvasContext - narrow read view (ADR-018)
+	│   └── tools/                     # Per-tool handlers (ADR-019)
+	│       ├── base.py                # ToolHandler base
+	│       ├── rectangle_tool.py
+	│       ├── polygon_tool.py
+	│       ├── paint_tool.py
+	│       └── eraser_tool.py
+	├── controllers/                   # Project/Image/SAM/DINO/YOLO/Annotation/Class
+	├── inference/                     # sam_utils.py, dino_utils.py
+	│   ├── sam_utils.py
+	│   └── dino_utils.py
+	├── io/                            # export_formats.py, import_formats.py
+	│   ├── export_formats.py
+	│   └── import_formats.py
+	├── ui/                            # menu_bar, sidebar, theme, stylesheets
+	│   ├── default_stylesheet.py
+	│   └── soft_dark_stylesheet.py
+	└── dialogs/                       # Standalone tool dialogs
 ```
 
 ### ImageAnnotator (annotator_window.py)

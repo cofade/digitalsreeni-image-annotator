@@ -1,10 +1,6 @@
-import copy
-import json
 import os
 import traceback
 import warnings
-
-import shapely
 from PyQt6.QtCore import Qt, QTimer
 from PyQt6.QtGui import (
     QAction,
@@ -45,11 +41,9 @@ from PyQt6.QtWidgets import (
     QVBoxLayout,
     QWidget,
 )
-from shapely.geometry import MultiPolygon, Point, Polygon
-from shapely.ops import unary_union
-from shapely.validation import make_valid
 
 from .controllers import io_controller
+from .controllers.annotation_controller import AnnotationController
 from .controllers.dino_controller import DINOController, _DINOReviewEventFilter
 from .controllers.image_controller import ImageController
 from .controllers.project_controller import ProjectController
@@ -73,7 +67,6 @@ from .dialogs.slice_registration import SliceRegistrationTool
 from .dialogs.snake_game import SnakeGame
 from .dialogs.stack_interpolator import StackInterpolator
 from .dialogs.stack_to_slices import show_stack_to_slices
-from .utils import calculate_area, calculate_bbox
 
 warnings.filterwarnings("ignore", category=UserWarning)
 
@@ -152,6 +145,7 @@ class ImageAnnotator(QMainWindow):
         self.sam_controller = SAMController(self)
         self.dino_controller = DINOController(self)
         self.yolo_controller = YOLOController(self)
+        self.annotation_controller = AnnotationController(self)
 
         # Create sam_magic_wand_button
         self.sam_magic_wand_button = QPushButton("Magic Wand")
@@ -563,47 +557,13 @@ class ImageAnnotator(QMainWindow):
         return io_controller.save_slices(self, directory)
 
     def create_coco_annotation(self, ann, image_id, annotation_id):
-        coco_ann = {
-            "id": annotation_id,
-            "image_id": image_id,
-            "category_id": ann["category_id"],
-            "area": calculate_area(ann),
-            "iscrowd": 0,
-        }
-
-        if "segmentation" in ann:
-            coco_ann["segmentation"] = [ann["segmentation"]]
-            coco_ann["bbox"] = calculate_bbox(ann["segmentation"])
-        elif "bbox" in ann:
-            coco_ann["bbox"] = ann["bbox"]
-
-        return coco_ann
+        return self.annotation_controller.create_coco_annotation(ann, image_id, annotation_id)
 
     def update_all_annotation_lists(self):
-        for image_name in self.all_annotations.keys():
-            self.update_annotation_list(image_name)
-        self.update_annotation_list()  # Update for the current image/slice
+        return self.annotation_controller.update_all_annotation_lists()
 
     def update_annotation_list(self, image_name=None):
-        self.annotation_list.clear()
-        current_name = image_name or self.current_slice or self.image_file_name
-        annotations = self.all_annotations.get(current_name, {})
-        for class_name, class_annotations in annotations.items():
-            if not class_name.startswith(
-                "Temp-"
-            ):  # Only show non-temporary annotations
-                color = self.image_label.class_colors.get(class_name, QColor(Qt.GlobalColor.white))
-                for annotation in class_annotations:
-                    number = annotation.get("number", 0)
-                    area = calculate_area(annotation)
-                    item_text = f"{class_name} - {number:<3} Area: {area:.2f}"
-                    item = QListWidgetItem(item_text)
-                    item.setData(Qt.ItemDataRole.UserRole, annotation)
-                    item.setForeground(color)
-                    self.annotation_list.addItem(item)
-
-        # Force the annotation list to repaint
-        self.annotation_list.repaint()
+        return self.annotation_controller.update_annotation_list(image_name)
 
     def update_slice_list_colors(self):
         # Set the background color of the entire list widget
@@ -651,57 +611,13 @@ class ImageAnnotator(QMainWindow):
         self.slice_list.repaint()
 
     def update_annotation_list_colors(self, class_name=None, color=None):
-        for i in range(self.annotation_list.count()):
-            item = self.annotation_list.item(i)
-            annotation = item.data(Qt.ItemDataRole.UserRole)
-            # Update only the item for the specific class if class_name is provided
-            if class_name is None or annotation["category_name"] == class_name:
-                item_color = (
-                    color
-                    if class_name
-                    else self.image_label.class_colors.get(
-                        annotation["category_name"], QColor(Qt.GlobalColor.white)
-                    )
-                )
-                item.setForeground(item_color)
+        return self.annotation_controller.update_annotation_list_colors(class_name, color)
 
     def load_image_annotations(self):
-        # print(f"Loading annotations for: {self.current_slice or self.image_file_name}")
-        self.image_label.annotations.clear()
-        current_name = self.current_slice or self.image_file_name
-        # print(f"Current name for annotations: {current_name}")
-        # print(f"All annotations keys: {list(self.all_annotations.keys())}")
-        if current_name in self.all_annotations:
-            self.image_label.annotations = copy.deepcopy(
-                self.all_annotations[current_name]
-            )
-            # print(f"Loaded annotations: {self.image_label.annotations}")
-        else:
-            print(f"No annotations found for {current_name}")
-        self.image_label.update()
+        return self.annotation_controller.load_image_annotations()
 
     def save_current_annotations(self):
-        if self.current_slice:
-            current_name = self.current_slice
-        elif self.image_file_name:
-            current_name = self.image_file_name
-        else:
-            # print("Error: No current slice or image file name set")
-            return
-
-        # print(f"Saving annotations for: {current_name}")
-        if self.image_label.annotations:
-            self.all_annotations[current_name] = self.image_label.annotations.copy()
-            # print(f"Saved {len(self.image_label.annotations)} annotations for {current_name}")
-        elif current_name in self.all_annotations:
-            del self.all_annotations[current_name]
-            # print(f"Removed annotations for {current_name}")
-
-        self.update_slice_list_colors()
-
-        # print(f"All annotations now: {self.all_annotations.keys()}")
-        # print(f"Current slice: {self.current_slice}")
-        # print(f"Current image_file_name: {self.image_file_name}")
+        return self.annotation_controller.save_current_annotations()
 
     def setup_class_list(self):
         """Set up the class list widget."""
@@ -1175,64 +1091,13 @@ class ImageAnnotator(QMainWindow):
         return self.sam_controller.toggle_sam_points()
 
     def sort_annotations_by_class(self):
-        current_name = self.current_slice or self.image_file_name
-        if current_name not in self.all_annotations:
-            QMessageBox.information(
-                self,
-                "No Annotations",
-                "There are no annotations to sort for this image.",
-            )
-            return
-
-        annotations = self.all_annotations[current_name]
-        sorted_annotations = []
-        for class_name in sorted(annotations.keys()):
-            if not class_name.startswith("Temp-"):  # Skip temporary classes
-                class_annotations = sorted(
-                    annotations[class_name], key=lambda x: x.get("number", 0)
-                )
-                sorted_annotations.extend(class_annotations)
-
-        self.update_annotation_list_with_sorted(sorted_annotations)
+        return self.annotation_controller.sort_annotations_by_class()
 
     def sort_annotations_by_area(self):
-        current_name = self.current_slice or self.image_file_name
-        if current_name not in self.all_annotations:
-            QMessageBox.information(
-                self,
-                "No Annotations",
-                "There are no annotations to sort for this image.",
-            )
-            return
-
-        annotations = self.all_annotations[current_name]
-        sorted_annotations = []
-        for class_name in annotations.keys():
-            if not class_name.startswith("Temp-"):  # Skip temporary classes
-                class_annotations = sorted(
-                    annotations[class_name],
-                    key=lambda x: calculate_area(x),
-                    reverse=True,
-                )
-                sorted_annotations.extend(class_annotations)
-
-        self.update_annotation_list_with_sorted(sorted_annotations)
+        return self.annotation_controller.sort_annotations_by_area()
 
     def update_annotation_list_with_sorted(self, sorted_annotations):
-        self.annotation_list.clear()
-        for annotation in sorted_annotations:
-            class_name = annotation["category_name"]
-            if not class_name.startswith("Temp-"):  # Only add non-temporary annotations
-                number = annotation.get("number", 0)
-                area = calculate_area(annotation)
-                item_text = f"{class_name} - {number:<3} Area: {area:.2f}"
-                item = QListWidgetItem(item_text)
-                item.setData(Qt.ItemDataRole.UserRole, annotation)
-                color = self.image_label.class_colors.get(class_name, QColor(Qt.GlobalColor.white))
-                item.setForeground(color)
-                self.annotation_list.addItem(item)
-
-        self.image_label.update()
+        return self.annotation_controller.update_annotation_list_with_sorted(sorted_annotations)
 
     def change_sam_model(self, model_name):
         return self.sam_controller.change_sam_model(model_name)
@@ -1574,345 +1439,22 @@ class ImageAnnotator(QMainWindow):
         return self.image_controller.remove_image()
 
     def load_annotations(self):
-        file_name, _ = QFileDialog.getOpenFileName(
-            self, "Load Annotations", "", "JSON Files (*.json)"
-        )
-        if file_name:
-            with open(file_name, "r") as f:
-                self.loaded_json = json.load(f)
-
-            # Load categories
-            self.class_list.clear()
-            self.image_label.class_colors.clear()
-            self.class_mapping.clear()
-            for category in self.loaded_json["categories"]:
-                class_name = category["name"]
-                self.class_mapping[class_name] = category["id"]
-
-                # Assign a color if not already assigned
-                if class_name not in self.image_label.class_colors:
-                    color = QColor(
-                        Qt.GlobalColor(len(self.image_label.class_colors) % 16 + 7)
-                    )
-                    self.image_label.class_colors[class_name] = color
-
-                # Add item to class list with color indicator
-                item = QListWidgetItem(class_name)
-                self.update_class_item_color(
-                    item, self.image_label.class_colors[class_name]
-                )
-                self.class_list.addItem(item)
-
-            # Create a mapping of image IDs to file names
-            image_id_to_filename = {
-                img["id"]: img["file_name"] for img in self.loaded_json["images"]
-            }
-
-            # Load image information
-            json_images = {img["file_name"]: img for img in self.loaded_json["images"]}
-
-            # Update existing images and add new ones from JSON
-            updated_all_images = []
-            for i in range(self.image_list.count()):
-                item = self.image_list.item(i)
-                file_name = item.text()
-                if file_name in json_images:
-                    updated_image = self.all_images[i].copy()
-                    updated_image.update(json_images[file_name])
-                    updated_all_images.append(updated_image)
-                    del json_images[file_name]
-                else:
-                    updated_all_images.append(self.all_images[i])
-
-            # Add remaining images from JSON
-            for img in json_images.values():
-                updated_all_images.append(img)
-                self.image_list.addItem(img["file_name"])
-
-            self.all_images = updated_all_images
-
-            # Load annotations
-            self.all_annotations.clear()
-            for annotation in self.loaded_json["annotations"]:
-                image_id = annotation["image_id"]
-                file_name = image_id_to_filename.get(image_id)
-                if file_name:
-                    if file_name not in self.all_annotations:
-                        self.all_annotations[file_name] = {}
-
-                    category = next(
-                        (
-                            cat
-                            for cat in self.loaded_json["categories"]
-                            if cat["id"] == annotation["category_id"]
-                        ),
-                        None,
-                    )
-                    if category:
-                        category_name = category["name"]
-                        if category_name not in self.all_annotations[file_name]:
-                            self.all_annotations[file_name][category_name] = []
-
-                        ann = {
-                            "category_id": annotation["category_id"],
-                            "category_name": category_name,
-                        }
-
-                        if "segmentation" in annotation:
-                            ann["segmentation"] = annotation["segmentation"][0]
-                            ann["type"] = "polygon"
-                        elif "bbox" in annotation:
-                            ann["bbox"] = annotation["bbox"]
-                            ann["type"] = "bbox"
-
-                        # Add number field if it's missing
-                        if "number" not in ann:
-                            ann["number"] = (
-                                len(self.all_annotations[file_name][category_name]) + 1
-                            )
-
-                        self.all_annotations[file_name][category_name].append(ann)
-
-            # Check for missing images
-            missing_images = [
-                img["file_name"]
-                for img in self.loaded_json["images"]
-                if img["file_name"] not in self.image_paths
-            ]
-            if missing_images:
-                self.show_warning(
-                    "Missing Images",
-                    "The following images are missing:\n" + "\n".join(missing_images),
-                )
-
-            # Reload the current image if it exists, otherwise load the first image
-            if self.image_file_name and self.image_file_name in self.all_annotations:
-                self.switch_image(
-                    self.image_list.findItems(self.image_file_name, Qt.MatchFlag.MatchExactly)[0]
-                )
-            elif self.all_images:
-                self.switch_image(self.image_list.item(0))
-
-            self.image_label.highlighted_annotations = []  # Clear existing highlights
-            self.update_annotation_list()  # This will repopulate the annotation list
-            self.image_label.update()  # Force a redraw of the image label
+        return self.annotation_controller.load_annotations()
 
     def clear_highlighted_annotation(self):
-        self.image_label.highlighted_annotation = None
-        self.image_label.update()
+        return self.annotation_controller.clear_highlighted_annotation()
 
     def update_highlighted_annotations(self):
-        selected_items = self.annotation_list.selectedItems()
-        self.image_label.highlighted_annotations = [
-            item.data(Qt.ItemDataRole.UserRole) for item in selected_items
-        ]
-        self.image_label.update()  # Force a redraw of the image label
-
-        # Enable/disable merge and change class buttons based on selection
-        self.merge_button.setEnabled(len(selected_items) >= 2)
-        self.change_class_button.setEnabled(len(selected_items) > 0)
+        return self.annotation_controller.update_highlighted_annotations()
 
     def renumber_annotations(self):
-        current_name = self.current_slice or self.image_file_name
-        if current_name in self.all_annotations:
-            for class_name, annotations in self.all_annotations[current_name].items():
-                for i, ann in enumerate(annotations, start=1):
-                    ann["number"] = i
-        self.update_annotation_list()
+        return self.annotation_controller.renumber_annotations()
 
     def delete_selected_annotations(self):
-        selected_items = self.annotation_list.selectedItems()
-        if not selected_items:
-            QMessageBox.warning(
-                self, "No Selection", "Please select an annotation to delete."
-            )
-            return
-
-        reply = QMessageBox.question(
-            self,
-            "Delete Annotations",
-            f"Are you sure you want to delete {len(selected_items)} annotation(s)?",
-            QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
-            QMessageBox.StandardButton.No,
-        )
-        if reply == QMessageBox.StandardButton.Yes:
-            # Create a list of annotations to remove
-            annotations_to_remove = []
-            for item in selected_items:
-                annotation = item.data(Qt.ItemDataRole.UserRole)
-                annotations_to_remove.append((annotation["category_name"], annotation))
-
-            # Remove annotations from image_label.annotations
-            for category_name, annotation in annotations_to_remove:
-                if category_name in self.image_label.annotations:
-                    if annotation in self.image_label.annotations[category_name]:
-                        self.image_label.annotations[category_name].remove(annotation)
-
-            # Update all_annotations
-            current_name = self.current_slice or self.image_file_name
-            self.all_annotations[current_name] = self.image_label.annotations
-
-            # Sort and update the annotation list based on the current sorting method
-            if self.current_sort_method == "area":
-                self.sort_annotations_by_area()
-            else:
-                self.sort_annotations_by_class()
-
-            self.image_label.highlighted_annotations.clear()
-            self.image_label.update()
-
-            # Update slice list colors
-            self.update_slice_list_colors()
-
-            QMessageBox.information(
-                self,
-                "Annotations Deleted",
-                f"{len(selected_items)} annotation(s) have been deleted.",
-            )
-            self.auto_save()  # Auto-save after deleting annotations
+        return self.annotation_controller.delete_selected_annotations()
 
     def merge_annotations(self):
-        if self.image_label.editing_polygon is not None:
-            QMessageBox.warning(
-                self,
-                "Edit Mode Active",
-                "Please exit the annotation edit mode before merging annotations.",
-            )
-            return
-
-        selected_items = self.annotation_list.selectedItems()
-        if len(selected_items) < 2:
-            QMessageBox.warning(
-                self,
-                "Not Enough Annotations",
-                "Please select at least two annotations to merge.",
-            )
-            return
-
-        class_name = selected_items[0].data(Qt.ItemDataRole.UserRole)["category_name"]
-        if not all(
-            item.data(Qt.ItemDataRole.UserRole)["category_name"] == class_name
-            for item in selected_items
-        ):
-            QMessageBox.warning(
-                self,
-                "Mixed Classes",
-                "All selected annotations must be from the same class.",
-            )
-            return
-
-        polygons = []
-        original_annotations = []
-        for item in selected_items:
-            annotation = item.data(Qt.ItemDataRole.UserRole)
-            original_annotations.append(annotation)
-            if "segmentation" in annotation:
-                points = zip(
-                    annotation["segmentation"][0::2], annotation["segmentation"][1::2]
-                )
-                polygon = Polygon(points)
-                if not polygon.is_valid:
-                    polygon = polygon.buffer(0)
-                polygons.append(polygon)
-
-        def are_all_polygons_connected(polygons):
-            if len(polygons) < 2:
-                return True
-
-            connected = set([0])  # Start with the first polygon
-            to_check = set(range(1, len(polygons)))
-
-            while to_check:
-                newly_connected = set()
-                for i in connected:
-                    for j in to_check:
-                        if polygons[i].intersects(polygons[j]) or polygons[i].touches(
-                            polygons[j]
-                        ):
-                            newly_connected.add(j)
-
-                if not newly_connected:
-                    return (
-                        False  # If no new connections found, they're not all connected
-                    )
-
-                connected.update(newly_connected)
-                to_check -= newly_connected
-
-            return True  # All polygons are connected
-
-        if not are_all_polygons_connected(polygons):
-            QMessageBox.warning(
-                self,
-                "Disconnected Polygons",
-                "Not all selected annotations are connected. Please select only connected annotations to merge.",
-            )
-            return
-
-        try:
-            merged_polygon = unary_union(polygons)
-        except Exception as e:
-            QMessageBox.warning(
-                self,
-                "Merge Error",
-                f"Unable to merge the selected annotations due to an error: {str(e)}",
-            )
-            return
-
-        new_annotation = {
-            "segmentation": [],
-            "category_id": self.class_mapping[class_name],
-            "category_name": class_name,
-        }
-
-        if isinstance(merged_polygon, Polygon):
-            new_annotation["segmentation"] = [
-                coord for point in merged_polygon.exterior.coords for coord in point
-            ]
-        elif isinstance(merged_polygon, MultiPolygon):
-            largest_polygon = max(merged_polygon.geoms, key=lambda p: p.area)
-            new_annotation["segmentation"] = [
-                coord for point in largest_polygon.exterior.coords for coord in point
-            ]
-
-        # Ask user about keeping original annotations
-        msg_box = QMessageBox(self)
-        msg_box.setWindowTitle("Merge Annotations")
-        msg_box.setText("Do you want to keep the original annotations?")
-        msg_box.setIcon(QMessageBox.Icon.Question)
-
-        keep_button = msg_box.addButton("Keep", QMessageBox.ButtonRole.YesRole)
-        delete_button = msg_box.addButton("Delete", QMessageBox.ButtonRole.NoRole)
-        cancel_button = msg_box.addButton("Cancel", QMessageBox.ButtonRole.RejectRole)
-
-        msg_box.setDefaultButton(cancel_button)
-        msg_box.setEscapeButton(cancel_button)
-
-        msg_box.exec()
-
-        if msg_box.clickedButton() == cancel_button:
-            return
-
-        if msg_box.clickedButton() == delete_button:
-            for annotation in original_annotations:
-                if annotation in self.image_label.annotations[class_name]:
-                    self.image_label.annotations[class_name].remove(annotation)
-
-        self.image_label.annotations.setdefault(class_name, []).append(new_annotation)
-
-        current_name = self.current_slice or self.image_file_name
-        self.all_annotations[current_name] = self.image_label.annotations
-
-        self.renumber_annotations()
-        self.update_annotation_list()
-        self.save_current_annotations()
-        self.update_slice_list_colors()
-        self.image_label.update()
-
-        QMessageBox.information(
-            self, "Merge Complete", "Annotations have been merged successfully."
-        )
-        self.auto_save()  # Auto-save after merging annotations
+        return self.annotation_controller.merge_annotations()
 
     def delete_selected_image(self):
         return self.image_controller.delete_selected_image()
@@ -2069,77 +1611,7 @@ class ImageAnnotator(QMainWindow):
         self.image_label.update()
 
     def change_annotation_class(self):
-        selected_items = self.annotation_list.selectedItems()
-        if not selected_items:
-            QMessageBox.warning(
-                self,
-                "No Selection",
-                "Please select one or more annotations to change class.",
-            )
-            return
-
-        class_dialog = QDialog(self)
-        class_dialog.setWindowTitle("Change Class")
-        layout = QVBoxLayout(class_dialog)
-
-        class_combo = QComboBox()
-        for class_name in self.class_mapping.keys():
-            class_combo.addItem(class_name)
-        layout.addWidget(class_combo)
-
-        button_box = QDialogButtonBox(QDialogButtonBox.StandardButton.Ok | QDialogButtonBox.StandardButton.Cancel)
-        button_box.accepted.connect(class_dialog.accept)
-        button_box.rejected.connect(class_dialog.reject)
-        layout.addWidget(button_box)
-
-        if class_dialog.exec() == QDialog.DialogCode.Accepted:
-            new_class = class_combo.currentText()
-            current_name = self.current_slice or self.image_file_name
-
-            # Get the current maximum number for the new class
-            max_number = max(
-                [
-                    ann.get("number", 0)
-                    for ann in self.image_label.annotations.get(new_class, [])
-                ]
-                + [0]
-            )
-
-            for item in selected_items:
-                annotation = item.data(Qt.ItemDataRole.UserRole)
-                old_class = annotation["category_name"]
-
-                # Remove from old class
-                self.image_label.annotations[old_class].remove(annotation)
-                if not self.image_label.annotations[old_class]:
-                    del self.image_label.annotations[old_class]
-
-                # Add to new class with updated number
-                annotation["category_name"] = new_class
-                annotation["category_id"] = self.class_mapping[new_class]
-                max_number += 1
-                annotation["number"] = max_number
-                if new_class not in self.image_label.annotations:
-                    self.image_label.annotations[new_class] = []
-                self.image_label.annotations[new_class].append(annotation)
-
-            # Update all_annotations
-            self.all_annotations[current_name] = self.image_label.annotations
-
-            # Renumber all annotations for consistency
-            self.renumber_annotations()
-
-            self.update_annotation_list()
-            self.image_label.update()
-            self.save_current_annotations()
-            self.update_slice_list_colors()
-            self.auto_save()
-
-            QMessageBox.information(
-                self,
-                "Class Changed",
-                f"Selected annotations have been changed to class '{new_class}'.",
-            )
+        return self.annotation_controller.change_annotation_class()
 
     def toggle_tool(self):
         if not self.image_label.check_unsaved_changes():
@@ -2444,117 +1916,16 @@ class ImageAnnotator(QMainWindow):
             )
 
     def finish_polygon(self):
-        if (
-            self.image_label.current_tool == "polygon"
-            and len(self.image_label.current_annotation) > 2
-        ):
-            if self.current_class is None:
-                QMessageBox.warning(
-                    self,
-                    "No Class Selected",
-                    "Please select a class before finishing the annotation.",
-                )
-                return
-
-            # Create a polygon from the current annotation
-            polygon = Polygon(self.image_label.current_annotation)
-
-            # Define the image boundary as a rectangle
-            image_boundary = Polygon(
-                [
-                    (0, 0),
-                    (self.current_image.width(), 0),
-                    (self.current_image.width(), self.current_image.height()),
-                    (0, self.current_image.height()),
-                ]
-            )
-
-            # Intersect the polygon with the image boundary
-            clipped_polygon = polygon.intersection(image_boundary)
-
-            if clipped_polygon.is_empty:
-                QMessageBox.warning(
-                    self,
-                    "Invalid Annotation",
-                    "The annotation is completely outside the image boundaries.",
-                )
-                self.image_label.clear_current_annotation()
-                self.image_label.update()
-                return
-
-            # Convert the clipped polygon to a segmentation format
-            if isinstance(clipped_polygon, Polygon):
-                segmentation = [
-                    coord
-                    for point in clipped_polygon.exterior.coords
-                    for coord in point
-                ]
-            elif isinstance(clipped_polygon, MultiPolygon):
-                largest_polygon = max(clipped_polygon.geoms, key=lambda p: p.area)
-                segmentation = [
-                    coord
-                    for point in largest_polygon.exterior.coords
-                    for coord in point
-                ]
-            else:
-                QMessageBox.warning(
-                    self, "Invalid Annotation", "The annotation could not be processed."
-                )
-                return
-
-            new_annotation = {
-                "segmentation": segmentation,
-                "category_id": self.class_mapping[self.current_class],
-                "category_name": self.current_class,
-            }
-            self.image_label.annotations.setdefault(self.current_class, []).append(
-                new_annotation
-            )
-            self.add_annotation_to_list(new_annotation)
-            self.image_label.clear_current_annotation()
-            self.image_label.drawing_polygon = False  # Reset the drawing_polygon flag
-            self.image_label.reset_annotation_state()
-            self.image_label.update()
-
-            # Save the current annotations
-            self.save_current_annotations()
-
-            # Update the slice list colors
-            self.update_slice_list_colors()
-            self.auto_save()  # Auto-save after adding a polygon annotation
+        return self.annotation_controller.finish_polygon()
 
     def highlight_annotation(self, item):
-        self.image_label.highlighted_annotation = item.data(Qt.ItemDataRole.UserRole)
-        self.image_label.update()
+        return self.annotation_controller.highlight_annotation(item)
 
     def delete_annotation(self):
-        current_item = self.annotation_list.currentItem()
-        if current_item:
-            annotation = current_item.data(Qt.ItemDataRole.UserRole)
-            category_name = annotation["category_name"]
-            self.image_label.annotations[category_name].remove(annotation)
-            self.annotation_list.takeItem(self.annotation_list.row(current_item))
-            self.image_label.highlighted_annotation = None
-            self.image_label.update()
+        return self.annotation_controller.delete_annotation()
 
     def add_annotation_to_list(self, annotation):
-        class_name = annotation["category_name"]
-        color = self.image_label.class_colors.get(class_name, QColor(Qt.GlobalColor.white))
-        annotations = self.image_label.annotations.get(class_name, [])
-        number = max([ann.get("number", 0) for ann in annotations] + [0]) + 1
-        annotation["number"] = number
-        area = calculate_area(annotation)
-        item_text = f"{class_name} - {number:<3} Area: {area:.2f}"
-
-        item = QListWidgetItem(item_text)
-        item.setData(Qt.ItemDataRole.UserRole, annotation)
-        item.setForeground(color)
-        self.annotation_list.addItem(item)
-
-        # Clear the current selection
-        self.annotation_list.clearSelection()
-        self.image_label.highlighted_annotations.clear()
-        self.image_label.update()
+        return self.annotation_controller.add_annotation_to_list(annotation)
 
     def zoom_in(self):
         new_zoom = min(self.image_label.zoom_factor + 0.1, 5.0)
@@ -2583,109 +1954,19 @@ class ImageAnnotator(QMainWindow):
         self.rectangle_button.setEnabled(True)
 
     def finish_rectangle(self):
-        if self.image_label.current_rectangle:
-            x1, y1, x2, y2 = self.image_label.current_rectangle
-
-            # Create a rectangle polygon from the annotation
-            rectangle = Polygon([(x1, y1), (x2, y1), (x2, y2), (x1, y2)])
-
-            # Define the image boundary as a rectangle
-            image_boundary = Polygon(
-                [
-                    (0, 0),
-                    (self.current_image.width(), 0),
-                    (self.current_image.width(), self.current_image.height()),
-                    (0, self.current_image.height()),
-                ]
-            )
-
-            # Intersect the rectangle with the image boundary
-            clipped_rectangle = rectangle.intersection(image_boundary)
-
-            if clipped_rectangle.is_empty:
-                QMessageBox.warning(
-                    self,
-                    "Invalid Annotation",
-                    "The annotation is completely outside the image boundaries.",
-                )
-                self.image_label.current_rectangle = None
-                self.image_label.update()
-                return
-
-            # Convert the clipped rectangle to a segmentation format
-            if isinstance(clipped_rectangle, Polygon):
-                segmentation = [
-                    coord
-                    for point in clipped_rectangle.exterior.coords
-                    for coord in point
-                ]
-            elif isinstance(clipped_rectangle, MultiPolygon):
-                largest_polygon = max(clipped_rectangle.geoms, key=lambda p: p.area)
-                segmentation = [
-                    coord
-                    for point in largest_polygon.exterior.coords
-                    for coord in point
-                ]
-            else:
-                QMessageBox.warning(
-                    self, "Invalid Annotation", "The annotation could not be processed."
-                )
-                return
-
-            new_annotation = {
-                "segmentation": segmentation,
-                "category_id": self.class_mapping[self.current_class],
-                "category_name": self.current_class,
-            }
-            self.image_label.annotations.setdefault(self.current_class, []).append(
-                new_annotation
-            )
-            self.add_annotation_to_list(new_annotation)
-            self.image_label.start_point = None
-            self.image_label.end_point = None
-            self.image_label.current_rectangle = None
-            self.image_label.update()
-
-            # Save the current annotations
-            self.save_current_annotations()
-
-            # Update the slice list colors
-            self.update_slice_list_colors()
-            self.auto_save()
+        return self.annotation_controller.finish_rectangle()
 
     def enter_edit_mode(self, annotation):
-        self.editing_mode = True
-        self.disable_tools()
-
-        QMessageBox.information(
-            self,
-            "Edit Mode",
-            "You are now in edit mode. Click and drag points to move them, Shift+Click to delete points, or click on edges to add new points.",
-        )
+        return self.annotation_controller.enter_edit_mode(annotation)
 
     def exit_edit_mode(self):
-        self.editing_mode = False
-        self.enable_tools()
-
-        self.image_label.editing_polygon = None
-        self.image_label.editing_point_index = None
-        self.image_label.hover_point_index = None
-        self.update_annotation_list()
-        self.image_label.update()
+        return self.annotation_controller.exit_edit_mode()
 
     def highlight_annotation_in_list(self, annotation):
-        for i in range(self.annotation_list.count()):
-            item = self.annotation_list.item(i)
-            if item.data(Qt.ItemDataRole.UserRole) == annotation:
-                self.annotation_list.setCurrentItem(item)
-                break
+        return self.annotation_controller.highlight_annotation_in_list(annotation)
 
     def select_annotation_in_list(self, annotation):
-        for i in range(self.annotation_list.count()):
-            item = self.annotation_list.item(i)
-            if item.data(Qt.ItemDataRole.UserRole) == annotation:
-                self.annotation_list.setCurrentItem(item)
-                break
+        return self.annotation_controller.select_annotation_in_list(annotation)
 
     ################################################################
 

@@ -380,7 +380,7 @@ class AnnotationController(QObject):
             self.mw.annotation_list.takeItem(
                 self.mw.annotation_list.row(current_item)
             )
-            self.mw.image_label.highlighted_annotation = None
+            self.mw.image_label.highlighted_annotations.clear()
             self.mw.image_label.update()
 
     def delete_selected_annotations(self):

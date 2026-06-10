@@ -69,13 +69,13 @@ You Only Look Once - object detection format. Uses `.txt` files with normalized 
 A series of 2D images taken at different focal depths (Z positions), used in microscopy to capture 3D structure.
 
 ### CanvasContext
-Narrow read-only view of main-window state exposed to `ImageLabel`. Introduced in Phase 6 (ADR-016) to replace the old `image_label.main_window` back-reference. Method-style accessors (`paint_brush_size()`, `current_class()`, `is_class_visible(name)`, `scroll_area()`, …) so future state migrations can re-route reads without touching the widget. Constructed once in `ImageAnnotator.__init__` and passed via `image_label.set_context(ctx)`.
+Narrow read-only view of main-window state exposed to `ImageLabel`. Introduced in Phase 6 (ADR-018) to replace the old `image_label.main_window` back-reference. Method-style accessors (`paint_brush_size()`, `current_class()`, `is_class_visible(name)`, `scroll_area()`, …) so future state migrations can re-route reads without touching the widget. Constructed once in `ImageAnnotator.__init__` and passed via `image_label.set_context(ctx)`.
 
 ### Controller
 Architectural pattern used across `controllers/*`. A controller is a `QObject` subclass holding `self.mw = main_window` that owns a single responsibility cluster carved out of the old monolithic `ImageAnnotator` — project I/O, image loading, annotations, classes, SAM, DINO, or YOLO. The orchestrator delegates to the controllers via thin pass-through methods, keeping external entry points (menu actions, signal connections) stable across refactors. Seven controllers exist as of Phase 8.
 
 ### ToolHandler
-Base class for per-tool mouse / key / paint behaviour inside `ImageLabel`. Plain Python object (not a `QObject`); holds a back-reference to the widget for signal emission and `CanvasContext` reads. Subclasses (`RectangleTool`, `PolygonTool`, `PaintBrushTool`, `EraserTool`) live in `widgets/tools/` and are dispatched to by `ImageLabel.active_tool_handler`. Introduced in Phase 7 (ADR-017).
+Base class for per-tool mouse / key / paint behaviour inside `ImageLabel`. Plain Python object (not a `QObject`); holds a back-reference to the widget for signal emission and `CanvasContext` reads. Subclasses (`RectangleTool`, `PolygonTool`, `PaintBrushTool`, `EraserTool`) live in `widgets/tools/` and are dispatched to by `ImageLabel.active_tool_handler`. Introduced in Phase 7 (ADR-019).
 
 ### Tool subclasses (`RectangleTool`, `PolygonTool`, `PaintBrushTool`, `EraserTool`)
 Concrete `ToolHandler` implementations, one per mouse-driven annotation tool. Each overrides the event hooks defined on the base class (`on_mouse_press`, `on_mouse_move`, `on_mouse_release`, `on_double_click`, `on_enter`, `on_escape`, `paint_overlay`, `deactivate`) and participates in the `has_unsaved_state()` / `commit()` / `discard()` contract used by the `check_unsaved_changes` dialog.
@@ -127,8 +127,8 @@ Functions under `ui/` that construct widget trees at startup. Each takes the `Im
 |-------|--------|-------------|
 | `ImageAnnotator` | annotator_window.py | Thin orchestrator (QMainWindow). Holds controllers, wires signals, delegates almost everything. |
 | `ImageLabel` | widgets/image_label.py | Canvas widget — display, zoom/pan, event dispatch to tool handlers. |
-| `CanvasContext` | widgets/canvas_context.py | Narrow read view of main-window state for ImageLabel (ADR-016). |
-| `ToolHandler` | widgets/tools/base.py | Base class for per-tool mouse/key handlers (ADR-017). |
+| `CanvasContext` | widgets/canvas_context.py | Narrow read view of main-window state for ImageLabel (ADR-018). |
+| `ToolHandler` | widgets/tools/base.py | Base class for per-tool mouse/key handlers (ADR-019). |
 | `RectangleTool` / `PolygonTool` / `PaintBrushTool` / `EraserTool` | widgets/tools/ | Per-tool handler subclasses. |
 | `ProjectController` | controllers/project_controller.py | `.iap` save/load, auto-save, `is_loading_project` guard. |
 | `ImageController` | controllers/image_controller.py | TIFF/CZI loading, multi-dim slicing, image/slice switching. |

@@ -57,11 +57,12 @@ class PaintBrushTool(ToolHandler):
         painter.translate(self.label.offset_x, self.label.offset_y)
         painter.scale(self.label.zoom_factor, self.label.zoom_factor)
 
+        mask_copy = mask.copy()
         mask_image = QImage(
-            mask.data,
-            mask.shape[1],
-            mask.shape[0],
-            mask.shape[1],
+            mask_copy.data,
+            mask_copy.shape[1],
+            mask_copy.shape[0],
+            mask_copy.shape[1],
             QImage.Format.Format_Grayscale8,
         )
         mask_pixmap = QPixmap.fromImage(mask_image)

@@ -192,7 +192,6 @@ class ImageController(QObject):
                 self.mw.load_image_annotations()
                 self.mw.update_annotation_list()
                 self.mw.clear_highlighted_annotation()
-                self.mw.image_label.highlighted_annotations.clear()
                 self.mw.image_label.reset_annotation_state()
                 self.mw.image_label.clear_current_annotation()
                 self.mw.update_image_info()
@@ -261,8 +260,6 @@ class ImageController(QObject):
                 self.mw.load_image_annotations()
                 self.mw.update_annotation_list()
                 self.mw.clear_highlighted_annotation()
-
-                self.mw.image_label.highlighted_annotations.clear()
                 self.mw.image_label.update()
                 self.mw.image_label.reset_annotation_state()
                 self.mw.image_label.clear_current_annotation()

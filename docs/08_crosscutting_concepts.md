@@ -491,7 +491,7 @@ before the subsequent class lookup.
 `annotationCommitted` per annotation but `annotationsBatchSaved` only
 once at the end. The single batch save preserves O(1) `.iap` writes
 per user action; replacing it with a per-annotation save would turn
-paint commits into O(N). See ADR-016.
+paint commits into O(N). See ADR-018.
 
-See ADR-016 in `09_architecture_decisions.md` for the rationale and
+See ADR-018 in `09_architecture_decisions.md` for the rationale and
 the full pattern.

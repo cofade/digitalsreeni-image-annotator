@@ -196,7 +196,7 @@ read goes through a narrow `CanvasContext` accessor.
 signals (annotation lifecycle, SAM, class, tool/UI state, navigation);
 the orchestrator wires each to the matching controller slot.
 
-**ADR**: see ADR-016 in `09_architecture_decisions.md`.
+**ADR**: see ADR-018 in `09_architecture_decisions.md`.
 
 ---
 

@@ -82,7 +82,7 @@ current_slice: str                  # Currently displayed slice
 **Responsibility**: Canvas widget — image display, navigation
 (zoom/pan), committed-annotation rendering, SAM bbox/points overlays,
 DINO temp-annotation rendering, polygon edit mode (modal). Per-tool
-mouse/key handling lives in `widgets/tools/*` (see ADR-017); ImageLabel
+mouse/key handling lives in `widgets/tools/*` (see ADR-019); ImageLabel
 dispatches events to the active handler.
 
 **Key Attributes**:
@@ -99,7 +99,7 @@ sam_positive_points: list           # SAM positive points
 sam_negative_points: list           # SAM negative points
 editing_polygon: dict | None        # Polygon being edited (modal sub-state)
 _tools: dict[str, ToolHandler]      # Per-tool handlers
-_ctx: CanvasContext                 # Narrow read view of main-window state (ADR-016)
+_ctx: CanvasContext                 # Narrow read view of main-window state (ADR-018)
 ```
 
 **Key Methods**:
@@ -120,7 +120,7 @@ _ctx: CanvasContext                 # Narrow read view of main-window state (ADR
   and prompts the user.
 
 **Communication**: emits ~20 Qt signals connected to controller slots
-in `ImageAnnotator._connect_image_label_signals` (ADR-016). Reads
+in `ImageAnnotator._connect_image_label_signals` (ADR-018). Reads
 main-window state through `CanvasContext`.
 
 ### SAMUtils (sam_utils.py)
@@ -216,7 +216,7 @@ the controller graph.
 | `io_controller` *(module-level functions, not a class)* | Thin UI wrappers around the pure `io/export_formats.py` and `io/import_formats.py` modules. |
 
 Communication: `ImageLabel` does not import controllers directly —
-it emits Qt signals (ADR-016) that the orchestrator connects to
+it emits Qt signals (ADR-018) that the orchestrator connects to
 controller slots in `_connect_image_label_signals()`.
 
 ## Level 3: Export/Import Subsystem
@@ -342,7 +342,7 @@ ImageAnnotator (main window)
     └── launches ──> Tool Dialogs (utilities)
 
 ImageLabel
-    ├── emits signals to ──> ImageAnnotator (writes; see ADR-016)
+    ├── emits signals to ──> ImageAnnotator (writes; see ADR-018)
     ├── reads via ──> CanvasContext (paint/eraser size, current class,
     │                  class_mapping, is_class_visible, scroll_area, …)
     └── uses ──> utils (area, bbox calculations)

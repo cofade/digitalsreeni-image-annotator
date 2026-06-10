@@ -361,7 +361,7 @@ class DINOController(QObject):
             return
 
         # Prevent stale temp annotations from a prior single-image review from
-        # confusing the batch results handler or the _DINOReviewEventFilter.
+        # confusing the batch results handler or the DINOReviewEventFilter.
         self.mw.image_label.temp_annotations = []
 
         if not self._ensure_dino_model_downloaded(model_name):

@@ -175,14 +175,14 @@ class PhraseEditorPanel(QWidget):
 
         self.lbl_title = QLabel("Phrases for: ---")
         self.lbl_title.setStyleSheet(
-            "font-size: 11px; font-weight: bold; color: #333;")
+            "font-size: 11px; font-weight: bold;")
         layout.addWidget(self.lbl_title)
 
         hint = QLabel(
             "DINO uses all phrases below for this class.\n"
             "First phrase (class name) cannot be removed.")
         hint.setWordWrap(True)
-        hint.setStyleSheet("font-size: 10px; color: #777; font-style: italic;")
+        hint.setStyleSheet("font-size: 10px; font-style: italic;")
         layout.addWidget(hint)
 
         self.phrase_list = QListWidget()

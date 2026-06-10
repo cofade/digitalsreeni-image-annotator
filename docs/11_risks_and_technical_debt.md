@@ -116,6 +116,24 @@ controller slot) and the SAM/DINO/YOLO inference paths.
 
 ---
 
+### Limited Coverage — Inline Imports Not Caught by Module Tests
+
+**Debt Level**: Medium
+
+**Description**: Smoke tests verify modules import cleanly at top-level, but inline `from .module` imports inside function bodies are deferred and only fail when the function is called. Phase 1 modular refactoring moved 25 modules; four stale inline imports (`from .dino_utils`, `.annotation_statistics`, `.project_details`, `.project_search`) were missed and only surfaced in manual QA.
+
+**Impact**:
+- Subpackage refactor PRs require functional QA paths (not just module import CI) to verify inline imports
+- Silent regressions until user clicks the specific button/dialog that triggers the stale import
+
+**Mitigation**:
+- Added AST-based static smoke test (ADR-016) that parses `annotator_window.py` and asserts every bare relative import resolves to an existing module in the package root
+- The test now catches inline import drift in CI before merge
+
+**Future Action**: Extend the AST check to any other file that uses inline deferred imports (currently only `annotator_window.py` has them).
+
+---
+
 ### Inconsistent Error Handling
 
 **Debt Level**: Medium

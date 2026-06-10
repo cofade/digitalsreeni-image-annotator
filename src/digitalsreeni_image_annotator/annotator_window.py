@@ -7,7 +7,6 @@ import warnings
 import cv2
 import numpy as np
 import shapely
-from czifile import CziFile
 from PyQt6.QtCore import QEvent, QObject, Qt, QThread, QTimer, pyqtSignal
 from PyQt6.QtGui import (
     QAction,
@@ -53,9 +52,9 @@ from PyQt6.QtWidgets import (
 from shapely.geometry import MultiPolygon, Point, Polygon
 from shapely.ops import unary_union
 from shapely.validation import make_valid
-from tifffile import TiffFile
 
 from .controllers import io_controller
+from .controllers.image_controller import ImageController
 from .controllers.project_controller import ProjectController
 from .core import image_utils
 from .ui import theme
@@ -99,43 +98,6 @@ class TrainingThread(QThread):
             self.finished.emit(results)
         except Exception as e:
             self.finished.emit(str(e))
-
-
-class DimensionDialog(QDialog):
-    def __init__(self, shape, file_name, parent=None, default_dimensions=None):
-        super().__init__(parent)
-        self.setWindowTitle("Assign Dimensions")
-        layout = QVBoxLayout(self)
-
-        # Add file name label
-        file_name_label = QLabel(f"File: {file_name}")
-        file_name_label.setWordWrap(True)
-        layout.addWidget(file_name_label)
-
-        # Add dimension assignment widgets
-        dim_widget = QWidget()
-        dim_layout = QGridLayout(dim_widget)
-        self.combos = []
-        self.shape = shape
-        dimensions = ["T", "Z", "C", "S", "H", "W"]
-        for i, dim in enumerate(shape):
-            dim_layout.addWidget(QLabel(f"Dimension {i} (size {dim}):"), i, 0)
-            combo = QComboBox()
-            combo.addItems(dimensions)
-            if default_dimensions and i < len(default_dimensions):
-                combo.setCurrentText(default_dimensions[i])
-            dim_layout.addWidget(combo, i, 1)
-            self.combos.append(combo)
-        layout.addWidget(dim_widget)
-
-        self.button = QPushButton("OK")
-        self.button.clicked.connect(self.accept)
-        layout.addWidget(self.button)
-
-        self.setMinimumWidth(300)
-
-    def get_dimensions(self):
-        return [combo.currentText() for combo in self.combos]
 
 
 class _DINOReviewEventFilter(QObject):
@@ -184,6 +146,7 @@ class ImageAnnotator(QMainWindow):
         self.backup_project_path = None
 
         self.project_controller = ProjectController(self)
+        self.image_controller = ImageController(self)
 
         self.setWindowTitle("Image Annotator")
         self.setGeometry(100, 100, 1400, 800)
@@ -372,9 +335,7 @@ class ImageAnnotator(QMainWindow):
         return self.project_controller.load_missing_images(missing_images)
 
     def update_image_list(self):
-        self.image_list.clear()
-        for image_info in self.all_images:
-            self.image_list.addItem(image_info["file_name"])
+        return self.image_controller.update_image_list()
 
     def select_class(self, index):
         if 0 <= index < self.class_list.count():
@@ -451,50 +412,7 @@ class ImageAnnotator(QMainWindow):
                 print("No changes made to project details.")
 
     def load_multi_slice_image(self, image_path, dimensions=None, shape=None):
-
-        file_name = os.path.basename(image_path)
-        base_name = os.path.splitext(file_name)[0]
-        print(f"Loading multi-slice image: {image_path}")
-        print(f"Base name: {base_name}")
-
-        if dimensions and shape:
-            print(f"Using stored dimensions: {dimensions}")
-            print(f"Using stored shape: {shape}")
-            self.image_dimensions[base_name] = dimensions
-            self.image_shapes[base_name] = shape
-            if image_path.lower().endswith((".tif", ".tiff")):
-                self.load_tiff(image_path, dimensions, shape)
-            elif image_path.lower().endswith(".czi"):
-                self.load_czi(image_path, dimensions, shape)
-        else:
-            print("No stored dimensions or shape, loading as new image")
-            if image_path.lower().endswith((".tif", ".tiff")):
-                self.load_tiff(image_path)
-            elif image_path.lower().endswith(".czi"):
-                self.load_czi(image_path)
-
-        print(f"Loaded multi-slice image: {file_name}")
-        print(f"Dimensions: {self.image_dimensions.get(base_name, 'Not found')}")
-        print(f"Shape: {self.image_shapes.get(base_name, 'Not found')}")
-        print(f"Number of slices: {len(self.slices)}")
-
-        if self.slices:
-            self.current_image = self.slices[0][1]
-            self.current_slice = self.slices[0][0]
-
-            self.update_slice_list()
-            self.slice_list.setCurrentRow(0)
-            self.activate_slice(self.current_slice)
-            print(f"Activated first slice: {self.current_slice}")
-        else:
-            print("No slices were loaded")
-            self.current_image = None
-            self.current_slice = None
-
-        self.update_slice_list()
-        self.image_label.update()
-
-    # print(f"Loaded slices: {[slice_name for slice_name, _ in self.slices]}")
+        return self.image_controller.load_multi_slice_image(image_path, dimensions, shape)
 
     def activate_sam_magic_wand(self):
         # Uncheck all other tools
@@ -676,92 +594,19 @@ class ImageAnnotator(QMainWindow):
             print("SAM prediction accepted, points cleared, and added to annotations.")
 
     def setup_slice_list(self):
-        self.slice_list = QListWidget()
-        self.slice_list.itemClicked.connect(self.switch_slice)
-        self.image_list_layout.addWidget(QLabel("Slices:"))
-        self.image_list_layout.addWidget(self.slice_list)
+        return self.image_controller.setup_slice_list()
 
     def open_images(self):
-        file_names, _ = QFileDialog.getOpenFileNames(
-            self,
-            "Open Images",
-            "",
-            "Image Files (*.png *.jpg *.bmp *.tif *.tiff *.czi)",
-        )
-        if file_names:
-            self.image_list.clear()
-            self.image_paths.clear()
-            self.all_images.clear()
-            self.slice_list.clear()
-            self.slices.clear()
-            self.current_stack = None
-            self.current_slice = None
-            self.add_images_to_list(file_names)
+        return self.image_controller.open_images()
 
     def convert_to_8bit_rgb(self, image_array):
         return image_utils.convert_to_8bit_rgb(image_array)
 
     def add_images_to_list(self, file_names):
-        first_added_item = None
-        for file_name in file_names:
-            base_name = os.path.basename(file_name)
-            if base_name not in self.image_paths:
-                image_info = {
-                    "file_name": base_name,
-                    "height": 0,
-                    "width": 0,
-                    "id": len(self.all_images) + 1,
-                    "is_multi_slice": False,
-                }
-
-                # Detect multi-slice images and set dimensions
-                if file_name.lower().endswith((".tif", ".tiff", ".czi")):
-                    self.load_multi_slice_image(file_name)
-                    base_name_without_ext = os.path.splitext(base_name)[0]
-                    if (
-                        base_name_without_ext in self.image_slices
-                        and self.image_slices[base_name_without_ext]
-                    ):
-                        first_slice_name, first_slice = self.image_slices[
-                            base_name_without_ext
-                        ][0]
-                        image_info["height"] = first_slice.height()
-                        image_info["width"] = first_slice.width()
-                        image_info["is_multi_slice"] = True
-                        image_info["dimensions"] = self.image_dimensions.get(
-                            base_name_without_ext, []
-                        )
-                        image_info["shape"] = self.image_shapes.get(
-                            base_name_without_ext, []
-                        )
-                else:
-                    # For regular images
-                    image = QImage(file_name)
-                    image_info["height"] = image.height()
-                    image_info["width"] = image.width()
-
-                self.all_images.append(image_info)
-                item = QListWidgetItem(base_name)
-                self.image_list.addItem(item)
-                if first_added_item is None:
-                    first_added_item = item
-
-                # Update image_paths with the original file path
-                self.image_paths[base_name] = file_name
-
-        if first_added_item:
-            self.image_list.setCurrentItem(first_added_item)
-            self.switch_image(first_added_item)
-
-        if not self.is_loading_project:
-            self.auto_save()
+        return self.image_controller.add_images_to_list(file_names)
 
     def update_all_images(self, new_image_info):
-        for info in new_image_info:
-            if not any(
-                img["file_name"] == info["file_name"] for img in self.all_images
-            ):
-                self.all_images.append(info)
+        return self.image_controller.update_all_images(new_image_info)
 
     def closeEvent(self, event):
         if not self.image_label.check_unsaved_changes():
@@ -792,146 +637,10 @@ class ImageAnnotator(QMainWindow):
         event.accept()
 
     def switch_slice(self, item):
-        if item is None:
-            return
-        if not self.image_label.check_unsaved_changes():
-            return
-
-        # Check for unsaved changes
-        if (
-            self.image_label.temp_paint_mask is not None
-            or self.image_label.temp_eraser_mask is not None
-        ):
-            reply = QMessageBox.question(
-                self,
-                "Unsaved Changes",
-                "You have unsaved changes. Do you want to save them?",
-                QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No | QMessageBox.StandardButton.Cancel,
-            )
-            if reply == QMessageBox.StandardButton.Yes:
-                if self.image_label.temp_paint_mask is not None:
-                    self.image_label.commit_paint_annotation()
-                if self.image_label.temp_eraser_mask is not None:
-                    self.image_label.commit_eraser_changes()
-            elif reply == QMessageBox.StandardButton.Cancel:
-                return
-            else:
-                self.image_label.discard_paint_annotation()
-                self.image_label.discard_eraser_changes()
-
-        self.save_current_annotations()
-        self.image_label.clear_temp_sam_prediction()
-
-        slice_name = item.text()
-        for name, qimage in self.slices:
-            if name == slice_name:
-                self.current_image = qimage
-                self.current_slice = name
-                self.display_image()
-                self.load_image_annotations()
-                self.update_annotation_list()
-                self.clear_highlighted_annotation()
-                self.image_label.highlighted_annotations.clear()  # Add this line
-                self.image_label.reset_annotation_state()
-                self.image_label.clear_current_annotation()
-                self.update_image_info()
-                break
-
-        # Ensure the UI is updated
-        self.image_label.update()
-        self.update_slice_list_colors()
-
-        # Reset zoom level to default (1.0)
-        self.set_zoom(1.0)
-
-        # Sync DINO temp_annotations to the new slice (carry over masks
-        # from the previous slice was a reported bug).
-        self._refresh_dino_temp_for_current()
+        return self.image_controller.switch_slice(item)
 
     def switch_image(self, item):
-        if item is None:
-            return
-        if not self.image_label.check_unsaved_changes():
-            return
-
-        # Store the current item before checking temp annotations
-        current_item = self.image_list.currentItem()
-
-        if not self.check_temp_annotations():
-            # If the user chooses not to discard temp annotations, revert the selection
-            self.image_list.setCurrentItem(current_item)
-            return
-
-        self.save_current_annotations()
-        self.image_label.clear_temp_sam_prediction()
-        self.image_label.exit_editing_mode()
-
-        file_name = item.text()
-        print(f"\nSwitching to image: {file_name}")
-
-        image_info = next(
-            (img for img in self.all_images if img["file_name"] == file_name), None
-        )
-
-        if image_info:
-            self.image_file_name = file_name
-            image_path = self.image_paths.get(file_name)
-
-            if not image_path:
-                image_path = os.path.join(self.current_project_dir, "images", file_name)
-
-            if image_path and os.path.exists(image_path):
-                if image_info.get("is_multi_slice", False):
-                    base_name = os.path.splitext(file_name)[0]
-                    if base_name in self.image_slices:
-                        self.slices = self.image_slices[base_name]
-                        if self.slices:
-                            self.current_image = self.slices[0][1]
-                            self.current_slice = self.slices[0][0]
-                            self.update_slice_list()
-                            self.activate_slice(self.current_slice)
-                    else:
-                        self.load_multi_slice_image(
-                            image_path,
-                            image_info.get("dimensions"),
-                            image_info.get("shape"),
-                        )
-                else:
-                    self.load_regular_image(image_path)
-                    self.display_image()
-                    self.clear_slice_list()
-
-                self.load_image_annotations()
-                self.update_annotation_list()
-                self.clear_highlighted_annotation()
-
-                self.image_label.highlighted_annotations.clear()
-                self.image_label.update()
-                self.image_label.reset_annotation_state()
-                self.image_label.clear_current_annotation()
-                self.update_image_info()
-
-                self.adjust_zoom_to_fit()
-            else:
-                self.current_image = None
-                self.image_label.clear()
-                self.load_image_annotations()
-                self.update_annotation_list()
-                self.update_image_info()
-
-            self.image_list.setCurrentItem(item)
-            self.image_label.update()
-            self.update_slice_list_colors()
-        else:
-            self.current_image = None
-            self.current_slice = None
-            self.image_label.clear()
-            self.update_image_info()
-            self.clear_slice_list()
-
-        # Sync DINO temp_annotations to the new image (mask carry-over
-        # bug from single-image review and batch review).
-        self._refresh_dino_temp_for_current()
+        return self.image_controller.switch_image(item)
 
     def adjust_zoom_to_fit(self):
         if not self.current_image:
@@ -948,340 +657,33 @@ class ImageAnnotator(QMainWindow):
         self.set_zoom(zoom_factor)
 
     def activate_current_slice(self):
-        if self.current_slice:
-            # Ensure the current slice is selected in the slice list
-            items = self.slice_list.findItems(self.current_slice, Qt.MatchFlag.MatchExactly)
-            if items:
-                self.slice_list.setCurrentItem(items[0])
-
-            # Load annotations for the current slice
-            self.load_image_annotations()
-
-            # Update the image label
-            self.image_label.update()
-
-            # Update the annotation list
-            self.update_annotation_list()
+        return self.image_controller.activate_current_slice()
 
     def load_image(self, image_path):
-        extension = os.path.splitext(image_path)[1].lower()
-        if extension in [".tif", ".tiff"]:
-            self.load_tiff(image_path)
-        elif extension == ".czi":
-            self.load_czi(image_path)
-        else:
-            self.load_regular_image(image_path)
+        return self.image_controller.load_image(image_path)
 
-    def load_tiff(
-        self, image_path, dimensions=None, shape=None, force_dimension_dialog=False
-    ):
-        print(f"Loading TIFF file: {image_path}")
-        axes_hint = None
-        with TiffFile(image_path) as tif:
-            print(f"TIFF tags: {tif.pages[0].tags}")
+    def load_tiff(self, image_path, dimensions=None, shape=None, force_dimension_dialog=False):
+        return self.image_controller.load_tiff(image_path, dimensions, shape, force_dimension_dialog)
 
-            # Try to access metadata if available
-            try:
-                metadata = tif.pages[0].tags["ImageDescription"].value
-                print(f"TIFF metadata: {metadata}")
-            except KeyError:
-                print("No ImageDescription metadata found")
-
-            # Try to read axis labels from the tifffile series. ImageJ /
-            # OME-TIFF stores axes like "TZCYX" — we can prefill the
-            # dimension dialog with the right labels so the user just
-            # clicks OK instead of guessing per axis. Map tifffile's
-            # axes vocabulary (T,Z,C,S,Y,X) to the app's (T,Z,C,S,H,W).
-            try:
-                series_axes = tif.series[0].axes if tif.series else None
-                if series_axes:
-                    axis_map = {
-                        "T": "T", "Z": "Z", "C": "C", "S": "S",
-                        "Y": "H", "X": "W",
-                    }
-                    mapped = [axis_map.get(a) for a in series_axes]
-                    if all(a is not None for a in mapped):
-                        axes_hint = mapped
-                        print(f"TIFF series axes: {series_axes} → dimension hint: {axes_hint}")
-                    else:
-                        unknown = [a for a in series_axes if axis_map.get(a) is None]
-                        print(f"TIFF series axes had unknown labels {unknown}, no hint applied")
-            except Exception as e:
-                print(f"Could not read TIFF series axes: {e}")
-
-            # Check if it's a multi-page TIFF
-            if len(tif.pages) > 1:
-                print(f"Multi-page TIFF detected. Number of pages: {len(tif.pages)}")
-                # Read all pages into a 3D array
-                image_array = tif.asarray()
-            else:
-                print("Single-page TIFF detected.")
-                image_array = tif.pages[0].asarray()
-
-            print(f"Image array shape: {image_array.shape}")
-            print(f"Image array dtype: {image_array.dtype}")
-            print(f"Image min: {image_array.min()}, max: {image_array.max()}")
-
-        if dimensions and shape and not force_dimension_dialog:
-            # Use stored dimensions and shape
-            print(f"Using stored dimensions: {dimensions}")
-            print(f"Using stored shape: {shape}")
-            image_array = image_array.reshape(shape)
-        else:
-            # Process as before for new images or when forcing dimension dialog
-            print("Processing as new image or forcing dimension dialog.")
-            dimensions = None
-
-        self.process_multidimensional_image(
-            image_array, image_path, dimensions, force_dimension_dialog,
-            axes_hint=axes_hint,
-        )
-
-    def load_czi(
-        self, image_path, dimensions=None, shape=None, force_dimension_dialog=False
-    ):
-        print(f"Loading CZI file: {image_path}")
-        with CziFile(image_path) as czi:
-            image_array = czi.asarray()
-            print(f"CZI array shape: {image_array.shape}")
-            print(f"CZI array dtype: {image_array.dtype}")
-            print(f"CZI array min: {image_array.min()}, max: {image_array.max()}")
-
-        if dimensions and shape and not force_dimension_dialog:
-            # Use stored dimensions and shape
-            print(f"Using stored dimensions: {dimensions}")
-            print(f"Using stored shape: {shape}")
-            image_array = image_array.reshape(shape)
-        else:
-            # Process as before for new images or when forcing dimension dialog
-            print("Processing as new image or forcing dimension dialog.")
-            dimensions = None
-
-        self.process_multidimensional_image(
-            image_array, image_path, dimensions, force_dimension_dialog
-        )
+    def load_czi(self, image_path, dimensions=None, shape=None, force_dimension_dialog=False):
+        return self.image_controller.load_czi(image_path, dimensions, shape, force_dimension_dialog)
 
     def load_regular_image(self, image_path):
-        self.current_image = QImage(image_path)
-        self.slices = []
-        self.slice_list.clear()
-        self.current_slice = None
+        return self.image_controller.load_regular_image(image_path)
 
     def process_multidimensional_image(
         self, image_array, image_path, dimensions=None,
         force_dimension_dialog=False, axes_hint=None,
     ):
-        file_name = os.path.basename(image_path)
-        base_name = os.path.splitext(file_name)[0]
-        print(f"Processing file: {file_name}")
-        print(f"Image array shape: {image_array.shape}")
-        print(f"Image array dtype: {image_array.dtype}")
-
-        if dimensions is None or force_dimension_dialog:
-            if image_array.ndim > 2:
-                # Prefer the loader's metadata-derived hint (e.g. ImageJ
-                # TIFF axes='TZCYX'). Fall back to a hand-crafted default
-                # that covers ndim 3..6 so a user clicking OK without
-                # tweaking the combos gets a sensible result. The earlier
-                # `default_dimensions[-ndim:]` slice silently degraded for
-                # ndim≥5: one axis ended up unset and inherited the combo
-                # box's first item ("T"), producing 2560 wrong slices for
-                # a 5D TZCYX file.
-                if axes_hint and len(axes_hint) == image_array.ndim:
-                    default_dimensions = list(axes_hint)
-                    print(f"Applying axes hint as default dims: {default_dimensions}")
-                else:
-                    if axes_hint and len(axes_hint) != image_array.ndim:
-                        print(
-                            f"Ignoring axes hint (length {len(axes_hint)} "
-                            f"vs ndim {image_array.ndim})"
-                        )
-                    ndim_defaults = {
-                        3: ["Z", "H", "W"],
-                        4: ["T", "Z", "H", "W"],
-                        5: ["T", "Z", "C", "H", "W"],
-                        6: ["T", "Z", "C", "S", "H", "W"],
-                    }
-                    # ndim ≥ 7 falls into the generic case: pad with
-                    # "T" at the front so H / W are still the last two
-                    # axes — that way "click OK" still produces a
-                    # sensible 2D slice even on exotic inputs.
-                    default_dimensions = ndim_defaults.get(
-                        image_array.ndim,
-                        ["T"] * max(0, image_array.ndim - 2) + ["H", "W"],
-                    )
-
-                # Show a progress dialog
-                progress = QProgressDialog(
-                    "Assigning dimensions...", "Cancel", 0, 100, self
-                )
-                progress.setWindowModality(Qt.WindowModality.WindowModal)
-                progress.setMinimumDuration(0)
-                progress.setValue(10)
-                QApplication.processEvents()
-
-                while True:
-                    dialog = DimensionDialog(
-                        image_array.shape, file_name, self, default_dimensions
-                    )
-                    # Qt6 no longer shows the "?" help button by default;
-                    # the old WindowContextHelpButtonHint clear is gone.
-                    progress.setValue(50)
-                    QApplication.processEvents()
-                    if dialog.exec():
-                        dimensions = dialog.get_dimensions()
-                        print(f"Assigned dimensions: {dimensions}")
-                        if "H" in dimensions and "W" in dimensions:
-                            self.image_dimensions[base_name] = dimensions
-                            break
-                        else:
-                            QMessageBox.warning(
-                                self,
-                                "Invalid Dimensions",
-                                "You must assign both H and W dimensions.",
-                            )
-                    else:
-                        progress.close()
-                        return
-                progress.setValue(100)
-                progress.close()
-            else:
-                dimensions = ["H", "W"]
-                self.image_dimensions[base_name] = dimensions
-
-        self.image_shapes[base_name] = image_array.shape
-        print(f"Final assigned dimensions: {self.image_dimensions[base_name]}")
-        print(f"Image shape: {self.image_shapes[base_name]}")
-
-        if self.image_dimensions[base_name]:
-            self.create_slices(
-                image_array, self.image_dimensions[base_name], image_path
-            )
-        else:
-            rgb_image = self.convert_to_8bit_rgb(image_array)
-            self.current_image = self.array_to_qimage(rgb_image)
-            self.slices = []
-            self.slice_list.clear()
-
-        if self.slices:
-            self.current_image = self.slices[0][1]
-            self.current_slice = self.slices[0][0]
-            self.slice_list.setCurrentRow(0)
-            self.load_image_annotations()
-            self.image_label.update()
-
-        self.update_image_info()
-
-        # Update UI
-        self.update_slice_list()
-        self.update_annotation_list()
-        self.image_label.update()
+        return self.image_controller.process_multidimensional_image(
+            image_array, image_path, dimensions, force_dimension_dialog, axes_hint=axes_hint
+        )
 
     def create_slices(self, image_array, dimensions, image_path):
-        base_name = os.path.splitext(os.path.basename(image_path))[0]
-        slices = []
-        self.slice_list.clear()
-
-        print(f"Creating slices for {base_name}")
-        print(f"Dimensions: {dimensions}")
-        print(f"Image array shape: {image_array.shape}")
-
-        # Create and show progress dialog
-        progress = QProgressDialog("Loading slices...", "Cancel", 0, 100, self)
-        progress.setWindowModality(Qt.WindowModality.WindowModal)
-        progress.setMinimumDuration(0)  # Show immediately
-
-        # Handle 2D images
-        if image_array.ndim == 2:
-            progress.setValue(50)  # Update progress
-            QApplication.processEvents()  # Allow GUI to update
-            normalized_array = self.normalize_array(image_array)
-            qimage = self.array_to_qimage(normalized_array)
-            slice_name = f"{base_name}"
-            slices.append((slice_name, qimage))
-            self.add_slice_to_list(slice_name)
-        else:
-            # For 3D or higher dimensional arrays
-            slice_indices = [
-                i for i, dim in enumerate(dimensions) if dim not in ["H", "W"]
-            ]
-
-            total_slices = np.prod([image_array.shape[i] for i in slice_indices])
-            for idx, _ in enumerate(
-                np.ndindex(tuple(image_array.shape[i] for i in slice_indices))
-            ):
-                if progress.wasCanceled():
-                    break
-
-                full_idx = [slice(None)] * len(dimensions)
-                for i, val in zip(slice_indices, _):
-                    full_idx[i] = val
-
-                slice_array = image_array[tuple(full_idx)]
-                rgb_slice = self.convert_to_8bit_rgb(slice_array)
-                qimage = self.array_to_qimage(rgb_slice)
-
-                slice_name = f"{base_name}_{'_'.join([f'{dimensions[i]}{val+1}' for i, val in zip(slice_indices, _)])}"
-                slices.append((slice_name, qimage))
-
-                self.add_slice_to_list(slice_name)
-
-                # Update progress
-                progress_value = int((idx + 1) / total_slices * 100)
-                progress.setValue(progress_value)
-                QApplication.processEvents()  # Allow GUI to update
-
-        progress.setValue(100)  # Ensure progress reaches 100%
-
-        self.image_slices[base_name] = slices
-        self.slices = slices
-
-        if slices:
-            self.current_image = slices[0][1]
-            self.current_slice = slices[0][0]
-            self.slice_list.setCurrentRow(0)
-
-            self.activate_slice(self.current_slice)
-
-            slice_info = f"Total slices: {len(slices)}"
-            for dim, size in zip(dimensions, image_array.shape):
-                if dim not in ["H", "W"]:
-                    slice_info += f", {dim}: {size}"
-            self.update_image_info(additional_info=slice_info)
-        else:
-            print("No slices were created")
-
-        print(f"Created {len(slices)} slices for {base_name}")
-        return slices
+        return self.image_controller.create_slices(image_array, dimensions, image_path)
 
     def add_slice_to_list(self, slice_name):
-        item = QListWidgetItem(slice_name)
-
-        if self.dark_mode:
-            # Dark mode
-            item.setBackground(
-                QColor(40, 40, 40)
-            )  # Very dark gray background for all items
-            if slice_name in self.all_annotations:
-                # Muted steel-blue + light text; the prior light-blue
-                # (173, 216, 230) bg + dark-gray text was painfully
-                # bright on a dark sidebar.
-                item.setForeground(QColor(235, 235, 235))
-                item.setBackground(QColor(58, 95, 140))
-            else:
-                item.setForeground(QColor(200, 200, 200))  # Light gray text
-        else:
-            # Light mode
-            item.setBackground(
-                QColor(240, 240, 240)
-            )  # Very light gray background for all items
-            if slice_name in self.all_annotations:
-                item.setForeground(QColor(255, 255, 255))  # White text
-                item.setBackground(QColor(70, 130, 180))  # Medium-dark blue background
-            else:
-                item.setForeground(QColor(0, 0, 0))  # Black text
-
-        self.slice_list.addItem(item)
+        return self.image_controller.add_slice_to_list(slice_name)
 
     def normalize_array(self, array):
         return image_utils.normalize_array(array)
@@ -1290,48 +692,16 @@ class ImageAnnotator(QMainWindow):
         return image_utils.adjust_contrast(image, low_percentile, high_percentile)
 
     def activate_slice(self, slice_name):
-        self.current_slice = slice_name
-        self.image_file_name = slice_name
-        self.load_image_annotations()
-        self.update_annotation_list()
-
-        for name, qimage in self.slices:
-            if name == slice_name:
-                self.current_image = qimage
-                self.display_image()
-                break
-
-        self.image_label.update()
-
-        items = self.slice_list.findItems(slice_name, Qt.MatchFlag.MatchExactly)
-        if items:
-            self.slice_list.setCurrentItem(items[0])
+        return self.image_controller.activate_slice(slice_name)
 
     def array_to_qimage(self, array):
         return image_utils.array_to_qimage(array)
 
     def update_slice_list(self):
-        self.slice_list.clear()
-        for slice_name, _ in self.slices:
-            item = QListWidgetItem(slice_name)
-            if slice_name in self.all_annotations:
-                item.setForeground(QColor(Qt.GlobalColor.green))
-            else:
-                item.setForeground(
-                    QColor(Qt.GlobalColor.black) if not self.dark_mode else QColor(Qt.GlobalColor.white)
-                )
-            self.slice_list.addItem(item)
-
-        # Select the current slice
-        if self.current_slice:
-            items = self.slice_list.findItems(self.current_slice, Qt.MatchFlag.MatchExactly)
-            if items:
-                self.slice_list.setCurrentItem(items[0])
+        return self.image_controller.update_slice_list()
 
     def clear_slice_list(self):
-        self.slice_list.clear()
-        self.slices = []
-        self.current_slice = None
+        return self.image_controller.clear_slice_list()
 
     def reset_tool_buttons(self):
         for button in self.tool_group.buttons():
@@ -3037,7 +2407,7 @@ class ImageAnnotator(QMainWindow):
                 self.redefine_dimensions(file_name)
 
     def is_multi_dimensional(self, file_name):
-        return file_name.lower().endswith((".tif", ".tiff", ".czi"))
+        return self.image_controller.is_multi_dimensional(file_name)
 
     def predict_single_image(self, file_name):
         if self.is_multi_dimensional(file_name):
@@ -3068,125 +2438,10 @@ class ImageAnnotator(QMainWindow):
             )
 
     def redefine_dimensions(self, file_name):
-        file_path = self.image_paths.get(file_name)
-        if not file_path or not file_path.lower().endswith((".tif", ".tiff", ".czi")):
-            return  # Exit the method if it's not a TIFF or CZI file
-
-        reply = QMessageBox.warning(
-            self,
-            "Redefine Dimensions",
-            "Redefining dimensions will cause all associated annotations to be lost. "
-            "Do you want to continue?",
-            QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
-            QMessageBox.StandardButton.No,
-        )
-
-        if reply == QMessageBox.StandardButton.Yes:
-            # Remove existing annotations for this file
-            base_name = os.path.splitext(file_name)[0]
-
-            print(f"Removing annotations for image: {base_name}")
-            # print(f"Current annotations: {list(self.all_annotations.keys())}")
-
-            # Create a list of keys to remove, using a more specific matching condition
-            keys_to_remove = [
-                key
-                for key in self.all_annotations.keys()
-                if key == base_name
-                or (
-                    key.startswith(f"{base_name}_")
-                    and not key.startswith(f"{base_name}_8bit")
-                )
-            ]
-
-            print(f"Keys to remove: {keys_to_remove}")
-
-            # Remove the annotations
-            for key in keys_to_remove:
-                del self.all_annotations[key]
-
-            # print(f"Annotations after removal: {list(self.all_annotations.keys())}")
-
-            # Remove existing slices
-            if base_name in self.image_slices:
-                del self.image_slices[base_name]
-
-            # Clear current image if it's the one being redefined
-            if self.image_file_name == file_name:
-                self.current_image = None
-                self.image_label.clear()
-
-            # Reload the image with new dimension dialog
-            if file_path.lower().endswith((".tif", ".tiff")):
-                self.load_tiff(file_path, force_dimension_dialog=True)
-            elif file_path.lower().endswith(".czi"):
-                self.load_czi(file_path, force_dimension_dialog=True)
-
-            # Update UI
-            self.update_slice_list()
-            self.update_annotation_list()
-            self.image_label.update()
-
-            # print(f"Final annotations: {list(self.all_annotations.keys())}")
-
-            QMessageBox.information(
-                self,
-                "Dimensions Redefined",
-                "The dimensions have been redefined and the image reloaded. "
-                "All previous annotations for this image have been removed.",
-            )
+        return self.image_controller.redefine_dimensions(file_name)
 
     def remove_image(self):
-        current_item = self.image_list.currentItem()
-        if current_item:
-            file_name = current_item.text()
-
-            # Remove from all data structures
-            self.image_list.takeItem(self.image_list.row(current_item))
-            self.image_paths.pop(file_name, None)
-            self.all_images = [
-                img for img in self.all_images if img["file_name"] != file_name
-            ]
-
-            # Remove annotations
-            self.all_annotations.pop(file_name, None)
-
-            # Handle multi-dimensional images
-            base_name = os.path.splitext(file_name)[0]
-            if base_name in self.image_slices:
-                # Remove slices
-                for slice_name, _ in self.image_slices[base_name]:
-                    self.all_annotations.pop(slice_name, None)
-                del self.image_slices[base_name]
-
-                # Clear slice list
-                self.slice_list.clear()
-
-            # Clear current image and slice if it was the removed image
-            if self.image_file_name == file_name:
-                self.current_image = None
-                self.image_file_name = ""
-                self.current_slice = None
-                self.image_label.clear()
-                self.annotation_list.clear()
-
-            # Switch to another image if available
-            if self.image_list.count() > 0:
-                next_item = self.image_list.item(0)
-                self.image_list.setCurrentItem(next_item)
-                self.switch_image(next_item)
-            else:
-                # No images left
-                self.current_image = None
-                self.image_file_name = ""
-                self.current_slice = None
-                self.image_label.clear()
-                self.annotation_list.clear()
-                self.slice_list.clear()
-
-            # Update UI
-            self.update_ui()
-            self.auto_save()  # Auto-save after removing an image
+        return self.image_controller.remove_image()
 
     def load_annotations(self):
         file_name, _ = QFileDialog.getOpenFileName(
@@ -3530,87 +2785,10 @@ class ImageAnnotator(QMainWindow):
         self.auto_save()  # Auto-save after merging annotations
 
     def delete_selected_image(self):
-        current_item = self.image_list.currentItem()
-        if current_item:
-            file_name = current_item.text()
-            reply = QMessageBox.question(
-                self,
-                "Delete Image",
-                f"Are you sure you want to delete the image '{file_name}'?\n\n"
-                "This will remove the image and all its associated annotations.",
-                QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
-                QMessageBox.StandardButton.No,
-            )
-
-            if reply == QMessageBox.StandardButton.Yes:
-                # Remove from all data structures
-                self.image_list.takeItem(self.image_list.row(current_item))
-                self.image_paths.pop(file_name, None)
-                self.all_images = [
-                    img for img in self.all_images if img["file_name"] != file_name
-                ]
-
-                # Remove annotations
-                self.all_annotations.pop(file_name, None)
-
-                # Handle multi-dimensional images
-                base_name = os.path.splitext(file_name)[0]
-                if base_name in self.image_slices:
-                    # Remove slices
-                    for slice_name, _ in self.image_slices[base_name]:
-                        self.all_annotations.pop(slice_name, None)
-                    del self.image_slices[base_name]
-
-                    # Clear slice list
-                    self.slice_list.clear()
-
-                # Clear current image and slice if it was the removed image
-                if self.image_file_name == file_name:
-                    self.current_image = None
-                    self.image_file_name = ""
-                    self.current_slice = None
-                    self.image_label.clear()
-                    self.annotation_list.clear()
-
-                # Switch to another image if available
-                if self.image_list.count() > 0:
-                    next_item = self.image_list.item(0)
-                    self.image_list.setCurrentItem(next_item)
-                    self.switch_image(next_item)
-                else:
-                    # No images left
-                    self.current_image = None
-                    self.image_file_name = ""
-                    self.current_slice = None
-                    self.image_label.clear()
-                    self.annotation_list.clear()
-                    self.slice_list.clear()
-
-                # Update UI
-                self.update_ui()
-
-                QMessageBox.information(
-                    self, "Image Deleted", f"The image '{file_name}' has been deleted."
-                )
+        return self.image_controller.delete_selected_image()
 
     def display_image(self):
-        if self.current_image:
-            if isinstance(self.current_image, QImage):
-                pixmap = QPixmap.fromImage(self.current_image)
-            elif isinstance(self.current_image, QPixmap):
-                pixmap = self.current_image
-            else:
-                print(f"Unexpected image type: {type(self.current_image)}")
-                return
-
-            if not pixmap.isNull():
-                self.image_label.setPixmap(pixmap)
-                self.image_label.adjustSize()
-            else:
-                print("Error: Null pixmap")
-        else:
-            self.image_label.clear()
-            print("No current image to display")
+        return self.image_controller.display_image()
 
     def update_ui(self):
         self.update_image_list()

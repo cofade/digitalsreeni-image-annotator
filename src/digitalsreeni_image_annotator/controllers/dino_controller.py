@@ -8,7 +8,7 @@ Extracted from `ImageAnnotator`. Owns:
   SAM refines to masks)
 - Temp-annotation review state: accept / reject pending DINO results,
   navigate batch review across mixed regular-images + multi-dim slices
-- The application-wide `_DINOReviewEventFilter` that lets Enter /
+- The application-wide `DINOReviewEventFilter` that lets Enter /
   Escape accept-or-reject pending DINO masks regardless of which
   widget has focus
 
@@ -39,7 +39,7 @@ from PyQt6.QtWidgets import (
 )
 
 
-class _DINOReviewEventFilter(QObject):
+class DINOReviewEventFilter(QObject):
     """Application-wide event filter that lets Enter / Escape accept or
     reject pending DINO temp_annotations regardless of which widget has
     focus. Without this, clicking a slice/image entry in a list moves

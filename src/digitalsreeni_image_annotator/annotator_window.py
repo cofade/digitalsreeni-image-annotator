@@ -57,15 +57,15 @@ from shapely.ops import unary_union
 from shapely.validation import make_valid
 from tifffile import TiffFile
 
-from .annotation_statistics import show_annotation_statistics
-from .coco_json_combiner import show_coco_json_combiner
-from .dino_phrase_editor import ClassThresholdTable, PhraseEditorPanel
-from .dino_utils import DINOUtils
-from .dataset_splitter import DatasetSplitterTool
-from .default_stylesheet import default_stylesheet
-from .dicom_converter import DicomConverter
-from .dino_merge_dialog import show_dino_merge_dialog
-from .export_formats import (
+from .dialogs.annotation_statistics import show_annotation_statistics
+from .dialogs.coco_json_combiner import show_coco_json_combiner
+from .dialogs.dino_phrase_editor import ClassThresholdTable, PhraseEditorPanel
+from .inference.dino_utils import DINOUtils, GDINO_MODEL_PATHS
+from .dialogs.dataset_splitter import DatasetSplitterTool
+from .ui.default_stylesheet import default_stylesheet
+from .dialogs.dicom_converter import DicomConverter
+from .dialogs.dino_merge_dialog import show_dino_merge_dialog
+from .io.export_formats import (
     export_coco_json,
     export_labeled_images,
     export_pascal_voc_bbox,
@@ -74,24 +74,24 @@ from .export_formats import (
     export_yolo_v4,
     export_yolo_v5plus,
 )
-from .help_window import HelpWindow
-from .image_augmenter import show_image_augmenter
-from .image_label import ImageLabel
-from .image_patcher import show_image_patcher
-from .import_formats import (
+from .dialogs.help_window import HelpWindow
+from .dialogs.image_augmenter import show_image_augmenter
+from .widgets.image_label import ImageLabel
+from .dialogs.image_patcher import show_image_patcher
+from .io.import_formats import (
     import_coco_json,
     import_yolo_v4,
     import_yolo_v5plus,
     process_import_format,
 )
-from .sam_utils import InferenceBusyError, SAMUtils
-from .slice_registration import SliceRegistrationTool
-from .snake_game import SnakeGame
-from .soft_dark_stylesheet import soft_dark_stylesheet
-from .stack_interpolator import StackInterpolator
-from .stack_to_slices import show_stack_to_slices
+from .inference.sam_utils import InferenceBusyError, SAMUtils
+from .dialogs.slice_registration import SliceRegistrationTool
+from .dialogs.snake_game import SnakeGame
+from .ui.soft_dark_stylesheet import soft_dark_stylesheet
+from .dialogs.stack_interpolator import StackInterpolator
+from .dialogs.stack_to_slices import show_stack_to_slices
 from .utils import calculate_area, calculate_bbox
-from .yolo_trainer import LoadPredictionModelDialog, TrainingInfoDialog, YOLOTrainer
+from .dialogs.yolo_trainer import LoadPredictionModelDialog, TrainingInfoDialog, YOLOTrainer
 
 warnings.filterwarnings("ignore", category=UserWarning)
 
@@ -399,7 +399,7 @@ class ImageAnnotator(QMainWindow):
             self.update_window_title()
 
     def show_project_search(self):
-        from .project_search import show_project_search
+        from .dialogs.project_search import show_project_search
 
         show_project_search(self)
 
@@ -990,8 +990,8 @@ class ImageAnnotator(QMainWindow):
             )
             return
 
-        from .annotation_statistics import AnnotationStatisticsDialog
-        from .project_details import ProjectDetailsDialog
+        from .dialogs.annotation_statistics import AnnotationStatisticsDialog
+        from .dialogs.project_details import ProjectDetailsDialog
 
         # Generate annotation statistics
         stats_dialog = AnnotationStatisticsDialog(self)
@@ -3057,7 +3057,6 @@ class ImageAnnotator(QMainWindow):
 
     def _resolve_dino_model_path(self, model_name: str) -> str | None:
         """Return the canonical local path for a preset DINO model, or None if unknown."""
-        from .dino_utils import GDINO_MODEL_PATHS
         # GDINO_MODEL_PATHS now returns absolute paths from models_base_dir().
         return GDINO_MODEL_PATHS.get(model_name)
 
@@ -3186,6 +3185,10 @@ class ImageAnnotator(QMainWindow):
         self.btn_detect_single.setEnabled(False)
         self.btn_detect_batch.setEnabled(False)
 
+        # Clear any stale temp annotations before starting detection so an
+        # accept from a previous run doesn't bleed into the results handler.
+        self.image_label.temp_annotations = []
+
         if not self._ensure_dino_model_downloaded(model_name):
             self.btn_detect_single.setEnabled(True)
             self.btn_detect_batch.setEnabled(True)
@@ -3264,7 +3267,12 @@ class ImageAnnotator(QMainWindow):
             self.dino_batch_mode.currentText() == "Auto-accept all detections"
         )
         if auto_accept:
-            self._commit_dino_results(image_name, results, sam_results)
+            print(f"[DINO] detect_single: auto_accept=True, committing {len(results)} result(s)")
+            try:
+                self._commit_dino_results(image_name, results, sam_results)
+            except Exception as e:
+                print(f"[DINO] _commit_dino_results failed: {e}")
+                traceback.print_exc()
             n_committed = sum(1 for s in sam_results if "error" not in s)
             self.image_label.temp_annotations = []
             self.image_label.update()
@@ -3329,10 +3337,15 @@ class ImageAnnotator(QMainWindow):
                                 "Please add at least one class with phrases.")
             return
 
+        # Prevent stale temp annotations from a prior single-image review from
+        # confusing the batch results handler or the _DINOReviewEventFilter.
+        self.image_label.temp_annotations = []
+
         if not self._ensure_dino_model_downloaded(model_name):
             return
 
         auto_accept = self.dino_batch_mode.currentText() == "Auto-accept all detections"
+        print(f"[DINO] detect_batch: auto_accept={auto_accept}")
 
         # Build a flat list of (display_name, qimage) work items covering
         # both regular images (loaded from disk) and multi-dim image

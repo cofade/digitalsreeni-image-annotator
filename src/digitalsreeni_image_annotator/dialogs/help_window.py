@@ -1,7 +1,7 @@
 from PyQt6.QtWidgets import QDialog, QVBoxLayout, QTextBrowser
 from PyQt6.QtCore import Qt
-from .soft_dark_stylesheet import soft_dark_stylesheet
-from .default_stylesheet import default_stylesheet
+from ..ui.soft_dark_stylesheet import soft_dark_stylesheet
+from ..ui.default_stylesheet import default_stylesheet
 
 class HelpWindow(QDialog):
     def __init__(self, dark_mode=False, font_size=10):

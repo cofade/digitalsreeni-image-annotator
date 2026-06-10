@@ -9,6 +9,23 @@ Dr. Sreenivas Bhattiprolu
 
 import sys
 import os
+
+# ── Windows DLL load-order workaround (torch → Qt, not Qt → torch)
+#
+# On Windows + Python 3.14, importing torch *after* PyQt has loaded
+# its native platform DLLs (qwindows.dll via QtCore/Gui/Widgets)
+# triggers WinError 1114 when torch's c10.dll initialises.  This
+# was historically blamed on PyQt5 (ADR-011) and thought fixed in
+# PyQt6 (ADR-014).  Real-world testing with torch 2.11.0 + PyQt6
+# 6.10.2 shows the conflict still surfaces.  The workaround is
+# cheap and harmless: import torch eagerly before QApplication is
+# created so torch's DLLs claim their slot first.
+# See ADR-017.
+try:
+    import torch  # noqa: F401
+except ImportError:
+    pass  # torch may not be installed; lazy fallback in sam_utils/dino_utils
+
 from PyQt6.QtWidgets import QApplication
 from .annotator_window import ImageAnnotator
 

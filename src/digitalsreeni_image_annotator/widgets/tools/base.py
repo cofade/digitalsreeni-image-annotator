@@ -36,8 +36,8 @@ class ToolHandler:
         return False
 
     # --- Key hooks. ImageLabel routes Enter/Escape here only after the
-    # higher-priority modal branches (DINO temp, sam_points, editing
-    # polygon, magic wand) have had their turn. ---
+    # higher-priority modal branches (DINO temp, sam_points, sam_box,
+    # editing polygon) have had their turn. ---
 
     def on_enter(self) -> bool:
         return False

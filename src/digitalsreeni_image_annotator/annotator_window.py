@@ -323,17 +323,8 @@ class ImageAnnotator(QMainWindow):
     def load_multi_slice_image(self, image_path, dimensions=None, shape=None):
         return self.image_controller.load_multi_slice_image(image_path, dimensions, shape)
 
-    def activate_sam_magic_wand(self):
-        return self.sam_controller.activate_sam_magic_wand()
-
-    def deactivate_sam_magic_wand(self):
-        return self.sam_controller.deactivate_sam_magic_wand()
-
-    def toggle_sam_assisted(self):
-        return self.sam_controller.toggle_sam_assisted()
-
-    def toggle_sam_magic_wand(self):
-        return self.sam_controller.toggle_sam_magic_wand()
+    def deactivate_sam_tools(self):
+        return self.sam_controller.deactivate_sam_tools()
 
     def schedule_sam_prediction(self):
         return self.sam_controller.schedule_sam_prediction()
@@ -776,9 +767,6 @@ class ImageAnnotator(QMainWindow):
         self.image_label.set_active_tool(None)
         self.polygon_button.setChecked(False)
         self.rectangle_button.setChecked(False)
-        self.sam_magic_wand_button.setChecked(False)
-        self.sam_magic_wand_button.setEnabled(False)  # Disable the SAM-Assisted button
-        self.image_label.sam_magic_wand_active = False  # Deactivate SAM magic wand
 
         # Reset SAM-related attributes
         self.image_label.sam_bbox = None
@@ -919,7 +907,7 @@ class ImageAnnotator(QMainWindow):
 
         sender = self.sender()
         if sender is None:
-            sender = self.sam_magic_wand_button
+            return
 
         if not self.current_class:
             QMessageBox.warning(
@@ -941,13 +929,6 @@ class ImageAnnotator(QMainWindow):
 
         other_buttons = [btn for btn in self.tool_group.buttons() if btn != sender]
 
-        # Deactivate SAM if we're switching to a different tool
-        if (
-            sender != self.sam_magic_wand_button
-            and self.image_label.sam_magic_wand_active
-        ):
-            self.deactivate_sam_magic_wand()
-
         if sender.isChecked():
             # Uncheck all other buttons
             for btn in other_buttons:
@@ -958,9 +939,6 @@ class ImageAnnotator(QMainWindow):
                 self.image_label.set_active_tool("polygon")
             elif sender == self.rectangle_button:
                 self.image_label.set_active_tool("rectangle")
-            elif sender == self.sam_magic_wand_button:
-                self.image_label.set_active_tool("sam_magic_wand")
-                self.activate_sam_magic_wand()
             elif sender == self.paint_brush_button:
                 self.image_label.set_active_tool("paint_brush")
                 self.image_label.setFocus()  # Set focus on the image label
@@ -969,8 +947,6 @@ class ImageAnnotator(QMainWindow):
                 self.image_label.setFocus()  # Set focus on the image label
         else:
             self.image_label.set_active_tool(None)
-            if sender == self.sam_magic_wand_button:
-                self.deactivate_sam_magic_wand()
 
         # Update UI based on the current tool
         self.update_ui_for_current_tool()
@@ -997,12 +973,6 @@ class ImageAnnotator(QMainWindow):
         # Update button states
         self.polygon_button.setChecked(self.image_label.current_tool == "polygon")
         self.rectangle_button.setChecked(self.image_label.current_tool == "rectangle")
-        self.sam_magic_wand_button.setChecked(
-            self.image_label.current_tool == "sam_magic_wand"
-        )
-
-        # Enable/disable SAM button based on model availability
-        self.sam_magic_wand_button.setEnabled(self.current_sam_model is not None)
 
         # Disable all tools if no class is selected
         tools_enabled = (
@@ -1013,10 +983,7 @@ class ImageAnnotator(QMainWindow):
             button.setEnabled(tools_enabled)
 
         # Update cursor based on the current tool
-        if (
-            self.image_label.current_tool == "sam_magic_wand"
-            and self.sam_magic_wand_button.isEnabled()
-        ):
+        if self.image_label.current_tool in ("sam_box", "sam_points"):
             self.image_label.setCursor(Qt.CursorShape.CrossCursor)
         else:
             self.image_label.setCursor(Qt.CursorShape.ArrowCursor)

@@ -87,19 +87,18 @@ class HelpWindow(QDialog):
         <h2>Annotation Process</h2>
         <ol>
             <li><strong>Select a Class:</strong> Choose the class you want to annotate from the class list.</li>
-            <li><strong>Choose a Tool:</strong> Select either the Polygon Tool, Rectangle Tool, or SAM-Assisted tool.</li>
+            <li><strong>Choose a Tool:</strong> Select the Polygon Tool, Rectangle Tool, or one of the SAM-assisted tools (SAM-box / SAM-points).</li>
             <li><strong>Create Annotation:</strong>
                 <ul>
                     <li>For Polygon Tool: Click around the object to define its boundary. Press Enter or click "Finish Polygon" when done.</li>
                     <li>For Rectangle Tool: Click and drag to create a bounding box.</li>
-                    <li>For SAM-Assisted tool: 
+                    <li>For SAM-assisted tools (SAM-box / SAM-points):
                         <ol>
                             <li>Select a SAM model from the "Pick a SAM Model" dropdown. It's recommended to use smaller models like SAM2 tiny or SAM2 small for better performance.</li>
                             <li>Note: When you select a model for the first time, the application needs to download it. This process may take a few seconds to a minute, depending on your internet connection speed. Subsequent uses of the same model will be faster as it will already be cached locally, in your working directory.</li>
-                            <li>Click the "SAM-Assisted" button to activate the tool.</li>
-                            <li>Draw a rectangle around objects of interest to allow SAM2 to automatically detect objects.</li>
-                            <li>SAM2 will provide various outputs with different scores, and only the top-scoring region will be displayed.</li>
-                            <li>If the desired result isn't achieved on the first try, draw again.</li>
+                            <li>Click the "SAM-box" button and draw a rectangle around an object of interest, or click the "SAM-points" button and left-click points inside the object (right-click adds negative points to exclude regions).</li>
+                            <li>SAM2 will display the top-scoring mask as a temporary prediction. Press Enter to accept it or Esc to discard it.</li>
+                            <li>If the desired result isn't achieved on the first try, draw the box again or adjust the points.</li>
                             <li>For low-quality images where SAM2 may not auto-detect objects, manual tools may be necessary.</li>
                         </ol>
                     </li>

@@ -108,7 +108,7 @@ _ctx: CanvasContext                 # Narrow read view of main-window state (ADR
   then SAM/edit-mode branches, then dispatch to
   `active_tool_handler.on_mouse_X()`.
 - `keyPressEvent()`: Enter / Escape / Delete / brush-size keys. Modal
-  branches (DINO temp, sam_points, editing_polygon, sam_magic_wand)
+  branches (DINO temp, sam_points, sam_box, editing_polygon)
   consume first; otherwise routed to `handler.on_enter()` /
   `on_escape()`.
 - `paintEvent()`: image → committed annotations → editing polygon →
@@ -210,7 +210,7 @@ the controller graph.
 | `ImageController` | Open / load / switch images and slices. TIFF + CZI loaders, the multi-dim `DimensionDialog`, the `[-ndim:]` axis-slice bug fix from the v0.9.0 era. |
 | `AnnotationController` | Annotation CRUD, list sorting, highlight, edit-mode entry/exit, `finish_polygon`, `finish_rectangle`, `replace_annotations` (eraser path). Validates writes before mutating `all_annotations`. |
 | `ClassController` | Class add / delete / rename / colour / visibility. `update_slice_list_colors`, `is_class_visible`. |
-| `SAMController` | Magic-wand activation, debounce timer, `_sam_inference_in_flight` re-entrancy guard (ADR-013), model picker. |
+| `SAMController` | SAM box/points tool lifecycle, debounce timer, `_sam_inference_in_flight` re-entrancy guard (ADR-013), model picker. |
 | `DINOController` | Single + batch detection, batch review navigation, temp-annotation accept/reject, custom-model browse, `DINOReviewEventFilter` ownership (ADR-015). |
 | `YOLOController` | Training menu, `TrainingThread`, prediction dialog, result processing. |
 | `io_controller` *(module-level functions, not a class)* | Thin UI wrappers around the pure `io/export_formats.py` and `io/import_formats.py` modules. |

@@ -128,9 +128,8 @@ You should see `True` and your GPU name. For other platforms or driver combinati
    - To use SAM2-assisted annotation:
      - Select a model from the "Pick a SAM Model" dropdown. It's recommended to use smaller models like SAM2 tiny or SAM2 small. SAM2 large is not recommended as it may crash the application on systems with limited resources.
      - Note: When you select a model for the first time, the application needs to download it. This process may take a few seconds to a minute, depending on your internet connection speed. Subsequent uses of the same model will be faster as it will already be cached locally, in your working directory.
-     - Click the "SAM-Assisted" button to activate the tool.
-     - Draw a rectangle around objects of interest to allow SAM2 to automatically detect objects.
-     - Note that SAM2 provides various outputs with different scores, and only the top-scoring region will be displayed. If the desired result isn't achieved on the first try, draw again.
+     - Click the "SAM-box" button and draw a rectangle around an object of interest, or click the "SAM-points" button and left-click points inside the object (right-click adds negative points to exclude regions).
+     - SAM2 displays the top-scoring mask as a temporary prediction — press Enter to accept it or Esc to discard it. If the desired result isn't achieved on the first try, draw the box again or adjust the points.
      - For low-quality images where SAM2 may not auto-detect objects, manual tools may be necessary.
      - When SAM2 auto-detect partial objects, use polygon or paint brush tools to manually define the remaining region and use the Merge tool to combine both annotations into one.
      - When SAM2 over-annotates objects, extending the annotation beyond object's boundaries, use the Eraser tool to clean up the edges.

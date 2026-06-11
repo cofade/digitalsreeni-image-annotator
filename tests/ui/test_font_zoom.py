@@ -110,6 +110,32 @@ def test_stylesheet_contains_scaled_overrides(window):
     assert "QLabel.section-header { font-size: 28px; }" in sheet
     assert "width: 28px; height: 28px;" in sheet
     assert "QRadioButton::indicator { border-radius: 16px; }" in sheet
+    # Compact DINO panel scales too (11px / 10px legacy at default).
+    assert "PhraseEditorPanel QPushButton { font-size: 22px; }" in sheet
+    assert "QLabel#dino_phrase_hint { font-size: 20px; }" in sheet
+
+
+def test_dino_panel_resolves_compact_scaled_font(window, qt_application):
+    """The compact DINO-panel rules must win at the *rendered-font*
+    level — i.e. the QSS px rules beat the findChildren setFont(pt)
+    loop in apply_theme_and_font. String presence in the stylesheet
+    (tested above) is not enough; this guards the precedence."""
+    from PyQt6.QtWidgets import QLabel
+
+    from digitalsreeni_image_annotator.dialogs.dino_phrase_editor import (
+        PhraseEditorPanel,
+    )
+
+    panel = PhraseEditorPanel()
+    window.setCentralWidget(panel)
+    theme.set_font_pt(window, 20)  # scale 2.0 -> compact 22px, hint 20px
+    qt_application.processEvents()
+
+    panel.btn_add_phrase.ensurePolished()
+    assert panel.btn_add_phrase.font().pixelSize() == 22
+    hint = panel.findChild(QLabel, "dino_phrase_hint")
+    hint.ensurePolished()
+    assert hint.font().pixelSize() == 20
 
 
 def test_default_stylesheet_overrides_match_legacy_px(window):
@@ -121,3 +147,5 @@ def test_default_stylesheet_overrides_match_legacy_px(window):
     assert "QLabel.section-header { font-size: 14px; }" in sheet
     assert "width: 14px; height: 14px;" in sheet
     assert "QRadioButton::indicator { border-radius: 8px; }" in sheet
+    assert "PhraseEditorPanel QPushButton { font-size: 11px; }" in sheet
+    assert "QLabel#dino_phrase_hint { font-size: 10px; }" in sheet

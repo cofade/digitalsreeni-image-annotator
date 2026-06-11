@@ -240,8 +240,12 @@ strings. `apply_theme_and_font` appends scaled rules *after* the
 static sheet — later rules of equal specificity win in QSS — for the
 body font, `.section-header` and checkbox/radio indicator sizes. The
 overrides scale the legacy px values (14px header, 14px indicators,
-8px radio radius) by `ui_font_pt / 10` and stay in **px**, so at the
-default 10pt they reproduce the static sheets exactly. Do not
+8px radio radius, 11px/10px compact DINO panel) by `ui_font_pt / 10`
+and stay in **px**, so at the default 10pt they reproduce the legacy
+look exactly. Widgets that want smaller-than-body text (e.g. the DINO
+threshold table / phrase panel) must not set their own `font-size` —
+they get a type- or objectName-targeted rule in the appended block
+instead, so "compact" still scales. Do not
 hardcode `font-size` in widget `setStyleSheet(...)` calls: it overrides
 the global rule and the widget stops scaling (same failure mode as the
 No Hardcoded Colors rule below; the DINO sidebar captions hit this).

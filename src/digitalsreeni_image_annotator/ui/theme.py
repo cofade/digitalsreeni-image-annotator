@@ -25,6 +25,11 @@ from .soft_dark_stylesheet import soft_dark_stylesheet
 _HEADER_PX_AT_DEFAULT = 14      # QLabel.section-header font-size
 _INDICATOR_PX_AT_DEFAULT = 14   # checkbox / radio indicator width+height
 _RADIO_RADIUS_PX_AT_DEFAULT = 8  # radio indicator border-radius
+# DINO sidebar panel uses deliberately compact text (smaller than body).
+# The widgets carry no inline font-size — these rules own it so the
+# compact look is preserved but still scales with ui_font_pt.
+_DINO_COMPACT_PX_AT_DEFAULT = 11  # threshold table, phrase list, buttons
+_DINO_HINT_PX_AT_DEFAULT = 10     # italic hint under "Phrases for:"
 
 
 def apply_theme_and_font(mw):
@@ -38,13 +43,20 @@ def apply_theme_and_font(mw):
     header_px = round(_HEADER_PX_AT_DEFAULT * scale)
     indicator_px = round(_INDICATOR_PX_AT_DEFAULT * scale)
     radio_radius_px = round(_RADIO_RADIUS_PX_AT_DEFAULT * scale)
+    dino_px = round(_DINO_COMPACT_PX_AT_DEFAULT * scale)
+    dino_hint_px = round(_DINO_HINT_PX_AT_DEFAULT * scale)
     combined_style = (
         f"{style}\n"
         f"QWidget {{ font-size: {font_size}pt; }}\n"
         f"QLabel.section-header {{ font-size: {header_px}px; }}\n"
         f"QCheckBox::indicator, QRadioButton::indicator {{"
         f" width: {indicator_px}px; height: {indicator_px}px; }}\n"
-        f"QRadioButton::indicator {{ border-radius: {radio_radius_px}px; }}"
+        f"QRadioButton::indicator {{ border-radius: {radio_radius_px}px; }}\n"
+        f"ClassThresholdTable, ClassThresholdTable QDoubleSpinBox,"
+        f" ClassThresholdTable QHeaderView::section,"
+        f" PhraseEditorPanel QLabel, PhraseEditorPanel QListWidget,"
+        f" PhraseEditorPanel QPushButton {{ font-size: {dino_px}px; }}\n"
+        f"QLabel#dino_phrase_hint {{ font-size: {dino_hint_px}px; }}"
     )
     mw.setStyleSheet(combined_style)
 

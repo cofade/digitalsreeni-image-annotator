@@ -727,11 +727,15 @@ persistence mechanism in the app.
   `_overlay_font` or the appended-override block in
   `theme.apply_theme_and_font` — hardcoded px values won't follow the
   setting (see "UI Font Zoom" in `08_crosscutting_concepts.md`).
-- ⚠️ Known debt: standalone dialogs still carry hardcoded
-  `font-size:Npx` tokens (`dino_phrase_editor.py`,
-  `dino_merge_dialog.py` — the latter also a `color:#444` dark-mode
-  contrast issue) and therefore don't scale. Tracked, not an
-  oversight; fix when those dialogs are next touched.
+- ⚠️ Deliberately-compact widgets (DINO threshold table / phrase
+  panel) don't hardcode their small font inline; the appended block
+  owns it via type/objectName selectors (`ClassThresholdTable`,
+  `PhraseEditorPanel …`, `#dino_phrase_hint`) so compact ≠ unscaled.
+  Follow that pattern for new compact widgets.
+- ⚠️ Known debt: `dino_merge_dialog.py` still carries hardcoded
+  `font-size:Npx` tokens and a `color:#444` dark-mode contrast issue,
+  so it doesn't scale. Tracked, not an oversight; fix when that
+  dialog is next touched.
 
 ---
 

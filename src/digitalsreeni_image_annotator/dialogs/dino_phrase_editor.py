@@ -60,14 +60,20 @@ class ClassThresholdTable(QTableWidget):
         self.setSelectionBehavior(QAbstractItemView.SelectionBehavior.SelectRows)
         self.setEditTriggers(QAbstractItemView.EditTrigger.NoEditTriggers)
         self.verticalHeader().setVisible(False)
+        # Rows track their content height so cell text isn't clipped
+        # when the UI font zoom enlarges the compact panel font.
+        self.verticalHeader().setSectionResizeMode(
+            QHeaderView.ResizeMode.ResizeToContents)
         self.setMaximumHeight(160)
         # No hardcoded background colors — pick them up from the active
         # stylesheet so the table integrates with both light and dark
         # mode. The earlier "background: #e0e0e0" produced a bright bar
         # across the top of the panel in dark mode.
+        # No font-size either: the compact size is set (and scaled with
+        # ui_font_pt) by the appended overrides in ui/theme.py.
         self.setStyleSheet(
-            "QTableWidget { font-size: 11px; }"
-            "QHeaderView::section { font-size: 11px; font-weight: bold; padding: 2px; }"
+            "QHeaderView::section { font-weight: bold; "
+            "  padding: 2px; background-color: palette(mid); color: palette(text); }"
         )
 
     def _make_spin(self, value=0.25):
@@ -77,7 +83,6 @@ class ClassThresholdTable(QTableWidget):
         sp.setDecimals(2)
         sp.setValue(value)
         sp.setFrame(True)
-        sp.setStyleSheet("font-size: 11px;")
         return sp
 
     def add_class(self, name: str) -> bool:
@@ -92,7 +97,6 @@ class ClassThresholdTable(QTableWidget):
         self.setCellWidget(row, _COL_BOX, self._make_spin(DEFAULT_BOX_THR))
         self.setCellWidget(row, _COL_TXT, self._make_spin(DEFAULT_TXT_THR))
         self.setCellWidget(row, _COL_NMS, self._make_spin(DEFAULT_NMS_THR))
-        self.setRowHeight(row, 26)
         return True
 
     def remove_class(self, name: str) -> bool:
@@ -172,34 +176,36 @@ class PhraseEditorPanel(QWidget):
         layout.setContentsMargins(0, 4, 0, 0)
         layout.setSpacing(3)
 
+        # Compact font sizes for this panel come from the appended
+        # overrides in ui/theme.py so they scale with the UI font zoom.
+        # Note: *every* QLabel/QListWidget/QPushButton in this panel is
+        # compact by design — theme.py targets them by type. A new
+        # label added here will get the compact size, not body size.
         self.lbl_title = QLabel("Phrases for: ---")
-        self.lbl_title.setStyleSheet(
-            "font-size: 11px; font-weight: bold; color: #333;")
+        self.lbl_title.setStyleSheet("font-weight: bold;")
         layout.addWidget(self.lbl_title)
 
         hint = QLabel(
             "DINO uses all phrases below for this class.\n"
             "First phrase (class name) cannot be removed.")
         hint.setWordWrap(True)
-        hint.setStyleSheet("font-size: 10px; color: #777; font-style: italic;")
+        hint.setObjectName("dino_phrase_hint")  # theme.py font-size rule
+        hint.setStyleSheet("font-style: italic;")
         layout.addWidget(hint)
 
         self.phrase_list = QListWidget()
         self.phrase_list.setMaximumHeight(90)
-        self.phrase_list.setStyleSheet("font-size: 11px;")
         self.phrase_list.setContextMenuPolicy(Qt.ContextMenuPolicy.CustomContextMenu)
         self.phrase_list.customContextMenuRequested.connect(self._show_phrase_context_menu)
         layout.addWidget(self.phrase_list)
 
         btn_row = QHBoxLayout()
         self.btn_add_phrase = QPushButton("Add Phrase")
-        self.btn_add_phrase.setStyleSheet(
-            "QPushButton{font-size:11px;padding:3px 6px;}")
+        self.btn_add_phrase.setStyleSheet("QPushButton{padding:3px 6px;}")
         self.btn_add_phrase.clicked.connect(self._add_phrase)
 
         self.btn_rem_phrase = QPushButton("Remove Selected")
-        self.btn_rem_phrase.setStyleSheet(
-            "QPushButton{font-size:11px;padding:3px 6px;}")
+        self.btn_rem_phrase.setStyleSheet("QPushButton{padding:3px 6px;}")
         self.btn_rem_phrase.clicked.connect(self._remove_phrase)
 
         btn_row.addWidget(self.btn_add_phrase)

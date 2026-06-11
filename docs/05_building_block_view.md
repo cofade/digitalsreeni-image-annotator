@@ -28,10 +28,32 @@
 ```
 src/digitalsreeni_image_annotator/
 ├── main.py                        # Entry point, initializes QApplication
-├── annotator_window.py            # ImageAnnotator - main window
-├── image_label.py                 # ImageLabel - custom display widget
-├── sam_utils.py                   # SAMUtils - SAM model management
-└── utils.py                       # Utility functions
+	├── annotator_window.py            # ImageAnnotator - main window orchestrator
+	├── app_settings.py                # QSettings-backed UI prefs (font size, dark mode) — ADR-020
+	├── utils.py                       # Cross-cutting utilities
+	├── core/                          # Constants, annotation utils, image utils
+	│   ├── constants.py
+	│   └── annotation_utils.py
+	├── widgets/
+	│   ├── image_label.py             # ImageLabel - canvas widget; dispatcher
+	│   ├── canvas_context.py          # CanvasContext - narrow read view (ADR-018)
+	│   └── tools/                     # Per-tool handlers (ADR-019)
+	│       ├── base.py                # ToolHandler base
+	│       ├── rectangle_tool.py
+	│       ├── polygon_tool.py
+	│       ├── paint_tool.py
+	│       └── eraser_tool.py
+	├── controllers/                   # Project/Image/SAM/DINO/YOLO/Annotation/Class
+	├── inference/                     # sam_utils.py, dino_utils.py
+	│   ├── sam_utils.py
+	│   └── dino_utils.py
+	├── io/                            # export_formats.py, import_formats.py
+	│   ├── export_formats.py
+	│   └── import_formats.py
+	├── ui/                            # menu_bar, sidebar, theme, stylesheets
+	│   ├── default_stylesheet.py
+	│   └── soft_dark_stylesheet.py
+	└── dialogs/                       # Standalone tool dialogs
 ```
 
 ### ImageAnnotator (annotator_window.py)
@@ -56,27 +78,51 @@ current_slice: str                  # Currently displayed slice
 - `export_annotations()`: Export to various formats
 - `import_annotations()`: Import from COCO/YOLO
 
-### ImageLabel (image_label.py)
+### ImageLabel (widgets/image_label.py)
 
-**Responsibility**: Image display and annotation interaction
+**Responsibility**: Canvas widget — image display, navigation
+(zoom/pan), committed-annotation rendering, SAM bbox/points overlays,
+DINO temp-annotation rendering, polygon edit mode (modal). Per-tool
+mouse/key handling lives in `widgets/tools/*` (see ADR-019); ImageLabel
+dispatches events to the active handler.
 
 **Key Attributes**:
 ```python
-current_tool: str                   # Active annotation tool
+current_tool: str                   # Active annotation tool (route via set_active_tool)
 zoom_factor: float                  # Current zoom level
 annotations: dict                   # Displayed annotations
 class_colors: dict                  # Class color mapping
-temp_paint_mask: np.ndarray         # Temporary paint strokes
+temp_paint_mask: np.ndarray         # In-progress paint stroke (owned by PaintBrushTool)
+temp_eraser_mask: np.ndarray        # In-progress eraser stroke (owned by EraserTool)
+current_rectangle: list             # In-progress rectangle (owned by RectangleTool)
+current_annotation: list            # In-progress polygon points (owned by PolygonTool)
 sam_positive_points: list           # SAM positive points
 sam_negative_points: list           # SAM negative points
+editing_polygon: dict | None        # Polygon being edited (modal sub-state)
+_tools: dict[str, ToolHandler]      # Per-tool handlers
+_ctx: CanvasContext                 # Narrow read view of main-window state (ADR-018)
 ```
 
 **Key Methods**:
-- `mousePressEvent()`: Handle mouse clicks for annotation
-- `mouseMoveEvent()`: Handle mouse dragging
-- `paintEvent()`: Render image and annotations
-- `zoom_in()`, `zoom_out()`: Zoom controls
-- `start_painting()`, `start_erasing()`: Brush tools
+- `mousePressEvent()` / `mouseMoveEvent()` / `mouseReleaseEvent()` /
+  `mouseDoubleClickEvent()`: Ctrl-modifier pan/zoom branches first,
+  then SAM/edit-mode branches, then dispatch to
+  `active_tool_handler.on_mouse_X()`.
+- `keyPressEvent()`: Enter / Escape / Delete / brush-size keys. Modal
+  branches (DINO temp, sam_points, sam_box, editing_polygon)
+  consume first; otherwise routed to `handler.on_enter()` /
+  `on_escape()`.
+- `paintEvent()`: image → committed annotations → editing polygon →
+  SAM overlays → all tool handlers' `paint_overlay()` → tool-size
+  indicator → DINO temp annotations.
+- `set_active_tool(name)`: switches `current_tool` and gives the
+  previous handler a chance to clean up via `deactivate()`.
+- `check_unsaved_changes()`: iterates handlers' `has_unsaved_state()`
+  and prompts the user.
+
+**Communication**: emits ~20 Qt signals connected to controller slots
+in `ImageAnnotator._connect_image_label_signals` (ADR-018). Reads
+main-window state through `CanvasContext`.
 
 ### SAMUtils (sam_utils.py)
 
@@ -146,6 +192,33 @@ DINOUtils().detect(
 DINO's xyxy boxes feed directly into `SAMUtils.apply_sam_predictions_batch()`,
 which returns segmentation polygons (xywh bbox is derived from the polygon at
 export time — see [Cross-cutting Concepts](08_crosscutting_concepts.md)).
+
+## Level 3: Controllers
+
+Seven `QObject` controllers plus an `io_controller` helper module
+carve `ImageAnnotator` into single-responsibility owners that the
+orchestrator delegates to. Each `QObject` controller holds `self.mw
+= main_window` and owns one slice of behaviour; the
+`io_controller` is a thin module of UI-wrapper functions around the
+pure `io/` formatters and does not need to hold state. The
+orchestrator keeps pass-through methods so external call sites
+(menus, signal wiring, the test harness) don't need to reach into
+the controller graph.
+
+| Controller | Responsibility |
+|------------|----------------|
+| `ProjectController` | `.iap` save/load, auto-save, backup/restore, missing-image prompts, window-title sync. Owns the `is_loading_project` autosave guard (load/save round-trip safety, v0.8.12). |
+| `ImageController` | Open / load / switch images and slices. TIFF + CZI loaders, the multi-dim `DimensionDialog`, the `[-ndim:]` axis-slice bug fix from the v0.9.0 era. |
+| `AnnotationController` | Annotation CRUD, list sorting, highlight, edit-mode entry/exit, `finish_polygon`, `finish_rectangle`, `replace_annotations` (eraser path). Validates writes before mutating `all_annotations`. |
+| `ClassController` | Class add / delete / rename / colour / visibility. `update_slice_list_colors`, `is_class_visible`. |
+| `SAMController` | SAM box/points tool lifecycle, debounce timer, `_sam_inference_in_flight` re-entrancy guard (ADR-013), model picker. |
+| `DINOController` | Single + batch detection, batch review navigation, temp-annotation accept/reject, custom-model browse, `DINOReviewEventFilter` ownership (ADR-015). |
+| `YOLOController` | Training menu, `TrainingThread`, prediction dialog, result processing. |
+| `io_controller` *(module-level functions, not a class)* | Thin UI wrappers around the pure `io/export_formats.py` and `io/import_formats.py` modules. |
+
+Communication: `ImageLabel` does not import controllers directly —
+it emits Qt signals (ADR-018) that the orchestrator connects to
+controller slots in `_connect_image_label_signals()`.
 
 ## Level 3: Export/Import Subsystem
 
@@ -270,7 +343,9 @@ ImageAnnotator (main window)
     └── launches ──> Tool Dialogs (utilities)
 
 ImageLabel
-    ├── references ──> ImageAnnotator (callbacks)
+    ├── emits signals to ──> ImageAnnotator (writes; see ADR-018)
+    ├── reads via ──> CanvasContext (paint/eraser size, current class,
+    │                  class_mapping, is_class_visible, scroll_area, …)
     └── uses ──> utils (area, bbox calculations)
 
 SAMUtils

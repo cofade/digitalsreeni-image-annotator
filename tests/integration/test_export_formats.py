@@ -11,7 +11,7 @@ import tempfile
 import shutil
 from pathlib import Path
 from PyQt6.QtGui import QImage
-from src.digitalsreeni_image_annotator.export_formats import (
+from src.digitalsreeni_image_annotator.io.export_formats import (
     export_coco_json,
     export_yolo_v5plus,
     export_pascal_voc_bbox,

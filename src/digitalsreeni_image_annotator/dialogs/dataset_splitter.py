@@ -130,10 +130,13 @@ class DatasetSplitterTool(QDialog):
             QMessageBox.warning(self, "Error", "Percentages must add up to 100%.")
             return
 
-        if self.images_only_radio.isChecked():
-            self.split_images_only()
-        else:
-            self.split_images_and_annotations()
+        try:
+            if self.images_only_radio.isChecked():
+                self.split_images_only()
+            else:
+                self.split_images_and_annotations()
+        except Exception as e:
+            QMessageBox.critical(self, "Error", f"Dataset split failed:\n{e}")
 
     def split_images_only(self):
         image_files = [f for f in os.listdir(self.input_directory) if f.lower().endswith(('.png', '.jpg', '.jpeg', '.tif', '.tiff'))]
@@ -161,6 +164,25 @@ class DatasetSplitterTool(QDialog):
             coco_data = json.load(f)
 
         image_files = [img['file_name'] for img in coco_data['images']]
+
+        # The JSON lists filenames; nothing guarantees they exist in the
+        # chosen input directory. A partial split would silently produce a
+        # broken dataset, so refuse to start if anything is missing.
+        missing = [f for f in image_files
+                   if not os.path.exists(os.path.join(self.input_directory, f))]
+        if missing:
+            preview = "\n".join(missing[:10])
+            if len(missing) > 10:
+                preview += f"\n... and {len(missing) - 10} more"
+            QMessageBox.warning(
+                self, "Images Not Found",
+                f"{len(missing)} of {len(image_files)} image(s) listed in the "
+                f"COCO JSON were not found in the selected input directory:\n\n"
+                f"{preview}\n\n"
+                "Please select the directory that contains these images."
+            )
+            return
+
         random.shuffle(image_files)
 
         train_split = int(len(image_files) * self.train_percent.value() / 100)

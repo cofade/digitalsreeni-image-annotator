@@ -25,7 +25,7 @@ from PyQt6.QtCore import QObject, pyqtSignal
 from PyQt6.QtGui import QImage
 
 from .sam_utils import _qimage_to_numpy, _run_sync
-from .utils import models_base_dir
+from ..utils import models_base_dir
 
 
 GDINO_MODEL_NAMES = [

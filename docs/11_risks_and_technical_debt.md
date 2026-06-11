@@ -85,26 +85,52 @@
 
 ## Technical Debt
 
-### No Automated Tests
+### Low Test Coverage of Interactive Paths
 
-**Debt Level**: High
+**Debt Level**: Medium
 
-**Description**: Zero unit tests, integration tests, or UI tests
+**Description**: A pytest + pytest-qt suite of 94 tests now exists
+(boot smoke, coordinate conversions, export-format round-trips,
+utility functions). Coverage is ~15% by line — the gap is the
+canvas event flow (mouse events → tool handler → signal emission →
+controller slot) and the SAM/DINO/YOLO inference paths.
 
 **Impact**:
-- High risk of regressions
-- Refactoring is dangerous
-- Manual testing burden
-- Slow development velocity
+- Phase 6/7/8 refactors had to lean on manual QA checklists for the
+  canvas flow because no automated test exercises it end-to-end.
+- Inference paths are exercised only via the smoke boot, not under
+  real model loads (those would slow CI prohibitively).
 
-**Effort to Resolve**: High (months)
+**Effort to Resolve**: Medium
 
 **Priority**: Medium
 
 **Plan**:
-1. Add unit tests for utility functions first (low-hanging fruit)
-2. Add integration tests for export/import
-3. Consider pytest-qt for critical UI flows
+1. Per-tool unit tests under `widgets/tools/` — each handler can be
+   tested by instantiating with a stub `label` carrying signals
+   and a fake `CanvasContext`, then feeding `QMouseEvent`s.
+2. Integration test that loads a tiny project, draws a polygon,
+   asserts the `.iap` round-trip restores state.
+3. Mock SAMUtils / DINOUtils inference returns to exercise the
+   controller signal paths without needing model weights.
+
+---
+
+### Limited Coverage — Inline Imports Not Caught by Module Tests
+
+**Debt Level**: Medium
+
+**Description**: Smoke tests verify modules import cleanly at top-level, but inline `from .module` imports inside function bodies are deferred and only fail when the function is called. Phase 1 modular refactoring moved 25 modules; four stale inline imports (`from .dino_utils`, `.annotation_statistics`, `.project_details`, `.project_search`) were missed and only surfaced in manual QA.
+
+**Impact**:
+- Subpackage refactor PRs require functional QA paths (not just module import CI) to verify inline imports
+- Silent regressions until user clicks the specific button/dialog that triggers the stale import
+
+**Mitigation**:
+- Added AST-based static smoke test (ADR-016) that parses `annotator_window.py` and asserts every bare relative import resolves to an existing module in the package root
+- The test now catches inline import drift in CI before merge
+
+**Future Action**: Extend the AST check to any other file that uses inline deferred imports (currently only `annotator_window.py` has them).
 
 ---
 
@@ -159,29 +185,18 @@ return None
 
 ---
 
-### Tight Coupling Between ImageAnnotator and ImageLabel
+### Tight Coupling Between ImageAnnotator and ImageLabel — Resolved (Phase 6)
 
-**Debt Level**: Medium
+**Status**: Resolved. `ImageLabel.main_window` and `set_main_window()`
+were removed; every write path is now a `pyqtSignal` emission and every
+read goes through a narrow `CanvasContext` accessor.
 
-**Description**: ImageLabel has `main_window` reference and calls methods directly
+**Pattern**: see `widgets/canvas_context.py` and
+`ImageAnnotator._connect_image_label_signals`. ImageLabel emits ~20
+signals (annotation lifecycle, SAM, class, tool/UI state, navigation);
+the orchestrator wires each to the matching controller slot.
 
-**Examples**:
-```python
-# In ImageLabel
-self.main_window.add_annotation(polygon)
-self.main_window.update_annotation_list()
-```
-
-**Impact**:
-- Hard to test ImageLabel independently
-- Changes ripple between classes
-- Circular dependency concerns
-
-**Effort to Resolve**: Medium (refactor to signals/slots)
-
-**Priority**: Low
-
-**Plan**: Refactor to Qt signals for loose coupling
+**ADR**: see ADR-018 in `09_architecture_decisions.md`.
 
 ---
 

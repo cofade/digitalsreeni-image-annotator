@@ -221,6 +221,57 @@ which on Windows means barely-visible radio-button indicators and
 white-on-white headers (the dataset splitter radio buttons hit this
 before they were styled).
 
+## UI Font Zoom (Low-Vision Mode)
+
+### Single Source of Truth: `ui_font_pt`
+
+All UI text size flows from one integer, `ImageAnnotator.ui_font_pt`
+(8–24pt, default 10, clamped by `app_settings.clamp_font_pt`). The
+Settings → Font Size presets (Small…XXL) jump to fixed values;
+Ctrl+Shift+= / Ctrl+Shift+- step ±1pt; Ctrl+Shift+0 resets. Every
+change goes through `theme.set_font_pt`, which clamps, re-applies the
+theme, persists via QSettings and syncs the preset menu checkmarks
+(no preset is checked at an in-between size).
+
+### Appended QSS Overrides, Not Templated Stylesheets
+
+`soft_dark_stylesheet.py` / `default_stylesheet.py` stay static
+strings. `apply_theme_and_font` appends scaled rules *after* the
+static sheet — later rules of equal specificity win in QSS — for the
+body font, `.section-header` and checkbox/radio indicator sizes. The
+overrides scale the legacy px values (14px header, 14px indicators,
+8px radio radius, 11px/10px compact DINO panel) by `ui_font_pt / 10`
+and stay in **px**, so at the default 10pt they reproduce the legacy
+look exactly. Widgets that want smaller-than-body text (e.g. the DINO
+threshold table / phrase panel) must not set their own `font-size` —
+they get a type- or objectName-targeted rule in the appended block
+instead, so "compact" still scales. Do not
+hardcode `font-size` in widget `setStyleSheet(...)` calls: it overrides
+the global rule and the widget stops scaling (same failure mode as the
+No Hardcoded Colors rule below; the DINO sidebar captions hit this).
+
+### Canvas Overlay Scaling: `ui_scale`
+
+`apply_theme_and_font` pushes `ui_font_pt / 10.0` to
+`ImageLabel.set_ui_scale`. Overlay sizes (annotation label fonts, SAM
+point radii, pen widths, edit-point handles, hit-test tolerances) use
+the helpers `ImageLabel._pen_w(base)` / `_overlay_font(base)`, which
+multiply by `ui_scale` and divide by `zoom_factor` — UI zoom and image
+zoom stay orthogonal: overlays grow with the font setting but remain
+constant-size on screen across image zoom. At the default 10pt,
+`ui_scale == 1.0` and rendering is pixel-identical to the legacy code.
+Exception: the SAM point-marker radii are drawn under
+`painter.scale(zoom)` without zoom compensation (pre-existing
+behaviour) and only multiply by `ui_scale`.
+
+### Persistence via QSettings
+
+`app_settings.py` stores `ui/font_pt` and `ui/dark_mode` in
+`QSettings("DigitalSreeni", "ImageAnnotator")` (registry under HKCU on
+Windows). These are per-user preferences, deliberately *not* part of
+the `.iap` project file. All functions take an optional `QSettings`
+instance so tests inject an INI-backed temp file.
+
 ## Thread Safety for YOLO Training
 
 ### Training Thread
@@ -313,7 +364,11 @@ def generate_slice_name(filename, t, z, c, s):
 | Ctrl+O | Open Project |
 | Ctrl+S | Save Project |
 | Ctrl+W | Close Project |
-| Ctrl+Shift+S | Annotation Statistics |
+| Ctrl+Shift+S | Save Project As |
+| Ctrl+Alt+S | Annotation Statistics |
+| Ctrl+Shift+= (or Ctrl++) | Increase UI font size |
+| Ctrl+Shift+- (or Ctrl+-) | Decrease UI font size |
+| Ctrl+Shift+0 | Reset UI font size |
 | F1 | Help Window |
 
 ### Canvas Shortcuts
@@ -360,7 +415,7 @@ Consequences this codebase has tripped over:
   slice_list / image_list / a button — `QListWidget` consumes
   Enter for itemActivated before `ImageLabel.keyPressEvent` ever sees
   it. Solved with an application-wide event filter
-  (`_DINOReviewEventFilter`) that fires only while
+  (`DINOReviewEventFilter`) that fires only while
   `temp_annotations` has DINO items and skips modal dialogs and text
   inputs. Setting `image_label.setFocus()` synchronously inside
   `_show_dino_batch_review` was not enough — Qt's focus handling
@@ -444,3 +499,54 @@ if image_path is None:
 The substring fallback is kept for backward compatibility with old
 projects that may have stored normalised image names (e.g. without
 extension); new code should prefer the exact-key path.
+
+## Canvas Decoupling — Signals + CanvasContext
+
+`ImageLabel` (the canvas widget) does **not** hold a reference to
+`ImageAnnotator`. Communication is split:
+
+- **Writes** (committing an annotation, requesting a SAM prediction,
+  asking for tools to be re-enabled, etc.) leave the widget as Qt
+  `pyqtSignal` emissions. The signal block at the top of `ImageLabel`
+  documents every outbound interaction. `ImageAnnotator` connects
+  each signal to the right controller slot once, in
+  `_connect_image_label_signals` (called at the end of
+  `ImageAnnotator.__init__`).
+- **Reads** (`paint_brush_size`, `current_class`, `class_mapping`,
+  `is_class_visible`, `scroll_area`, etc.) go through a
+  `CanvasContext` object passed in via
+  `image_label.set_context(CanvasContext(self))`.
+  `CanvasContext` wraps the main window rather than copying state,
+  so updates made by controllers are visible on the next read.
+
+**Why both mechanisms.** Signals are inherently one-way (fire and
+forget); a synchronous read like "is this class visible" needs a
+return value, which signals don't provide. Trying to express reads
+as request/response signals adds latency and ordering bugs. The
+`CanvasContext` accessor list is small (~10 methods) and stable.
+
+**Rules for adding traffic in either direction**:
+
+- New write from canvas → orchestrator: declare a `pyqtSignal` on
+  `ImageLabel`, add a slot on a controller, wire it in
+  `_connect_image_label_signals`. Do not add a back-reference to
+  `ImageAnnotator`.
+- New read from canvas → orchestrator: add a method on
+  `CanvasContext`. Do not expose `_ctx._mw` directly.
+
+**Synchronous-emit ordering**. Qt's default `AutoConnection` runs the
+slot synchronously when the sender and receiver share a thread (true
+for everything on the GUI thread). Code that emits a signal and then
+reads state expected to be updated by it is correct — the slot has
+already run by the time `.emit()` returns. This is load-bearing for
+`accept_temp_annotations`, where `classRequested` must complete
+before the subsequent class lookup.
+
+**Batch save signal**. Paint commits and accept-temp commits emit
+`annotationCommitted` per annotation but `annotationsBatchSaved` only
+once at the end. The single batch save preserves O(1) `.iap` writes
+per user action; replacing it with a per-annotation save would turn
+paint commits into O(N). See ADR-018.
+
+See ADR-018 in `09_architecture_decisions.md` for the rationale and
+the full pattern.

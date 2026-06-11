@@ -11,10 +11,8 @@ Dr. Sreenivas Bhattiprolu
 import os
 import warnings
 
-import cv2
-import numpy as np
 from PIL import Image
-from PyQt6.QtCore import QPoint, QPointF, QRectF, QSize, Qt
+from PyQt6.QtCore import QPoint, QPointF, QRectF, QSize, Qt, pyqtSignal
 from PyQt6.QtGui import (
     QBrush,
     QColor,
@@ -25,11 +23,12 @@ from PyQt6.QtGui import (
     QPainter,
     QPen,
     QPixmap,
-    QPolygon,
     QPolygonF,
     QWheelEvent,
 )
-from PyQt6.QtWidgets import QApplication, QLabel, QMessageBox
+from PyQt6.QtWidgets import QLabel, QMessageBox
+
+from .tools import EraserTool, PaintBrushTool, PolygonTool, RectangleTool
 
 warnings.filterwarnings("ignore", category=UserWarning)
 
@@ -39,6 +38,36 @@ class ImageLabel(QLabel):
     A custom QLabel for displaying images and handling annotations.
     """
 
+    # Annotation lifecycle
+    annotationCommitted = pyqtSignal(dict)              # paint / accept-temp per-annotation add
+    annotationsBatchSaved = pyqtSignal()                # batch finalizer: save + slice-color refresh
+    annotationsReplaced = pyqtSignal(str, dict)         # eraser path: (image_key, per-class dict)
+    annotationListUpdateRequested = pyqtSignal()        # editing-mode exit refresh
+    annotationSelected = pyqtSignal(object)             # double-click selection
+    deleteSelectionRequested = pyqtSignal()
+    finishPolygonRequested = pyqtSignal()
+    finishRectangleRequested = pyqtSignal()
+
+    # Class
+    classRequested = pyqtSignal(str)                    # accept-temp path needs a new class
+
+    # SAM
+    samPredictionRequested = pyqtSignal()               # debounced (mouse press)
+    samPredictionApplyRequested = pyqtSignal()          # post-debounce (mouse release)
+    samPredictionAccepted = pyqtSignal()                # Enter on temp prediction
+    samPointsCleared = pyqtSignal()                     # Escape during sam_points: stop timer
+
+    # Tool / UI state
+    enableToolsRequested = pyqtSignal()
+    disableToolsRequested = pyqtSignal()
+    resetToolButtonsRequested = pyqtSignal()
+    toolSizeChanged = pyqtSignal(str, int)              # ("paint" | "eraser", new_size)
+
+    # Navigation / info
+    zoomInRequested = pyqtSignal()
+    zoomOutRequested = pyqtSignal()
+    imageInfoChanged = pyqtSignal()
+
     def __init__(self, parent=None):
         super().__init__(parent)
         self.annotations = {}
@@ -46,6 +75,11 @@ class ImageLabel(QLabel):
         self.temp_point = None
         self.current_tool = None
         self.zoom_factor = 1.0
+        # Low-vision UI zoom: ui_font_pt / 10 (legacy default), set by
+        # theme.apply_theme_and_font. Multiplies overlay sizes (label
+        # fonts, marker radii, pen widths) — orthogonal to zoom_factor,
+        # which keeps them constant-size on screen across image zoom.
+        self.ui_scale = 1.0
         self.class_colors = {}
         self.class_visibility = {}
         self.start_point = None
@@ -56,7 +90,7 @@ class ImageLabel(QLabel):
         self.original_pixmap = None
         self.scaled_pixmap = None
         self.pan_start_pos = None
-        self.main_window = None
+        self._ctx = None
         self.offset_x = 0
         self.offset_y = 0
         self.drawing_polygon = False
@@ -70,8 +104,6 @@ class ImageLabel(QLabel):
         self.image_path = None
         self.dark_mode = False
 
-        self.paint_mask = None
-        self.eraser_mask = None
         self.temp_paint_mask = None
         self.is_painting = False
         self.temp_eraser_mask = None
@@ -79,7 +111,6 @@ class ImageLabel(QLabel):
         self.cursor_pos = None
 
         # SAM
-        self.sam_magic_wand_active = False
         self.sam_bbox = None
         self.drawing_sam_bbox = False
         self.temp_sam_prediction = None
@@ -91,8 +122,46 @@ class ImageLabel(QLabel):
         self.sam_positive_points = []
         self.sam_negative_points = []
 
-    def set_main_window(self, main_window):
-        self.main_window = main_window
+        # Per-tool handlers (Phase 7). Each owns its event-handling
+        # behaviour; state fields used by controllers (current_rectangle,
+        # current_annotation, temp_paint_mask, …) stay on the widget.
+        self._tools = {
+            "polygon":     PolygonTool(self),
+            "rectangle":   RectangleTool(self),
+            "paint_brush": PaintBrushTool(self),
+            "eraser":      EraserTool(self),
+        }
+
+    def set_context(self, ctx):
+        self._ctx = ctx
+
+    def set_ui_scale(self, scale):
+        self.ui_scale = scale
+        self.update()
+
+    def _pen_w(self, base):
+        """Overlay pen width: ui-scaled, zoom-compensated (constant on screen)."""
+        return base * self.ui_scale / self.zoom_factor
+
+    def _overlay_font(self, base=12):
+        """Overlay label font: ui-scaled, zoom-compensated (constant on screen)."""
+        return QFont("Arial", max(1, int(base * self.ui_scale / self.zoom_factor)))
+
+    @property
+    def active_tool_handler(self):
+        return self._tools.get(self.current_tool)
+
+    def set_active_tool(self, tool_name):
+        """Called by ImageAnnotator when the user switches tools. Gives
+        the previous handler a chance to clean up (default no-op
+        preserves the existing 'drop temp state silently' behaviour;
+        explicit commit/discard goes through Enter/Escape or the
+        check_unsaved_changes dialog)."""
+        prev = self.active_tool_handler
+        new = self._tools.get(tool_name)
+        if prev is not None and prev is not new:
+            prev.deactivate()
+        self.current_tool = tool_name
 
     def set_dark_mode(self, is_dark):
         self.dark_mode = is_dark
@@ -122,8 +191,7 @@ class ImageLabel(QLabel):
                 else:
                     self.bit_depth = img.bits
 
-                if self.main_window:
-                    self.main_window.update_image_info()
+                self.imageInfoChanged.emit()
 
     def update_scaled_pixmap(self):
         if self.original_pixmap and not self.original_pixmap.isNull():
@@ -163,143 +231,9 @@ class ImageLabel(QLabel):
         super().resizeEvent(event)
         self.update_offset()
 
-    def start_painting(self, pos):
-        if self.temp_paint_mask is None:
-            self.temp_paint_mask = np.zeros(
-                (self.original_pixmap.height(), self.original_pixmap.width()),
-                dtype=np.uint8,
-            )
-        self.is_painting = True
-        self.continue_painting(pos)
-
-    def continue_painting(self, pos):
-        if not self.is_painting:
-            return
-        brush_size = self.main_window.paint_brush_size
-        cv2.circle(
-            self.temp_paint_mask, (int(pos[0]), int(pos[1])), brush_size, 255, -1
-        )
-        self.update()
-
-    def finish_painting(self):
-        if not self.is_painting:
-            return
-        self.is_painting = False
-        # Don't commit the annotation yet, just keep the temp_paint_mask
-
-    def commit_paint_annotation(self):
-        if self.temp_paint_mask is not None and self.main_window.current_class:
-            class_name = self.main_window.current_class
-            contours, _ = cv2.findContours(
-                self.temp_paint_mask, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE
-            )
-            for contour in contours:
-                if cv2.contourArea(contour) > 10:  # Minimum area threshold
-                    segmentation = contour.flatten().tolist()
-                    new_annotation = {
-                        "segmentation": segmentation,
-                        "category_id": self.main_window.class_mapping[class_name],
-                        "category_name": class_name,
-                    }
-                    self.annotations.setdefault(class_name, []).append(new_annotation)
-                    self.main_window.add_annotation_to_list(new_annotation)
-            self.temp_paint_mask = None
-            self.main_window.save_current_annotations()
-            self.main_window.update_slice_list_colors()
-            self.update()
-
-    def discard_paint_annotation(self):
-        self.temp_paint_mask = None
-        self.update()
-
-    def start_erasing(self, pos):
-        if self.temp_eraser_mask is None:
-            self.temp_eraser_mask = np.zeros(
-                (self.original_pixmap.height(), self.original_pixmap.width()),
-                dtype=np.uint8,
-            )
-        self.is_erasing = True
-        self.continue_erasing(pos)
-
-    def continue_erasing(self, pos):
-        if not self.is_erasing:
-            return
-        eraser_size = self.main_window.eraser_size
-        cv2.circle(
-            self.temp_eraser_mask, (int(pos[0]), int(pos[1])), eraser_size, 255, -1
-        )
-        self.update()
-
-    def finish_erasing(self):
-        if not self.is_erasing:
-            return
-        self.is_erasing = False
-        # Don't commit the eraser changes yet, just keep the temp_eraser_mask
-
-    def commit_eraser_changes(self):
-        if self.temp_eraser_mask is not None:
-            eraser_mask = self.temp_eraser_mask.astype(bool)
-            current_name = (
-                self.main_window.current_slice or self.main_window.image_file_name
-            )
-            annotations_changed = False
-
-            for class_name, annotations in self.annotations.items():
-                updated_annotations = []
-                max_number = max([ann.get("number", 0) for ann in annotations] + [0])
-                for annotation in annotations:
-                    if "segmentation" in annotation:
-                        points = (
-                            np.array(annotation["segmentation"])
-                            .reshape(-1, 2)
-                            .astype(int)
-                        )
-                        mask = np.zeros_like(self.temp_eraser_mask)
-                        cv2.fillPoly(mask, [points], 255)
-                        mask = mask.astype(bool)
-                        mask[eraser_mask] = False
-                        contours, _ = cv2.findContours(
-                            mask.astype(np.uint8),
-                            cv2.RETR_EXTERNAL,
-                            cv2.CHAIN_APPROX_SIMPLE,
-                        )
-                        for i, contour in enumerate(contours):
-                            if cv2.contourArea(contour) > 10:  # Minimum area threshold
-                                new_segmentation = contour.flatten().tolist()
-                                new_annotation = annotation.copy()
-                                new_annotation["segmentation"] = new_segmentation
-                                if i == 0:
-                                    new_annotation["number"] = annotation.get(
-                                        "number", max_number + 1
-                                    )
-                                else:
-                                    max_number += 1
-                                    new_annotation["number"] = max_number
-                                updated_annotations.append(new_annotation)
-                        if len(contours) > 1:
-                            annotations_changed = True
-                    else:
-                        updated_annotations.append(annotation)
-                self.annotations[class_name] = updated_annotations
-
-            self.temp_eraser_mask = None
-
-            # Update the all_annotations dictionary in the main window
-            self.main_window.all_annotations[current_name] = self.annotations
-
-            # Call update_annotation_list directly
-            self.main_window.update_annotation_list()
-
-            self.main_window.save_current_annotations()
-            self.main_window.update_slice_list_colors()
-            self.update()
-
-            # print(f"Eraser changes committed. Annotations changed: {annotations_changed}")
-            # print(f"Current annotations: {self.annotations}")
-
-    def discard_eraser_changes(self):
-        self.temp_eraser_mask = None
-        self.update()
+    # Paint, eraser, polygon, and rectangle behaviour lives in
+    # widgets/tools/*; this widget dispatches events to the active
+    # handler (see set_active_tool / active_tool_handler).
 
     def paintEvent(self, event):
         super().paintEvent(event)
@@ -310,37 +244,38 @@ class ImageLabel(QLabel):
             painter.drawPixmap(
                 int(self.offset_x), int(self.offset_y), self.scaled_pixmap
             )
-            # Draw annotations
+            # Draw committed annotations
             self.draw_annotations(painter)
-            # Draw other elements
+            # Polygon edit mode is modal; runs orthogonal to tool selection
             if self.editing_polygon:
                 self.draw_editing_polygon(painter)
-            if self.drawing_rectangle and self.current_rectangle:
-                self.draw_current_rectangle(painter)
-            if self.sam_magic_wand_active and self.sam_bbox:
-                self.draw_sam_bbox(painter)
-            # --- Draw for SAM-box mode ---
+            # SAM overlays (cross-cutting; not part of the tool handlers)
             if self.sam_box_active and self.sam_bbox:
                 self.draw_sam_bbox(painter)
-            # --- Draw for SAM-points mode ---
             if self.sam_points_active:
                 painter.save()
                 painter.translate(self.offset_x, self.offset_y)
                 painter.scale(self.zoom_factor, self.zoom_factor)
+                # Radii intentionally NOT zoom-compensated — the dots
+                # grow with image zoom (pre-existing behaviour).
+                dot_r = 4 * self.ui_scale
                 for pt in self.sam_positive_points:
-                    painter.setPen(QPen(Qt.GlobalColor.green, 6 / self.zoom_factor, Qt.PenStyle.SolidLine))
+                    painter.setPen(QPen(Qt.GlobalColor.green, self._pen_w(6), Qt.PenStyle.SolidLine))
                     painter.setBrush(QBrush(Qt.GlobalColor.green))
-                    painter.drawEllipse(QPointF(pt[0], pt[1]), 4, 4)
+                    painter.drawEllipse(QPointF(pt[0], pt[1]), dot_r, dot_r)
                 for pt in self.sam_negative_points:
-                    painter.setPen(QPen(Qt.GlobalColor.red, 6 / self.zoom_factor, Qt.PenStyle.SolidLine))
+                    painter.setPen(QPen(Qt.GlobalColor.red, self._pen_w(6), Qt.PenStyle.SolidLine))
                     painter.setBrush(QBrush(Qt.GlobalColor.red))
-                    painter.drawEllipse(QPointF(pt[0], pt[1]), 4, 4)
+                    painter.drawEllipse(QPointF(pt[0], pt[1]), dot_r, dot_r)
                 painter.restore()
-            # Draw temporary paint mask
-            if self.temp_paint_mask is not None:
-                self.draw_temp_paint_mask(painter)
-            if self.temp_eraser_mask is not None:
-                self.draw_temp_eraser_mask(painter)
+            # In-progress overlays from every tool that has state to
+            # render (paint mask, eraser mask, polygon-in-progress,
+            # rectangle preview). Pre-Phase-7 these drew whenever
+            # their state field was populated regardless of the active
+            # tool; iterating all handlers preserves that — switching
+            # tools mid-stroke does not hide an unsaved mark.
+            for handler in self._tools.values():
+                handler.paint_overlay(painter)
             self.draw_tool_size_indicator(painter)
             if self.temp_annotations:
                 self.draw_temp_annotations(painter)
@@ -353,7 +288,7 @@ class ImageLabel(QLabel):
 
         for annotation in self.temp_annotations:
             color = QColor(255, 165, 0, 128)  # Semi-transparent orange
-            painter.setPen(QPen(color, 2 / self.zoom_factor, Qt.PenStyle.DashLine))
+            painter.setPen(QPen(color, self._pen_w(2), Qt.PenStyle.DashLine))
             painter.setBrush(QBrush(color))
 
             # Prefer segmentation polygon over bbox when both are present
@@ -373,7 +308,7 @@ class ImageLabel(QLabel):
                 painter.drawRect(QRectF(x, y, w, h))
 
             # Draw label and score
-            painter.setFont(QFont("Arial", int(12 / self.zoom_factor)))
+            painter.setFont(self._overlay_font())
             label = f"{annotation['category_name']} {annotation['score']:.2f}"
             if points is not None:
                 centroid = self.calculate_centroid(points)
@@ -390,8 +325,8 @@ class ImageLabel(QLabel):
             class_name = annotation["category_name"]
 
             # Check if the class exists, if not, add it
-            if class_name not in self.main_window.class_mapping:
-                self.main_window.add_class(class_name)
+            if class_name not in self._ctx.class_mapping():
+                self.classRequested.emit(class_name)
 
             if class_name not in self.annotations:
                 self.annotations[class_name] = []
@@ -401,56 +336,15 @@ class ImageLabel(QLabel):
                 "score"
             ]  # Remove the score as it's not needed in the final annotation
             self.annotations[class_name].append(annotation)
-            self.main_window.add_annotation_to_list(annotation)
+            self.annotationCommitted.emit(annotation)
 
         self.temp_annotations.clear()
-        self.main_window.save_current_annotations()
-        self.main_window.update_slice_list_colors()
+        self.annotationsBatchSaved.emit()
         self.update()
 
     def discard_temp_annotations(self):
         self.temp_annotations.clear()
         self.update()
-
-    def draw_temp_paint_mask(self, painter):
-        if self.temp_paint_mask is not None:
-            painter.save()
-            painter.translate(self.offset_x, self.offset_y)
-            painter.scale(self.zoom_factor, self.zoom_factor)
-
-            mask_image = QImage(
-                self.temp_paint_mask.data,
-                self.temp_paint_mask.shape[1],
-                self.temp_paint_mask.shape[0],
-                self.temp_paint_mask.shape[1],
-                QImage.Format.Format_Grayscale8,
-            )
-            mask_pixmap = QPixmap.fromImage(mask_image)
-            painter.setOpacity(0.5)
-            painter.drawPixmap(0, 0, mask_pixmap)
-            painter.setOpacity(1.0)
-
-            painter.restore()
-
-    def draw_temp_eraser_mask(self, painter):
-        if self.temp_eraser_mask is not None:
-            painter.save()
-            painter.translate(self.offset_x, self.offset_y)
-            painter.scale(self.zoom_factor, self.zoom_factor)
-
-            mask_image = QImage(
-                self.temp_eraser_mask.data,
-                self.temp_eraser_mask.shape[1],
-                self.temp_eraser_mask.shape[0],
-                self.temp_eraser_mask.shape[1],
-                QImage.Format.Format_Grayscale8,
-            )
-            mask_pixmap = QPixmap.fromImage(mask_image)
-            painter.setOpacity(0.5)
-            painter.drawPixmap(0, 0, mask_pixmap)
-            painter.setOpacity(1.0)
-
-            painter.restore()
 
     def draw_tool_size_indicator(self, painter):
         if self.current_tool in ["paint_brush", "eraser"] and hasattr(
@@ -461,10 +355,10 @@ class ImageLabel(QLabel):
             painter.scale(self.zoom_factor, self.zoom_factor)
 
             if self.current_tool == "paint_brush":
-                size = self.main_window.paint_brush_size
+                size = self._ctx.paint_brush_size()
                 color = QColor(255, 0, 0, 128)  # Semi-transparent red
             else:  # eraser
-                size = self.main_window.eraser_size
+                size = self._ctx.eraser_size()
                 color = QColor(0, 0, 255, 128)  # Semi-transparent blue
 
             # Draw filled circle with lower opacity
@@ -477,7 +371,7 @@ class ImageLabel(QLabel):
 
             # Draw circle outline with full opacity
             painter.setOpacity(1.0)
-            painter.setPen(QPen(color.darker(150), 1 / self.zoom_factor, Qt.PenStyle.SolidLine))
+            painter.setPen(QPen(color.darker(150), self._pen_w(1), Qt.PenStyle.SolidLine))
             painter.setBrush(Qt.BrushStyle.NoBrush)
             painter.drawEllipse(
                 QPointF(self.cursor_pos[0], self.cursor_pos[1]), size, size
@@ -487,7 +381,9 @@ class ImageLabel(QLabel):
             # Reset the transform to ensure text is drawn at screen coordinates
             painter.resetTransform()
             font = QFont()
-            font.setPointSize(10)
+            # Screen-space text (transform was reset above): scale with
+            # the UI font setting only, not with image zoom.
+            font.setPointSize(max(1, int(10 * self.ui_scale)))
             painter.setFont(font)
             painter.setPen(QPen(Qt.GlobalColor.black))  # Use black color for better visibility
 
@@ -508,47 +404,11 @@ class ImageLabel(QLabel):
 
             painter.restore()
 
-    def draw_paint_mask(self, painter):
-        if self.paint_mask is not None:
-            mask_image = QImage(
-                self.paint_mask.data,
-                self.paint_mask.shape[1],
-                self.paint_mask.shape[0],
-                self.paint_mask.shape[1],
-                QImage.Format.Format_Grayscale8,
-            )
-            mask_pixmap = QPixmap.fromImage(mask_image)
-            painter.setOpacity(0.5)
-            painter.drawPixmap(
-                self.offset_x,
-                self.offset_y,
-                mask_pixmap.scaled(self.scaled_pixmap.size()),
-            )
-            painter.setOpacity(1.0)
-
-    def draw_eraser_mask(self, painter):
-        if self.eraser_mask is not None:
-            mask_image = QImage(
-                self.eraser_mask.data,
-                self.eraser_mask.shape[1],
-                self.eraser_mask.shape[0],
-                self.eraser_mask.shape[1],
-                QImage.Format.Format_Grayscale8,
-            )
-            mask_pixmap = QPixmap.fromImage(mask_image)
-            painter.setOpacity(0.5)
-            painter.drawPixmap(
-                self.offset_x,
-                self.offset_y,
-                mask_pixmap.scaled(self.scaled_pixmap.size()),
-            )
-            painter.setOpacity(1.0)
-
     def draw_sam_bbox(self, painter):
         painter.save()
         painter.translate(self.offset_x, self.offset_y)
         painter.scale(self.zoom_factor, self.zoom_factor)
-        painter.setPen(QPen(Qt.GlobalColor.red, 2 / self.zoom_factor, Qt.PenStyle.SolidLine))
+        painter.setPen(QPen(Qt.GlobalColor.red, self._pen_w(2), Qt.PenStyle.SolidLine))
         x1, y1, x2, y2 = self.sam_bbox
         painter.drawRect(QRectF(min(x1, x2), min(y1, y2), abs(x2 - x1), abs(y2 - y1)))
         painter.restore()
@@ -558,26 +418,26 @@ class ImageLabel(QLabel):
         self.update()
 
     def check_unsaved_changes(self):
-        if self.temp_paint_mask is not None or self.temp_eraser_mask is not None:
-            reply = QMessageBox.question(
-                self.main_window,
-                "Unsaved Changes",
-                "You have unsaved changes. Do you want to save them?",
-                QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No | QMessageBox.StandardButton.Cancel,
-            )
-            if reply == QMessageBox.StandardButton.Yes:
-                if self.temp_paint_mask is not None:
-                    self.commit_paint_annotation()
-                if self.temp_eraser_mask is not None:
-                    self.commit_eraser_changes()
-                return True
-            elif reply == QMessageBox.StandardButton.No:
-                self.discard_paint_annotation()
-                self.discard_eraser_changes()
-                return True
-            else:  # Cancel
-                return False
-        return True  # No unsaved changes
+        dirty = [t for t in self._tools.values() if t.has_unsaved_state()]
+        if not dirty:
+            return True
+        reply = QMessageBox.question(
+            self._ctx.dialog_parent(),
+            "Unsaved Changes",
+            "You have unsaved changes. Do you want to save them?",
+            QMessageBox.StandardButton.Yes
+            | QMessageBox.StandardButton.No
+            | QMessageBox.StandardButton.Cancel,
+        )
+        if reply == QMessageBox.StandardButton.Yes:
+            for t in dirty:
+                t.commit()
+            return True
+        if reply == QMessageBox.StandardButton.No:
+            for t in dirty:
+                t.discard()
+            return True
+        return False  # Cancel
 
     def clear(self):
         super().clear()
@@ -611,7 +471,7 @@ class ImageLabel(QLabel):
         painter.scale(self.zoom_factor, self.zoom_factor)
 
         for class_name, class_annotations in self.annotations.items():
-            if not self.main_window.is_class_visible(class_name):
+            if not self._ctx.is_class_visible(class_name):
                 continue
 
             color = self.class_colors.get(class_name, QColor(Qt.GlobalColor.white))
@@ -626,7 +486,7 @@ class ImageLabel(QLabel):
                 fill_color.setAlphaF(self.fill_opacity)
 
                 text_color = Qt.GlobalColor.white if self.dark_mode else Qt.GlobalColor.black
-                painter.setPen(QPen(border_color, 2 / self.zoom_factor, Qt.PenStyle.SolidLine))
+                painter.setPen(QPen(border_color, self._pen_w(2), Qt.PenStyle.SolidLine))
                 painter.setBrush(QBrush(fill_color))
 
                 if "segmentation" in annotation:
@@ -652,11 +512,9 @@ class ImageLabel(QLabel):
                         if points:
                             centroid = self.calculate_centroid(points)
                             if centroid:
-                                painter.setFont(
-                                    QFont("Arial", int(12 / self.zoom_factor))
-                                )
+                                painter.setFont(self._overlay_font())
                                 painter.setPen(
-                                    QPen(text_color, 2 / self.zoom_factor, Qt.PenStyle.SolidLine)
+                                    QPen(text_color, self._pen_w(2), Qt.PenStyle.SolidLine)
                                 )
                                 painter.drawText(
                                     centroid,
@@ -666,28 +524,18 @@ class ImageLabel(QLabel):
                 elif "bbox" in annotation:
                     x, y, width, height = annotation["bbox"]
                     painter.drawRect(QRectF(x, y, width, height))
-                    painter.setPen(QPen(text_color, 2 / self.zoom_factor, Qt.PenStyle.SolidLine))
+                    painter.setPen(QPen(text_color, self._pen_w(2), Qt.PenStyle.SolidLine))
                     painter.drawText(
                         QPointF(x, y), f"{class_name} {annotation.get('number', '')}"
                     )
 
-        if self.current_annotation:
-            painter.setPen(QPen(Qt.GlobalColor.red, 2 / self.zoom_factor, Qt.PenStyle.SolidLine))
-            points = [QPointF(float(x), float(y)) for x, y in self.current_annotation]
-            if len(points) > 1:
-                painter.drawPolyline(QPolygonF(points))
-            for point in points:
-                painter.drawEllipse(point, 5 / self.zoom_factor, 5 / self.zoom_factor)
-            if self.temp_point:
-                painter.drawLine(
-                    points[-1],
-                    QPointF(float(self.temp_point[0]), float(self.temp_point[1])),
-                )
+        # Polygon-in-progress is rendered by PolygonTool.paint_overlay
+        # (paintEvent calls active_tool_handler.paint_overlay).
 
         # Draw temporary SAM prediction
         if self.temp_sam_prediction:
             temp_color = QColor(255, 165, 0, 128)  # Semi-transparent orange
-            painter.setPen(QPen(temp_color, 2 / self.zoom_factor, Qt.PenStyle.DashLine))
+            painter.setPen(QPen(temp_color, self._pen_w(2), Qt.PenStyle.DashLine))
             painter.setBrush(QBrush(temp_color))
 
             segmentation = self.temp_sam_prediction["segmentation"]
@@ -699,36 +547,12 @@ class ImageLabel(QLabel):
                 painter.drawPolygon(QPolygonF(points))
                 centroid = self.calculate_centroid(points)
                 if centroid:
-                    painter.setFont(QFont("Arial", int(12 / self.zoom_factor)))
+                    painter.setFont(self._overlay_font())
                     painter.drawText(
                         centroid, f"SAM: {self.temp_sam_prediction['score']:.2f}"
                     )
 
         painter.restore()
-
-    def draw_current_rectangle(self, painter):
-        """Draw the current rectangle being created."""
-        if not self.current_rectangle:
-            return
-
-        painter.save()
-        painter.translate(self.offset_x, self.offset_y)
-        painter.scale(self.zoom_factor, self.zoom_factor)
-
-        x1, y1, x2, y2 = self.current_rectangle
-        color = self.class_colors.get(self.main_window.current_class, QColor(Qt.GlobalColor.red))
-        painter.setPen(QPen(color, 2 / self.zoom_factor, Qt.PenStyle.SolidLine))
-        painter.drawRect(QRectF(float(x1), float(y1), float(x2 - x1), float(y2 - y1)))
-
-        painter.restore()
-
-    def get_rectangle_from_points(self):
-        """Get rectangle coordinates from start and end points."""
-        if not self.start_point or not self.end_point:
-            return None
-        x1, y1 = self.start_point
-        x2, y2 = self.end_point
-        return [min(x1, x2), min(y1, y2), max(x1, x2), max(y1, y2)]
 
     def draw_editing_polygon(self, painter):
         """Draw the polygon being edited."""
@@ -749,7 +573,7 @@ class ImageLabel(QLabel):
         fill_color = QColor(color)
         fill_color.setAlphaF(self.fill_opacity)
 
-        painter.setPen(QPen(color, 2 / self.zoom_factor, Qt.PenStyle.SolidLine))
+        painter.setPen(QPen(color, self._pen_w(2), Qt.PenStyle.SolidLine))
         painter.setBrush(QBrush(fill_color))
         painter.drawPolygon(QPolygonF(points))  # Changed QPolygon to QPolygonF - Sreeni
 
@@ -758,7 +582,8 @@ class ImageLabel(QLabel):
                 painter.setBrush(QColor(255, 0, 0))
             else:
                 painter.setBrush(QColor(0, 255, 0))
-            painter.drawEllipse(point, 5 / self.zoom_factor, 5 / self.zoom_factor)
+            r = 5 * self.ui_scale / self.zoom_factor
+            painter.drawEllipse(point, r, r)
 
         painter.restore()
 
@@ -789,16 +614,17 @@ class ImageLabel(QLabel):
             img_x = (cursor_widget_pos.x() - self.offset_x) / self.zoom_factor
             img_y = (cursor_widget_pos.y() - self.offset_y) / self.zoom_factor
 
-            scrollbar_h = self.main_window.scroll_area.horizontalScrollBar()
-            scrollbar_v = self.main_window.scroll_area.verticalScrollBar()
+            scroll_area = self._ctx.scroll_area()
+            scrollbar_h = scroll_area.horizontalScrollBar()
+            scrollbar_v = scroll_area.verticalScrollBar()
             old_scroll_h = scrollbar_h.value()
             old_scroll_v = scrollbar_v.value()
 
             delta = event.angleDelta().y()
             if delta > 0:
-                self.main_window.zoom_in()
+                self.zoomInRequested.emit()
             else:
-                self.main_window.zoom_out()
+                self.zoomOutRequested.emit()
 
             # Compute the post-zoom offset analytically from the
             # viewport size and the new scaled-pixmap size. Reading
@@ -807,7 +633,7 @@ class ImageLabel(QLabel):
             # widget hasn't shrunk yet when update_offset ran. self.width()
             # is stale → offset_x is wrong → cursor drifts. The viewport
             # width is always current.
-            viewport = self.main_window.scroll_area.viewport()
+            viewport = scroll_area.viewport()
             new_scaled_w = self.scaled_pixmap.width()
             new_scaled_h = self.scaled_pixmap.height()
             new_offset_x = max(0, (viewport.width() - new_scaled_w) / 2)
@@ -835,41 +661,31 @@ class ImageLabel(QLabel):
             return
 
         pos = self.get_image_coordinates(event.position())
+
+        # SAM points has priority over the rest (it accepts both
+        # mouse buttons and short-circuits the tool dispatch).
         if self.current_tool == "sam_points" and self.sam_points_active:
             if event.button() == Qt.MouseButton.LeftButton:
                 self.sam_positive_points.append(pos)
                 self.update()
-                self.main_window.schedule_sam_prediction()
+                self.samPredictionRequested.emit()
                 return
             elif event.button() == Qt.MouseButton.RightButton:
                 self.sam_negative_points.append(pos)
                 self.update()
-                self.main_window.schedule_sam_prediction()
+                self.samPredictionRequested.emit()
                 return
 
         if event.button() == Qt.MouseButton.LeftButton:
             if self.current_tool == "sam_box" and self.sam_box_active:
                 self.sam_bbox = [pos[0], pos[1], pos[0], pos[1]]
                 self.drawing_sam_bbox = True
-            elif self.sam_magic_wand_active:
-                self.sam_bbox = [pos[0], pos[1], pos[0], pos[1]]
-                self.drawing_sam_bbox = True
             elif self.editing_polygon:
                 self.handle_editing_click(pos, event)
-            elif self.current_tool == "polygon":
-                if not self.drawing_polygon:
-                    self.drawing_polygon = True
-                    self.current_annotation = []
-                self.current_annotation.append(pos)
-            elif self.current_tool == "rectangle":
-                self.start_point = pos
-                self.end_point = pos
-                self.drawing_rectangle = True
-                self.current_rectangle = None
-            elif self.current_tool == "paint_brush":
-                self.start_painting(pos)
-            elif self.current_tool == "eraser":
-                self.start_erasing(pos)
+            else:
+                handler = self.active_tool_handler
+                if handler is not None:
+                    handler.on_mouse_press(event, pos)
         self.update()
 
     def mouseMoveEvent(self, event: QMouseEvent):
@@ -880,8 +696,9 @@ class ImageLabel(QLabel):
             if self.pan_start_pos:
                 cur = event.globalPosition()
                 delta = cur - self.pan_start_pos
-                scrollbar_h = self.main_window.scroll_area.horizontalScrollBar()
-                scrollbar_v = self.main_window.scroll_area.verticalScrollBar()
+                scroll_area = self._ctx.scroll_area()
+                scrollbar_h = scroll_area.horizontalScrollBar()
+                scrollbar_v = scroll_area.verticalScrollBar()
                 scrollbar_h.setValue(scrollbar_h.value() - int(delta.x()))
                 scrollbar_v.setValue(scrollbar_v.value() - int(delta.y()))
                 self.pan_start_pos = cur
@@ -897,24 +714,12 @@ class ImageLabel(QLabel):
         ):
             self.sam_bbox[2] = pos[0]
             self.sam_bbox[3] = pos[1]
-        elif (
-            self.sam_magic_wand_active
-            and self.drawing_sam_bbox
-            and self.sam_bbox is not None
-        ):
-            self.sam_bbox[2] = pos[0]
-            self.sam_bbox[3] = pos[1]
         elif self.editing_polygon:
             self.handle_editing_move(pos)
-        elif self.current_tool == "polygon" and self.current_annotation:
-            self.temp_point = pos
-        elif self.current_tool == "rectangle" and self.drawing_rectangle:
-            self.end_point = pos
-            self.current_rectangle = self.get_rectangle_from_points()
-        elif self.current_tool == "paint_brush" and event.buttons() == Qt.MouseButton.LeftButton:
-            self.continue_painting(pos)
-        elif self.current_tool == "eraser" and event.buttons() == Qt.MouseButton.LeftButton:
-            self.continue_erasing(pos)
+        else:
+            handler = self.active_tool_handler
+            if handler is not None:
+                handler.on_mouse_move(event, pos)
         self.update()
 
     def mouseReleaseEvent(self, event: QMouseEvent):
@@ -935,26 +740,13 @@ class ImageLabel(QLabel):
                     self.sam_bbox[2] = pos[0]
                     self.sam_bbox[3] = pos[1]
                     self.drawing_sam_bbox = False
-                    self.main_window.apply_sam_prediction()
-                elif (
-                    self.sam_magic_wand_active
-                    and self.drawing_sam_bbox
-                    and self.sam_bbox is not None
-                ):
-                    self.sam_bbox[2] = pos[0]
-                    self.sam_bbox[3] = pos[1]
-                    self.drawing_sam_bbox = False
-                    self.main_window.apply_sam_prediction()
+                    self.samPredictionApplyRequested.emit()
                 elif self.editing_polygon:
                     self.editing_point_index = None
-                elif self.current_tool == "rectangle" and self.drawing_rectangle:
-                    self.drawing_rectangle = False
-                    if self.current_rectangle:
-                        self.main_window.finish_rectangle()
-                elif self.current_tool == "paint_brush":
-                    self.finish_painting()
-                elif self.current_tool == "eraser":
-                    self.finish_erasing()
+                else:
+                    handler = self.active_tool_handler
+                    if handler is not None:
+                        handler.on_mouse_release(event, pos)
             self.update()
 
     def mouseDoubleClickEvent(self, event):
@@ -962,13 +754,18 @@ class ImageLabel(QLabel):
             return
         pos = self.get_image_coordinates(event.position())
         if event.button() == Qt.MouseButton.LeftButton:
-            if self.drawing_polygon and len(self.current_annotation) > 2:
-                self.finish_polygon()
-            else:
+            # Polygon handler can consume the double-click to finish
+            # the polygon. If it doesn't (no in-progress polygon), fall
+            # through to polygon-edit mode.
+            handler = self.active_tool_handler
+            consumed = False
+            if handler is not None:
+                consumed = handler.on_double_click(event, pos)
+            if not consumed:
                 self.clear_current_annotation()
                 annotation = self.start_polygon_edit(pos)
                 if annotation:
-                    self.main_window.select_annotation_in_list(annotation)
+                    self.annotationSelected.emit(annotation)
         self.update()
 
     def get_image_coordinates(self, pos):
@@ -981,99 +778,74 @@ class ImageLabel(QLabel):
     def keyPressEvent(self, event: QKeyEvent):
         if event.key() == Qt.Key.Key_Return or event.key() == Qt.Key.Key_Enter:
             # DINO temp_annotations are accepted via the application-wide
-            # _DINOReviewEventFilter (see ADR-015) so Enter works regardless
+            # DINOReviewEventFilter (see ADR-015) so Enter works regardless
             # of focus. The branch below only catches non-DINO temp state
             # (legacy YOLO model-prediction review path).
             if self.temp_annotations:
                 self.accept_temp_annotations()
             elif self.temp_sam_prediction:
-                self.main_window.accept_sam_prediction()
+                self.samPredictionAccepted.emit()
             elif self.editing_polygon:
                 self.editing_polygon = None
                 self.editing_point_index = None
                 self.hover_point_index = None
-                self.main_window.enable_tools()
-                self.main_window.update_annotation_list()
-            elif self.current_tool == "polygon" and self.drawing_polygon:
-                self.finish_polygon()
-            elif self.current_tool == "paint_brush":
-                self.commit_paint_annotation()
-            elif self.current_tool == "eraser":
-                self.commit_eraser_changes()
+                self.enableToolsRequested.emit()
+                self.annotationListUpdateRequested.emit()
             else:
-                self.finish_current_annotation()
+                handler = self.active_tool_handler
+                if handler is not None:
+                    handler.on_enter()
         elif event.key() == Qt.Key.Key_Escape:
             if self.sam_points_active:
-                self.main_window.sam_inference_timer.stop()
+                self.samPointsCleared.emit()
                 self.sam_positive_points = []
                 self.sam_negative_points = []
                 self.clear_temp_sam_prediction()
                 self.update()
             # DINO temp_annotations are rejected via the application-wide
-            # _DINOReviewEventFilter (see ADR-015). Branch below catches
+            # DINOReviewEventFilter (see ADR-015). Branch below catches
             # non-DINO temp state only.
             elif self.temp_annotations:
                 self.discard_temp_annotations()
-            elif self.sam_magic_wand_active:
+            elif self.sam_box_active:
                 self.sam_bbox = None
                 self.clear_temp_sam_prediction()
             elif self.editing_polygon:
                 self.editing_polygon = None
                 self.editing_point_index = None
                 self.hover_point_index = None
-                self.main_window.enable_tools()
-            elif self.current_tool == "paint_brush":
-                self.discard_paint_annotation()
-            elif self.current_tool == "eraser":
-                self.discard_eraser_changes()
+                self.enableToolsRequested.emit()
             else:
-                self.cancel_current_annotation()
+                handler = self.active_tool_handler
+                if handler is not None:
+                    handler.on_escape()
         elif event.key() == Qt.Key.Key_Delete:
             if self.editing_polygon:
-                self.main_window.delete_selected_annotations()
+                self.deleteSelectionRequested.emit()
                 self.editing_polygon = None
                 self.editing_point_index = None
                 self.hover_point_index = None
-                self.main_window.enable_tools()
+                self.enableToolsRequested.emit()
                 self.update()
         elif event.key() == Qt.Key.Key_Minus:
             if self.current_tool == "paint_brush":
-                self.main_window.paint_brush_size = max(
-                    1, self.main_window.paint_brush_size - 1
-                )
-                print(f"Paint brush size: {self.main_window.paint_brush_size}")
+                new_size = max(1, self._ctx.paint_brush_size() - 1)
+                self.toolSizeChanged.emit("paint", new_size)
+                print(f"Paint brush size: {new_size}")
             elif self.current_tool == "eraser":
-                self.main_window.eraser_size = max(1, self.main_window.eraser_size - 1)
-                print(f"Eraser size: {self.main_window.eraser_size}")
-        elif event.key() == Qt.Key.Key_Equal:
+                new_size = max(1, self._ctx.eraser_size() - 1)
+                self.toolSizeChanged.emit("eraser", new_size)
+                print(f"Eraser size: {new_size}")
+        elif event.key() in (Qt.Key.Key_Equal, Qt.Key.Key_Plus):
             if self.current_tool == "paint_brush":
-                self.main_window.paint_brush_size += 1
-                print(f"Paint brush size: {self.main_window.paint_brush_size}")
+                new_size = self._ctx.paint_brush_size() + 1
+                self.toolSizeChanged.emit("paint", new_size)
+                print(f"Paint brush size: {new_size}")
             elif self.current_tool == "eraser":
-                self.main_window.eraser_size += 1
-                print(f"Eraser size: {self.main_window.eraser_size}")
+                new_size = self._ctx.eraser_size() + 1
+                self.toolSizeChanged.emit("eraser", new_size)
+                print(f"Eraser size: {new_size}")
         self.update()
-
-    def cancel_current_annotation(self):
-        """Cancel the current annotation being created."""
-        if self.current_tool == "polygon" and self.current_annotation:
-            self.current_annotation = []
-            self.temp_point = None
-            self.drawing_polygon = False
-            self.update()
-
-    def finish_current_annotation(self):
-        """Finish the current annotation being created."""
-        if self.current_tool == "polygon" and len(self.current_annotation) > 2:
-            if self.main_window:
-                self.main_window.finish_polygon()
-
-    def finish_polygon(self):
-        """Finish the current polygon annotation."""
-        if self.drawing_polygon and len(self.current_annotation) > 2:
-            self.drawing_polygon = False
-            if self.main_window:
-                self.main_window.finish_polygon()
 
     def start_polygon_edit(self, pos):
         for class_name, annotations in self.annotations.items():
@@ -1089,8 +861,8 @@ class ImageLabel(QLabel):
                     if self.point_in_polygon(pos, points):
                         self.editing_polygon = annotation
                         self.current_tool = None
-                        self.main_window.disable_tools()
-                        self.main_window.reset_tool_buttons()
+                        self.disableToolsRequested.emit()
+                        self.resetToolButtonsRequested.emit()
                         return annotation
         return None
 
@@ -1104,7 +876,7 @@ class ImageLabel(QLabel):
             )
         ]
         for i, point in enumerate(points):
-            if self.distance(pos, point) < 10 / self.zoom_factor:
+            if self.distance(pos, point) < 10 * self.ui_scale / self.zoom_factor:
                 if event.modifiers() & Qt.KeyboardModifier.ShiftModifier:
                     # Delete point
                     del self.editing_polygon["segmentation"][i * 2 : i * 2 + 2]
@@ -1133,7 +905,7 @@ class ImageLabel(QLabel):
         ]
         self.hover_point_index = None
         for i, point in enumerate(points):
-            if self.distance(pos, point) < 10 / self.zoom_factor:
+            if self.distance(pos, point) < 10 * self.ui_scale / self.zoom_factor:
                 self.hover_point_index = i
                 break
         if self.editing_point_index is not None:

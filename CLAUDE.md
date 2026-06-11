@@ -42,6 +42,7 @@ See [docs/README.md](docs/README.md) for full documentation index.
 src/digitalsreeni_image_annotator/
 ├── main.py                       # Entry point
 ├── annotator_window.py           # ImageAnnotator - thin orchestrator
+├── app_settings.py               # QSettings UI prefs: ui_font_pt, dark_mode (ADR-020)
 ├── utils.py                      # Utility functions (calculate_area, …)
 ├── __init__.py                   # Public API re-exports
 │
@@ -236,6 +237,8 @@ See [Risks and Technical Debt](docs/11_risks_and_technical_debt.md) for full lis
 | Global | Action |
 |--------|--------|
 | Ctrl+N/O/S | New/Open/Save Project |
+| Ctrl+Shift+= / Ctrl+Shift+- | UI font bigger/smaller (8-24pt, persisted via QSettings) |
+| Ctrl+Shift+0 | Reset UI font size |
 | F1 | Help |
 
 | Canvas | Action |

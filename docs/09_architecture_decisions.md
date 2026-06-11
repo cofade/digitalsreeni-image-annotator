@@ -685,7 +685,57 @@ Real-world testing with `torch 2.11.0+cu126 + PyQt6 6.10.2 + Python 3.14.2` on W
 - Implementation: `src/digitalsreeni_image_annotator/main.py`.
 - Gate: `tools/check_pyqt6_torch_coexistence.py`.
 
+## ADR-020: App-Global UI Preferences via QSettings; Canvas Overlays Scale with `ui_font_pt`
 
+**Status**: Accepted
+
+**Context**: The low-vision accessibility feature (continuous UI font
+zoom, 8–24pt) needed (a) the chosen size to survive app restarts and
+(b) canvas overlay elements — annotation labels, SAM point markers,
+pen widths — to grow with the setting. UI preferences were previously
+reset on every launch, and the `.iap` project file was the only
+persistence mechanism in the app.
+
+**Decision**:
+1. Introduce the app's first QSettings usage
+   (`QSettings("DigitalSreeni", "ImageAnnotator")`, module
+   `app_settings.py`) for `ui/font_pt` and `ui/dark_mode`. These are
+   per-user preferences, so they do **not** go into the `.iap` file —
+   a project opened by a different user must not impose a font size.
+2. A single integer `ImageAnnotator.ui_font_pt` is the source of
+   truth; the named presets and the step shortcuts both funnel
+   through `theme.set_font_pt` (clamp → apply → persist → menu sync).
+3. Canvas overlay sizes derive from `ui_scale = ui_font_pt / 10.0`
+   (10 = the legacy default, so the default renders pixel-identical
+   to the pre-feature code). `ImageLabel` receives the value via a
+   plain setter from `apply_theme_and_font`, not via CanvasContext —
+   consistent with the existing direct `image_label.setFont` call,
+   and avoids a paint-before-context-set window.
+
+**Alternatives considered**:
+- Storing prefs in the `.iap` file — rejected: project files are
+  shared artifacts; accessibility settings are personal.
+- Templating the static stylesheets per font size — rejected:
+  appended QSS override rules (later rules win at equal specificity)
+  achieve the same with zero churn in the two stylesheet strings.
+
+**Consequences**:
+- ✅ Font size and dark mode persist across restarts.
+- ✅ Tests stay hermetic: every `app_settings` function accepts an
+  injectable `QSettings` (INI temp file) instance.
+- ⚠️ Any new scalable UI metric should use `ImageLabel._pen_w` /
+  `_overlay_font` or the appended-override block in
+  `theme.apply_theme_and_font` — hardcoded px values won't follow the
+  setting (see "UI Font Zoom" in `08_crosscutting_concepts.md`).
+- ⚠️ Deliberately-compact widgets (DINO threshold table / phrase
+  panel) don't hardcode their small font inline; the appended block
+  owns it via type/objectName selectors (`ClassThresholdTable`,
+  `PhraseEditorPanel …`, `#dino_phrase_hint`) so compact ≠ unscaled.
+  Follow that pattern for new compact widgets.
+- ⚠️ Known debt: `dino_merge_dialog.py` still carries hardcoded
+  `font-size:Npx` tokens and a `color:#444` dark-mode contrast issue,
+  so it doesn't scale. Tracked, not an oversight; fix when that
+  dialog is next touched.
 
 ---
 

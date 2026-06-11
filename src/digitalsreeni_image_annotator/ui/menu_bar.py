@@ -8,6 +8,8 @@ controllers, but the menu doesn't need to know that.
 
 from PyQt6.QtGui import QAction, QKeySequence
 
+from . import theme
+
 
 def build_menu_bar(window):
     menu_bar = window.menuBar()
@@ -54,10 +56,40 @@ def build_menu_bar(window):
     settings_menu = menu_bar.addMenu("&Settings")
 
     font_size_menu = settings_menu.addMenu("&Font Size")
+    window._font_preset_actions = {}
     for size in ["Small", "Medium", "Large", "XL", "XXL"]:
         action = QAction(size, window)
+        action.setCheckable(True)
         action.triggered.connect(lambda checked, s=size: window.change_font_size(s))
         font_size_menu.addAction(action)
+        window._font_preset_actions[size] = action
+    # Show the persisted size as checked from the first frame (no
+    # preset is checked when ui_font_pt sits between preset values).
+    theme.sync_font_menu(window)
+
+    font_size_menu.addSeparator()
+
+    # Continuous UI zoom for low-vision users — steps ui_font_pt ±1pt
+    # within 8-24. Secondary Ctrl++ / Ctrl+- sequences cover keypads
+    # and layouts where Ctrl+Shift+= is awkward.
+    increase_font_action = QAction("&Increase Font Size", window)
+    increase_font_action.setShortcuts(
+        [QKeySequence("Ctrl+Shift+="), QKeySequence("Ctrl++")]
+    )
+    increase_font_action.triggered.connect(lambda: window.step_font_size(1))
+    font_size_menu.addAction(increase_font_action)
+
+    decrease_font_action = QAction("&Decrease Font Size", window)
+    decrease_font_action.setShortcuts(
+        [QKeySequence("Ctrl+Shift+-"), QKeySequence("Ctrl+-")]
+    )
+    decrease_font_action.triggered.connect(lambda: window.step_font_size(-1))
+    font_size_menu.addAction(decrease_font_action)
+
+    reset_font_action = QAction("&Reset Font Size", window)
+    reset_font_action.setShortcut(QKeySequence("Ctrl+Shift+0"))
+    reset_font_action.triggered.connect(window.reset_font_size)
+    font_size_menu.addAction(reset_font_action)
 
     toggle_dark_mode_action = QAction("Toggle &Dark Mode", window)
     toggle_dark_mode_action.setShortcut(QKeySequence("Ctrl+D"))

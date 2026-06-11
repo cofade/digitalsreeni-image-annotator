@@ -221,6 +221,57 @@ which on Windows means barely-visible radio-button indicators and
 white-on-white headers (the dataset splitter radio buttons hit this
 before they were styled).
 
+## UI Font Zoom (Low-Vision Mode)
+
+### Single Source of Truth: `ui_font_pt`
+
+All UI text size flows from one integer, `ImageAnnotator.ui_font_pt`
+(8–24pt, default 10, clamped by `app_settings.clamp_font_pt`). The
+Settings → Font Size presets (Small…XXL) jump to fixed values;
+Ctrl+Shift+= / Ctrl+Shift+- step ±1pt; Ctrl+Shift+0 resets. Every
+change goes through `theme.set_font_pt`, which clamps, re-applies the
+theme, persists via QSettings and syncs the preset menu checkmarks
+(no preset is checked at an in-between size).
+
+### Appended QSS Overrides, Not Templated Stylesheets
+
+`soft_dark_stylesheet.py` / `default_stylesheet.py` stay static
+strings. `apply_theme_and_font` appends scaled rules *after* the
+static sheet — later rules of equal specificity win in QSS — for the
+body font, `.section-header` and checkbox/radio indicator sizes. The
+overrides scale the legacy px values (14px header, 14px indicators,
+8px radio radius, 11px/10px compact DINO panel) by `ui_font_pt / 10`
+and stay in **px**, so at the default 10pt they reproduce the legacy
+look exactly. Widgets that want smaller-than-body text (e.g. the DINO
+threshold table / phrase panel) must not set their own `font-size` —
+they get a type- or objectName-targeted rule in the appended block
+instead, so "compact" still scales. Do not
+hardcode `font-size` in widget `setStyleSheet(...)` calls: it overrides
+the global rule and the widget stops scaling (same failure mode as the
+No Hardcoded Colors rule below; the DINO sidebar captions hit this).
+
+### Canvas Overlay Scaling: `ui_scale`
+
+`apply_theme_and_font` pushes `ui_font_pt / 10.0` to
+`ImageLabel.set_ui_scale`. Overlay sizes (annotation label fonts, SAM
+point radii, pen widths, edit-point handles, hit-test tolerances) use
+the helpers `ImageLabel._pen_w(base)` / `_overlay_font(base)`, which
+multiply by `ui_scale` and divide by `zoom_factor` — UI zoom and image
+zoom stay orthogonal: overlays grow with the font setting but remain
+constant-size on screen across image zoom. At the default 10pt,
+`ui_scale == 1.0` and rendering is pixel-identical to the legacy code.
+Exception: the SAM point-marker radii are drawn under
+`painter.scale(zoom)` without zoom compensation (pre-existing
+behaviour) and only multiply by `ui_scale`.
+
+### Persistence via QSettings
+
+`app_settings.py` stores `ui/font_pt` and `ui/dark_mode` in
+`QSettings("DigitalSreeni", "ImageAnnotator")` (registry under HKCU on
+Windows). These are per-user preferences, deliberately *not* part of
+the `.iap` project file. All functions take an optional `QSettings`
+instance so tests inject an INI-backed temp file.
+
 ## Thread Safety for YOLO Training
 
 ### Training Thread
@@ -313,7 +364,11 @@ def generate_slice_name(filename, t, z, c, s):
 | Ctrl+O | Open Project |
 | Ctrl+S | Save Project |
 | Ctrl+W | Close Project |
-| Ctrl+Shift+S | Annotation Statistics |
+| Ctrl+Shift+S | Save Project As |
+| Ctrl+Alt+S | Annotation Statistics |
+| Ctrl+Shift+= (or Ctrl++) | Increase UI font size |
+| Ctrl+Shift+- (or Ctrl+-) | Decrease UI font size |
+| Ctrl+Shift+0 | Reset UI font size |
 | F1 | Help Window |
 
 ### Canvas Shortcuts

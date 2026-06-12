@@ -543,9 +543,14 @@ filter uses `setRowHidden(i, True)` and must **never** remove items:
   worked on cannot vanish when it gains its first annotation under
   the "Without annotations" filter.
 
-Re-apply runs from `ClassController.update_slice_list_colors()`, which
-every annotation-mutation site already calls — add new mutation paths
-there, not as extra `apply_image_filter()` call sites.
+Re-apply runs from `ClassController.update_slice_list_colors()`. The
+contract: every annotation-mutation site either calls that method
+directly **or** emits `annotationsBatchSaved` (whose handler
+`_on_annotations_batch_saved` calls it). All `annotationCommitted`
+emitters follow up with `annotationsBatchSaved`
+(image_label.py / paint_tool.py), so both commit paths are covered.
+New mutation paths must keep one of those two routes — don't add
+bespoke `apply_image_filter()` call sites.
 
 ## Canvas Decoupling — Signals + CanvasContext
 

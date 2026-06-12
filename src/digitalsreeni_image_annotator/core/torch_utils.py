@@ -39,6 +39,10 @@ def _resolve():
         if not torch.cuda.is_available():
             return ("cpu", None)
 
+        # Deliberately device-0-only: on a mixed multi-GPU box this may
+        # force CPU even though a later index is supported; the app never
+        # selects a non-default CUDA device anywhere, so index 0 is what
+        # inference would actually run on.
         major, minor = torch.cuda.get_device_capability(0)
         device_sm = major * 10 + minor
         compiled_sms = _parse_arch_list(torch.cuda.get_arch_list())

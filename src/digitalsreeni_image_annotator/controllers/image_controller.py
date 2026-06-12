@@ -112,7 +112,11 @@ class ImageController(QObject):
                 )
             # Slices not extracted yet (e.g. load cancelled) — slice keys
             # are f"{base_name}_T1_Z5_..." so a "{base_name}_" prefix match
-            # is exact enough; a bare substring match would not be.
+            # is exact enough; a bare substring match would not be. Caveat:
+            # this also matches "{base_name}_8bit" artifact keys, which
+            # redefine_dimensions deliberately excludes — acceptable here
+            # since an _8bit key with annotations still means "this image
+            # has annotations".
             prefix = base_name + "_"
             return any(
                 key.startswith(prefix) and _non_empty(by_class)
@@ -137,11 +141,17 @@ class ImageController(QObject):
         if combo is None:
             return
         mode = combo.currentIndex()  # 0 = all, 1 = without, 2 = with
+        if mode == 0:
+            # Default case runs on every update_slice_list_colors —
+            # keep it a plain unhide pass with no annotation scans.
+            for i in range(self.mw.image_list.count()):
+                self.mw.image_list.setRowHidden(i, False)
+            return
         current_row = self.mw.image_list.currentRow()
         infos = {info["file_name"]: info for info in self.mw.all_images}
         for i in range(self.mw.image_list.count()):
             hide = False
-            if mode != 0 and i != current_row:
+            if i != current_row:
                 info = infos.get(self.mw.image_list.item(i).text())
                 annotated = bool(info) and self.image_has_annotations(info)
                 hide = annotated if mode == 1 else not annotated

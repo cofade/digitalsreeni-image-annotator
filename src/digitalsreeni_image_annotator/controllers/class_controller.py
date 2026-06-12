@@ -96,6 +96,11 @@ class ClassController(QObject):
 
         self.mw.slice_list.repaint()
 
+        # Annotation status changed somewhere — every mutation site already
+        # calls this method, so it doubles as the re-apply hook for the
+        # image-list annotation filter.
+        self.mw.image_controller.apply_image_filter()
+
     def add_class(self, class_name=None, color=None):
         if not self.mw.image_label.check_unsaved_changes():
             return

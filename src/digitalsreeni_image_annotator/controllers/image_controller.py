@@ -89,6 +89,63 @@ class ImageController(QObject):
         self.mw.image_list.clear()
         for image_info in self.mw.all_images:
             self.mw.image_list.addItem(image_info["file_name"])
+        self.apply_image_filter()
+
+    def image_has_annotations(self, image_info):
+        """True if the image (or, for multi-dim images, any of its slices)
+        has at least one annotation."""
+
+        def _non_empty(by_class):
+            return bool(by_class) and any(by_class.values())
+
+        file_name = image_info["file_name"]
+        if _non_empty(self.mw.all_annotations.get(file_name, {})):
+            return True
+
+        if image_info.get("is_multi_slice", False):
+            base_name = os.path.splitext(file_name)[0]
+            slices = self.mw.image_slices.get(base_name)
+            if slices:
+                return any(
+                    _non_empty(self.mw.all_annotations.get(slice_name, {}))
+                    for slice_name, _ in slices
+                )
+            # Slices not extracted yet (e.g. load cancelled) — slice keys
+            # are f"{base_name}_T1_Z5_..." so a "{base_name}_" prefix match
+            # is exact enough; a bare substring match would not be.
+            prefix = base_name + "_"
+            return any(
+                key.startswith(prefix) and _non_empty(by_class)
+                for key, by_class in self.mw.all_annotations.items()
+            )
+
+        return False
+
+    def apply_image_filter(self):
+        """Hide image-list rows that don't match the annotation-status
+        filter (upstream issue #27).
+
+        Rows are hidden via setRowHidden, never removed: other code
+        (DINO batch navigation, COCO import) iterates the list by row
+        index, and hiding fires no currentRowChanged so it cannot
+        trigger a spurious switch_image. The currently selected row is
+        never hidden so the image being worked on can't vanish when it
+        gains its first annotation under the "Without annotations"
+        filter.
+        """
+        combo = getattr(self.mw, "image_filter_combo", None)
+        if combo is None:
+            return
+        mode = combo.currentIndex()  # 0 = all, 1 = without, 2 = with
+        current_row = self.mw.image_list.currentRow()
+        infos = {info["file_name"]: info for info in self.mw.all_images}
+        for i in range(self.mw.image_list.count()):
+            hide = False
+            if mode != 0 and i != current_row:
+                info = infos.get(self.mw.image_list.item(i).text())
+                annotated = bool(info) and self.image_has_annotations(info)
+                hide = annotated if mode == 1 else not annotated
+            self.mw.image_list.setRowHidden(i, hide)
 
     def setup_slice_list(self):
         self.mw.slice_list = QListWidget()
@@ -161,6 +218,8 @@ class ImageController(QObject):
         if first_added_item:
             self.mw.image_list.setCurrentItem(first_added_item)
             self.switch_image(first_added_item)
+
+        self.apply_image_filter()
 
         if not self.mw.is_loading_project:
             self.mw.auto_save()

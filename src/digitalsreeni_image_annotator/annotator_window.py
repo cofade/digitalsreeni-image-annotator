@@ -273,6 +273,9 @@ class ImageAnnotator(QMainWindow):
     def update_image_list(self):
         return self.image_controller.update_image_list()
 
+    def apply_image_filter(self):
+        return self.image_controller.apply_image_filter()
+
     def select_class(self, index):
         return self.class_controller.select_class(index)
 

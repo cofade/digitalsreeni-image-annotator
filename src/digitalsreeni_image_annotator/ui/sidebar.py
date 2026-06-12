@@ -319,6 +319,20 @@ def build_image_list(window):
     window.image_list_label = QLabel("Images:")
     window.image_list_layout.addWidget(window.image_list_label)
 
+    # Annotation-status filter (upstream issue #27). Index order matters:
+    # ImageController.apply_image_filter maps 0=all, 1=without, 2=with.
+    window.image_filter_combo = QComboBox()
+    window.image_filter_combo.addItem("All images")
+    window.image_filter_combo.addItem("Without annotations")
+    window.image_filter_combo.addItem("With annotations")
+    window.image_filter_combo.setToolTip(
+        "Filter the image list by annotation status"
+    )
+    window.image_filter_combo.currentIndexChanged.connect(
+        lambda _index: window.apply_image_filter()
+    )
+    window.image_list_layout.addWidget(window.image_filter_combo)
+
     window.image_list = QListWidget()
     window.image_list.itemClicked.connect(window.switch_image)
     window.image_list.currentRowChanged.connect(

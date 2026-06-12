@@ -48,8 +48,6 @@ Issue numbers refer to https://github.com/bnsreenu/digitalsreeni-image-annotator
 
 | Issue | Size | Task |
 |-------|------|------|
-| #27 | quick win | Filter image list by annotation status (all / unannotated). Arrow-key nav half is already done. *(in progress on this branch)* |
-| #57 | quick win | Pascal GPU (sm_61) unsupported by torch≥2.8 wheels → detect incompatible compute capability, fall back to CPU with clear warning instead of cryptic CUDA kernel error; add README note. *(in progress on this branch)* |
 | #30 | quick win | `yolo_trainer.py` `save_model()`: `self.model.export(save_path)` → `self.model.save(save_path)` (reporter-verified fix) |
 | #44 | quick win | Add `encoding='utf-8'` to all YAML `open()` calls (Windows `'charmap' codec` crash) — yolo_trainer.py, import_formats.py, export_formats.py, dataset_splitter.py |
 | #33 | quick win | `start_polygon_edit` in image_label.py: select smallest-area containing polygon so annotations nested inside others become editable (reuse shoelace `calculate_area`) |

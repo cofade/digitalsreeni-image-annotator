@@ -178,6 +178,33 @@ nothing visible" in v0.9.0 manual testing.
 | SAM 2 base | ~150MB | Medium-High | Slow | ⚠️ Use with caution |
 | SAM 2 large | ~400MB | High | Very Slow | ❌ Not recommended (crashes on limited resources) |
 
+### Device Selection & Compute-Capability Fallback
+
+`torch.cuda.is_available()` is **not** sufficient to decide on GPU
+inference: it returns True for any visible CUDA device even when the
+installed torch wheels contain no kernels for its compute capability
+(torch ≥ 2.8 wheels ship sm_70+ only, so a Pascal GTX 1050 / sm_61
+passes the check but every kernel launch fails with
+`CUDA error: no kernel image is available for execution on the device`
+— upstream issue #57).
+
+All inference paths therefore resolve their device through
+`core/torch_utils.resolve_torch_device()`:
+
+- compares `torch.cuda.get_device_capability(0)` against the minimum
+  `sm_*` in `torch.cuda.get_arch_list()`; on mismatch returns
+  `("cpu", warning)` instead of `"cuda"`,
+- caches the decision process-wide (SAM, DINO and YOLO share it),
+- prints the warning once; `maybe_warn_cpu_fallback(parent)` shows it
+  as a one-time `QMessageBox` from the SAM model picker and the DINO
+  detect entry points.
+
+SAM passes `device=` explicitly on every predict call; DINO's
+`_resolve_device()` delegates to the helper (the `DINO_DEVICE` env
+override still wins); the YOLO trainer passes `device=` to
+`model.train()` and prediction. Never call bare
+`torch.cuda.is_available()` to pick a device in new code.
+
 ## Dark Mode Support
 
 ### Stylesheet Switching
@@ -499,6 +526,26 @@ if image_path is None:
 The substring fallback is kept for backward compatibility with old
 projects that may have stored normalised image names (e.g. without
 extension); new code should prefer the exact-key path.
+
+## Image List Filter — Hide Rows, Never Remove Them
+
+The image list can be filtered by annotation status (combo above the
+list; upstream issue #27, `ImageController.apply_image_filter`). The
+filter uses `setRowHidden(i, True)` and must **never** remove items:
+
+- `DINOController._navigate_to_image_or_slice` and the COCO importer
+  iterate `image_list` rows by index; removing rows would shift
+  indices under them.
+- Removing the current item fires `currentRowChanged`, which is wired
+  to `switch_image` — a filter change could silently switch the
+  displayed image. Hiding fires nothing.
+- The currently selected row is exempt from hiding so the image being
+  worked on cannot vanish when it gains its first annotation under
+  the "Without annotations" filter.
+
+Re-apply runs from `ClassController.update_slice_list_colors()`, which
+every annotation-mutation site already calls — add new mutation paths
+there, not as extra `apply_image_filter()` call sites.
 
 ## Canvas Decoupling — Signals + CanvasContext
 

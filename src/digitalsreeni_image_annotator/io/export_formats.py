@@ -379,6 +379,76 @@ def export_yolo_v5plus(all_annotations, class_mapping, image_paths, slices, imag
 
 
 
+def export_sam_dataset(all_annotations, class_mapping, image_paths, slices, image_slices, output_dir):
+    """Export a SAM fine-tuning dataset: ``images/`` + ``manifest.json``.
+
+    The manifest is the authoritative training source — per-instance ``bbox``/
+    ``segmentation`` specs are rasterised to masks deterministically at train
+    time (see ``training.sam_dataset``), so no separate mask PNGs are written.
+    Image resolution mirrors ``export_yolo_v5plus`` (slices via ``slices`` /
+    ``image_slices``; regular images via ``image_paths``; TIFF/CZI skipped).
+
+    Returns ``(output_dir, manifest_path)``.
+    """
+    images_dir = os.path.join(output_dir, 'images')
+    os.makedirs(images_dir, exist_ok=True)
+    slice_map = {slice_name: qimage for slice_name, qimage in slices}
+
+    manifest = {"classes": list(class_mapping.keys()), "images": []}
+    for image_name, annotations in all_annotations.items():
+        if not annotations:
+            continue
+
+        # Resolve + save the image (same branching as export_yolo_v5plus).
+        if image_name in slice_map or ('_' in image_name and '.' not in image_name):
+            qimage = slice_map.get(image_name)
+            if qimage is None:
+                for stack_slices in image_slices.values():
+                    qimage = next((s[1] for s in stack_slices if s[0] == image_name), None)
+                    if qimage:
+                        break
+            if qimage is None:
+                continue
+            file_name_img = f"{image_name}.png"
+            save_path = os.path.join(images_dir, file_name_img)
+            if not os.path.exists(save_path):
+                qimage.save(save_path)
+        else:
+            image_path = image_paths.get(image_name)
+            if image_path is None:
+                image_path = next(
+                    (path for name, path in image_paths.items() if image_name in name),
+                    None,
+                )
+            if not image_path:
+                continue
+            if image_path.lower().endswith(('.tif', '.tiff', '.czi')):
+                continue
+            file_name_img = image_name
+            dst_path = os.path.join(images_dir, file_name_img)
+            if not os.path.exists(dst_path):
+                shutil.copy2(image_path, dst_path)
+
+        instances = []
+        for class_name, class_annotations in annotations.items():
+            for ann in class_annotations:
+                if ann.get('segmentation'):
+                    instances.append({"class": class_name, "segmentation": ann['segmentation']})
+                elif ann.get('bbox'):
+                    instances.append({"class": class_name, "bbox": ann['bbox']})
+        if instances:
+            manifest["images"].append({
+                "image": os.path.join('images', file_name_img),
+                "instances": instances,
+            })
+
+    manifest_path = os.path.join(output_dir, 'manifest.json')
+    with open(manifest_path, 'w', encoding='utf-8') as f:
+        json.dump(manifest, f, indent=2)
+    print(f"[SAM dataset] wrote {len(manifest['images'])} image entries → {manifest_path}")
+    return output_dir, manifest_path
+
+
 def export_labeled_images(all_annotations, class_mapping, image_paths, slices, image_slices, output_dir):
     # Create output directories
     images_dir = os.path.join(output_dir, 'images')

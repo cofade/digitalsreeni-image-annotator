@@ -243,7 +243,9 @@ class YOLOTrainer(QObject):
             print(f"Training with updated YAML: {temp_yaml_path}")
             print(f"Updated YAML content: {yaml_content}")
             
-            results = self.model.train(data=str(temp_yaml_path), epochs=epochs, imgsz=imgsz)
+            from ..core.torch_utils import resolve_torch_device
+            device, _ = resolve_torch_device()
+            results = self.model.train(data=str(temp_yaml_path), epochs=epochs, imgsz=imgsz, device=device)
             return results
         finally:
             # Clear the callback
@@ -375,12 +377,10 @@ class YOLOTrainer(QObject):
     def predict(self, input_data):
         if self.model is None:
             raise ValueError("No model loaded. Please load a model first.")
-        if isinstance(input_data, str):
-            # It's a file path
-            results = self.model(input_data, task='segment', conf=self.conf_threshold, save=False, show=False)
-        elif isinstance(input_data, np.ndarray):
-            # It's a numpy array
-            results = self.model(input_data, task='segment', conf=self.conf_threshold, save=False, show=False)
+        from ..core.torch_utils import resolve_torch_device
+        device, _ = resolve_torch_device()
+        if isinstance(input_data, (str, np.ndarray)):
+            results = self.model(input_data, task='segment', conf=self.conf_threshold, save=False, show=False, device=device)
         else:
             raise ValueError("Invalid input type. Expected file path or numpy array.")
         

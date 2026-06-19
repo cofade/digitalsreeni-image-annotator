@@ -211,6 +211,9 @@ class DINOController(QObject):
                                 "Please add at least one class with phrases.")
             return
 
+        from ..core.torch_utils import maybe_warn_cpu_fallback
+        maybe_warn_cpu_fallback(self.mw)
+
         self.mw.btn_detect_single.setEnabled(False)
         self.mw.btn_detect_batch.setEnabled(False)
 
@@ -359,6 +362,9 @@ class DINOController(QObject):
             QMessageBox.warning(self.mw, "No Classes",
                                 "Please add at least one class with phrases.")
             return
+
+        from ..core.torch_utils import maybe_warn_cpu_fallback
+        maybe_warn_cpu_fallback(self.mw)
 
         # Prevent stale temp annotations from a prior single-image review from
         # confusing the batch results handler or the DINOReviewEventFilter.

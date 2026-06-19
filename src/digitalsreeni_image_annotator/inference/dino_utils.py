@@ -73,15 +73,15 @@ class DINOUtils(QObject):
     # ── model lifecycle ───────────────────────────────────────────────
 
     def _resolve_device(self) -> str:
-        """Pick CUDA if available; honour DINO_DEVICE env override."""
+        """Pick CUDA if available and usable; honour DINO_DEVICE override."""
         env = os.environ.get("DINO_DEVICE")
         if env:
             return env
-        try:
-            import torch
-            return "cuda" if torch.cuda.is_available() else "cpu"
-        except Exception:
-            return "cpu"
+        # Shared helper also rejects GPUs whose compute capability the
+        # installed torch wheels can't run (upstream issue #57).
+        from ..core.torch_utils import resolve_torch_device
+        device, _ = resolve_torch_device()
+        return device
 
     def _load_model_blocking(self, model_path: str) -> None:
         """Load (cache) the Grounding DINO model for ``model_path``."""

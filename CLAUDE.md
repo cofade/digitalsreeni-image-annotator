@@ -36,6 +36,29 @@ For detailed architecture and design information, see **[docs/](docs/)**:
 
 See [docs/README.md](docs/README.md) for full documentation index.
 
+## Upstream Issue Backlog (TEMPORARY section — self-deleting)
+
+**Deletion hook:** When a PR resolves one of the items below, DELETE its row
+from this table **in the same PR**. When the last row is gone, delete this
+entire section so CLAUDE.md returns to its clean state. Never let a finished
+item linger here.
+
+Issue numbers refer to https://github.com/bnsreenu/digitalsreeni-image-annotator/issues
+(validated 2026-06-12; already-fixed issues have close-request comments posted, not listed here).
+
+| Issue | Size | Task |
+|-------|------|------|
+| #30 | quick win | `yolo_trainer.py` `save_model()`: `self.model.export(save_path)` → `self.model.save(save_path)` (reporter-verified fix) |
+| #44 | quick win | Add `encoding='utf-8'` to all YAML `open()` calls (Windows `'charmap' codec` crash) — yolo_trainer.py, import_formats.py, export_formats.py, dataset_splitter.py |
+| #33 | quick win | `start_polygon_edit` in image_label.py: select smallest-area containing polygon so annotations nested inside others become editable (reuse shoelace `calculate_area`) |
+| #60 | quick win | Sort image list alphabetically. Insert sorted in list population — do **NOT** use `setSortingEnabled(True)`: `currentRowChanged` is wired to `switch_image` and re-sorts would fire spurious switches |
+| #56 | quick win | LZW-compressed TIFF crashes app: add `imagecodecs` to install_requires, or catch `ValueError` in `load_tiff` with an actionable message |
+| #32 + #36 | medium | Annotations can extend outside image bounds (manual edit + Image Augmenter) → clamp coords on commit; clip augmented polygons to image rect (shapely intersection). Silently poisons training data |
+| #40 | medium | True bbox editing (move whole box, drag edges, keep rectangularity). Currently bbox annotations aren't editable at all — `start_polygon_edit` only matches `"segmentation"` |
+| #63 | blocked | SAM 3 support — blocked on Ultralytics shipping SAM 3; re-check their releases before attempting |
+| #35 | large | Keypoint annotation tool |
+| #24 | large | Magic-wand-style point add/remove mask refinement (partially covered by SAM point prompts) |
+
 ## Project Structure
 
 ```

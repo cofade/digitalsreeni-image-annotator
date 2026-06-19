@@ -47,6 +47,7 @@ INTERNAL_MODULES = [
     # Core helpers
     "digitalsreeni_image_annotator.core.constants",
     "digitalsreeni_image_annotator.core.annotation_utils",
+    "digitalsreeni_image_annotator.core.torch_utils",
     # UI
     "digitalsreeni_image_annotator.ui.default_stylesheet",
     "digitalsreeni_image_annotator.ui.soft_dark_stylesheet",

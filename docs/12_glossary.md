@@ -20,6 +20,15 @@ Carl Zeiss Image file format for multi-dimensional microscopy images. Contains m
 ### DINO / Grounding DINO
 "DINO" in this codebase refers specifically to **Grounding DINO** (IDEA-Research, 2023) — an open-set object detector that takes a natural-language phrase ("drone", "wing of an aircraft") and returns bounding boxes for matching regions of an image. Not to be confused with the self-supervised vision-only DINOv1/v2 backbones (similar name, different model). Models live under `models/grounding-dino-base/` and `models/grounding-dino-tiny/`.
 
+### Fine-Tuning (SAM)
+Continuing training of a pre-trained SAM 2 / 2.1 model on the user's own annotations so the assisted tools work better on their imagery. Because Ultralytics ships no SAM trainer, the app uses a custom loop over the Ultralytics `SAM2Model` (see [ADR-021](09_architecture_decisions.md#adr-021-sam-fine-tuning-via-a-custom-loop-over-the-ultralytics-sam2-module)). **Decoder-only** (default) trains just the mask decoder, freezing the image and prompt encoders — fast, low-VRAM, robust on modest data; optionally the image encoder is also unfrozen for heavily domain-shifted data.
+
+### Focal + Dice Loss
+The mask-supervision loss used during SAM fine-tuning: a focal term (down-weights easy pixels, emphasises hard ones) plus a dice term (region overlap), combined ≈20:1. Standard across the SAM fine-tuning literature.
+
+### Mask Decoder
+The lightweight SAM head that turns image embeddings + prompt embeddings into mask logits. The default fine-tuning target (`sam_mask_decoder`, ~4.2M params for the tiny model) since it is small and adapts quickly.
+
 ### Multi-dimensional Image
 An image with more than 2 dimensions, typically from microscopy. Dimensions include T (time), Z (depth), C (channel), S (scene), H (height), W (width).
 

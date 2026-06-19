@@ -47,14 +47,17 @@ src/digitalsreeni_image_annotator/
 ├── __init__.py                   # Public API re-exports
 │
 ├── core/                         # constants, annotation_utils, image_utils
-├── controllers/                  # 7 controllers (project, image, sam, dino,
-│                                 #   yolo, annotation, class) + io_controller
+├── controllers/                  # 8 controllers (project, image, sam,
+│                                 #   sam_train, dino, yolo, annotation,
+│                                 #   class) + io_controller
 ├── widgets/
 │   ├── image_label.py            # ImageLabel canvas widget (dispatcher)
 │   ├── canvas_context.py         # CanvasContext read accessor (ADR-018)
 │   └── tools/                    # Per-tool handlers (ADR-019): rectangle,
 │                                 #   polygon, paint, eraser
 ├── inference/                    # sam_utils.py, dino_utils.py
+├── training/                     # SAM fine-tuning (ADR-021): sam_trainer.py
+│                                 #   (SAMFineTuner), sam_dataset.py
 ├── io/                           # export_formats.py, import_formats.py
 ├── ui/                           # menu_bar, sidebar, shortcuts, theme, stylesheets
 └── dialogs/                      # Standalone tool dialogs (statistics,
@@ -76,8 +79,10 @@ src/digitalsreeni_image_annotator/
 | `SAMController` | controllers/sam_controller.py | SAM model picker, debounce, in-flight guard (ADR-013) |
 | `DINOController` | controllers/dino_controller.py | DINO single/batch detection, batch review, temp-class workflow |
 | `YOLOController` | controllers/yolo_controller.py | YOLO training menu + prediction wiring |
-| `SAMUtils` | inference/sam_utils.py | Load SAM models, run inference |
+| `SAMUtils` | inference/sam_utils.py | Load SAM models (built-in + fine-tuned), run inference |
 | `DINOUtils` | inference/dino_utils.py | Grounding-DINO model load + inference |
+| `SAMFineTuner` | training/sam_trainer.py | Fine-tune SAM 2 decoder/encoder via custom loop over Ultralytics SAM2Model (ADR-021) |
+| `SAMTrainController` | controllers/sam_train_controller.py | SAM fine-tune menu, GPU gate, training thread, selector registration |
 
 See [Building Block View](docs/05_building_block_view.md) for detailed class documentation.
 

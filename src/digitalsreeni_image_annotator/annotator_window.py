@@ -24,6 +24,7 @@ from .controllers.dino_controller import DINOController
 from .controllers.image_controller import ImageController
 from .controllers.project_controller import ProjectController
 from .controllers.sam_controller import SAMController
+from .controllers.sam_train_controller import SAMTrainController
 from .controllers.yolo_controller import YOLOController
 from .core import image_utils
 from .ui import theme
@@ -117,6 +118,7 @@ class ImageAnnotator(QMainWindow):
         self._sam_inference_in_flight = False
 
         self.sam_controller = SAMController(self)
+        self.sam_train_controller = SAMTrainController(self)
         self.dino_controller = DINOController(self)
         self.yolo_controller = YOLOController(self)
         self.annotation_controller = AnnotationController(self)
@@ -162,6 +164,11 @@ class ImageAnnotator(QMainWindow):
         # YOLO Trainer
         self.yolo_trainer = None
         self.setup_yolo_menu()
+
+        # SAM fine-tuning menu + register any previously fine-tuned models so
+        # they appear in the SAM model selector (built during setup_ui above).
+        self.sam_train_controller.setup_sam_train_menu()
+        self.sam_train_controller.refresh_model_selector()
 
         install_shortcuts(self)
         install_event_filters(self)

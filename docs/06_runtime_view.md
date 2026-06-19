@@ -370,3 +370,37 @@ User clicks "Export" > "YOLO v8/v11"
     │
     └─> Return
 ```
+
+## SAM Fine-Tuning (annotate → train → use)
+
+See [ADR-021](09_architecture_decisions.md#adr-021-sam-fine-tuning-via-a-custom-loop-over-the-ultralytics-sam2-module).
+
+```
+User: SAM Fine-Tune (beta) > Train on Current Project…
+    │
+    ├─> build_groups_from_project(all_annotations, image_paths, slices, image_slices)
+    │       polygons/bboxes → SampleGroup(image_loader, specs)   (masks rasterised lazily)
+    │
+    ├─> _gpu_gate(): resolve_torch_device(); if "cpu" → warn + let user back out
+    │
+    ├─> SAMTrainConfigDialog: base model, epochs, lr, batch, prompt (bbox/point),
+    │                          "also fine-tune image encoder?"
+    │
+    ├─> sam_controller.deactivate_sam_tools()   (model is driven from the worker thread)
+    │
+    └─> SAMTrainingThread → SAMFineTuner.train(...)
+            │  build predictor (one warmup predict), pin device, apply freeze policy
+            │  for each epoch / image / instance:
+            │     set_image → get_im_features  (no_grad when encoder frozen)
+            │     prompt_inference(bbox|point) under enable_grad → mask logits
+            │     focal+dice loss → backward → AdamW step (every batch_size instances)
+            │     progress_signal → TrainingInfoDialog (Stop supported)
+            │  save {"model": state_dict} as <name>_<base_token>.pt → reload-verify via SAM()
+            │
+            └─> training_finished: register in SAMUtils.custom_models,
+                add "★ <name>" to the SAM selector and select it
+                → SAM-box / SAM-points now use the fine-tuned model
+
+Offline variant: "Prepare SAM Dataset…" → export_sam_dataset (images/ + manifest.json),
+then "Train from Dataset Folder…" → build_groups_from_folder → same training path.
+```

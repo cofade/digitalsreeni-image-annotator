@@ -30,6 +30,9 @@ def mw(qtbot):
     window.all_images = []
     window.all_annotations = {}
     window.image_slices = {}
+    window.image_paths = {}
+    window.is_loading_project = False
+    window.auto_save = lambda: None
     window.image_controller = ImageController(window)
     return window
 
@@ -90,3 +93,21 @@ def test_select_name_and_switch(mw):
     mw.image_controller.sort_image_list(select_name="a.png", do_switch=True)
     assert mw.image_list.currentItem().text() == "a.png"
     assert calls == ["a.png"]
+
+
+def test_project_load_path_ends_sorted(mw):
+    # Contract: during project load add_images_to_list does NOT sort per
+    # image (avoids O(n^2)); the list is rebuilt once afterwards via the
+    # update_ui -> update_image_list call. This guards a refactor of that
+    # call from silently leaving the post-load list unsorted.
+    mw.is_loading_project = True
+    mw.image_controller.add_images_to_list(["c.png", "a.png", "b.png"])
+    # Not populated/sorted yet while loading.
+    assert mw.image_list.count() == 0
+
+    mw.is_loading_project = False
+    mw.image_controller.update_image_list()  # what update_ui triggers
+
+    texts = [mw.image_list.item(i).text() for i in range(mw.image_list.count())]
+    assert texts == ["a.png", "b.png", "c.png"]
+    assert texts == [info["file_name"] for info in mw.all_images]

@@ -110,7 +110,10 @@ class ImageController(QObject):
             current = self.mw.image_list.currentItem().text()
 
         self.mw.all_images.sort(
-            key=lambda info: (info["file_name"].casefold(), info["file_name"])
+            key=lambda info: (
+                info.get("file_name", "").casefold(),
+                info.get("file_name", ""),
+            )
         )
 
         self.mw.image_list.blockSignals(True)
@@ -297,10 +300,14 @@ class ImageController(QObject):
 
     @staticmethod
     def _is_missing_codec_error(exc):
-        """True if a tifffile read failed because a compression codec
-        (imagecodecs) is unavailable — e.g. LZW (#56)."""
-        msg = str(exc).lower()
-        return "imagecodecs" in msg or "compression" in msg
+        """True if a tifffile read failed because the imagecodecs package
+        is unavailable for the TIFF's compression — e.g. LZW (#56).
+
+        Matches only the reliable 'imagecodecs' token: tifffile names the
+        package in every such message. A broader 'compression' match would
+        silently swallow unrelated ValueErrors behind a misleading dialog.
+        """
+        return "imagecodecs" in str(exc).lower()
 
     def update_all_images(self, new_image_info):
         for info in new_image_info:

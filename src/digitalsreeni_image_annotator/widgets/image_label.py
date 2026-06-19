@@ -29,6 +29,7 @@ from PyQt6.QtGui import (
 from PyQt6.QtWidgets import QLabel, QMessageBox
 
 from .tools import EraserTool, PaintBrushTool, PolygonTool, RectangleTool
+from ..utils import calculate_area
 
 warnings.filterwarnings("ignore", category=UserWarning)
 
@@ -852,8 +853,6 @@ class ImageLabel(QLabel):
         # area so an annotation fully nested inside another is reachable
         # (upstream issue #33) instead of always grabbing the first/outer
         # match.
-        from ..utils import calculate_area
-
         best = None
         best_area = None
         for class_name, annotations in self.annotations.items():

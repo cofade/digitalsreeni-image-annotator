@@ -259,9 +259,11 @@ class AnnotationController(QObject):
 
         for img in json_images.values():
             updated_all_images.append(img)
-            self.mw.image_list.addItem(img["file_name"])
 
         self.mw.all_images = updated_all_images
+        # Rebuild the list in sorted order (issue #60). The reconciliation
+        # loop above already consumed the pre-sort row/index alignment.
+        self.mw.update_image_list()
 
         self.mw.all_annotations.clear()
         for annotation in self.mw.loaded_json["annotations"]:

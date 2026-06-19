@@ -3,8 +3,7 @@ import json
 import numpy as np
 from datetime import datetime
 from PyQt6.QtWidgets import (QDialog, QVBoxLayout, QHBoxLayout, QPushButton, QFileDialog, 
-                            QLabel, QProgressDialog, QRadioButton, QButtonGroup, 
-                            QMessageBox, QApplication, QGroupBox)
+                            QLabel, QProgressDialog, QRadioButton, QMessageBox, QApplication, QGroupBox)
 from PyQt6.QtCore import Qt
 import pydicom
 from pydicom.pixel_data_handlers.util import apply_voi_lut
@@ -230,7 +229,7 @@ class DicomConverter(QDialog):
             metadata_file = os.path.join(self.output_directory, 
                                        os.path.splitext(os.path.basename(self.input_file))[0] + 
                                        "_metadata.json")
-            with open(metadata_file, 'w') as f:
+            with open(metadata_file, 'w', encoding='utf-8') as f:
                 json.dump(series_metadata, f, indent=2)
             
             # Get physical sizes from metadata

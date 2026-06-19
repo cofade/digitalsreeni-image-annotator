@@ -86,10 +86,55 @@ class ImageController(QObject):
         self.mw = main_window
 
     def update_image_list(self):
+        # Rebuild (and sort) the list, preserving the current selection
+        # without switching images.
+        self.sort_image_list()
+
+    def sort_image_list(self, select_name=None, do_switch=False):
+        """Populate image_list in alphabetical order (upstream issue #60).
+
+        Sorts the model (`all_images`) and the view together so the
+        `all_images[i]` ↔ `image_list.item(i)` positional invariant holds
+        (relied on by COCO import reconciliation). `setSortingEnabled` is
+        deliberately NOT used: `currentRowChanged` is wired to
+        `switch_image`, so a live re-sort would fire spurious image
+        switches. We rebuild with signals blocked instead, then re-select
+        explicitly.
+
+        select_name: file to select after the rebuild (defaults to the
+        previously-current item). do_switch: call switch_image once for
+        the selected item (used when adding new images).
+        """
+        current = None
+        if self.mw.image_list.currentItem() is not None:
+            current = self.mw.image_list.currentItem().text()
+
+        self.mw.all_images.sort(
+            key=lambda info: (
+                info.get("file_name", "").casefold(),
+                info.get("file_name", ""),
+            )
+        )
+
+        self.mw.image_list.blockSignals(True)
         self.mw.image_list.clear()
-        for image_info in self.mw.all_images:
-            self.mw.image_list.addItem(image_info["file_name"])
+        for info in self.mw.all_images:
+            self.mw.image_list.addItem(info["file_name"])
+        self.mw.image_list.blockSignals(False)
+
         self.apply_image_filter()
+
+        target = select_name if select_name is not None else current
+        if target is not None:
+            items = self.mw.image_list.findItems(
+                target, Qt.MatchFlag.MatchExactly
+            )
+            if items:
+                self.mw.image_list.blockSignals(True)
+                self.mw.image_list.setCurrentItem(items[0])
+                self.mw.image_list.blockSignals(False)
+                if do_switch:
+                    self.switch_image(items[0])
 
     def image_has_annotations(self, image_info):
         """True if the image (or, for multi-dim images, any of its slices)
@@ -181,7 +226,7 @@ class ImageController(QObject):
             self.add_images_to_list(file_names)
 
     def add_images_to_list(self, file_names):
-        first_added_item = None
+        first_added_name = None
         for file_name in file_names:
             base_name = os.path.basename(file_name)
             if base_name not in self.mw.image_paths:
@@ -194,7 +239,25 @@ class ImageController(QObject):
                 }
 
                 if file_name.lower().endswith((".tif", ".tiff", ".czi")):
-                    self.load_multi_slice_image(file_name)
+                    try:
+                        self.load_multi_slice_image(file_name)
+                    except ValueError as e:
+                        # LZW/compressed TIFFs need the optional imagecodecs
+                        # package; without it tifffile raises ValueError and
+                        # the app used to crash (#56). Skip the file with an
+                        # actionable message instead of a half-added entry.
+                        if self._is_missing_codec_error(e):
+                            QMessageBox.critical(
+                                self.mw,
+                                "Cannot open TIFF",
+                                f"'{base_name}' uses a compression that requires "
+                                "the 'imagecodecs' package, which is not "
+                                "installed.\n\nInstall it with:\n"
+                                "    pip install imagecodecs\n\n"
+                                "then reopen the image.",
+                            )
+                            continue
+                        raise
                     base_name_without_ext = os.path.splitext(base_name)[0]
                     if (
                         base_name_without_ext in self.mw.image_slices
@@ -218,21 +281,33 @@ class ImageController(QObject):
                     image_info["width"] = image.width()
 
                 self.mw.all_images.append(image_info)
-                item = QListWidgetItem(base_name)
-                self.mw.image_list.addItem(item)
-                if first_added_item is None:
-                    first_added_item = item
+                if first_added_name is None:
+                    first_added_name = base_name
 
                 self.mw.image_paths[base_name] = file_name
 
-        if first_added_item:
-            self.mw.image_list.setCurrentItem(first_added_item)
-            self.switch_image(first_added_item)
-
-        self.apply_image_filter()
+        # Rebuild the list in sorted order and select/switch to the first
+        # newly added image. Skipped during project load (the list is
+        # rebuilt once via update_ui afterwards, and load picks row 0) to
+        # avoid an O(n^2) re-sort per image.
+        if first_added_name is not None and not self.mw.is_loading_project:
+            self.sort_image_list(select_name=first_added_name, do_switch=True)
+        else:
+            self.apply_image_filter()
 
         if not self.mw.is_loading_project:
             self.mw.auto_save()
+
+    @staticmethod
+    def _is_missing_codec_error(exc):
+        """True if a tifffile read failed because the imagecodecs package
+        is unavailable for the TIFF's compression — e.g. LZW (#56).
+
+        Matches only the reliable 'imagecodecs' token: tifffile names the
+        package in every such message. A broader 'compression' match would
+        silently swallow unrelated ValueErrors behind a misleading dialog.
+        """
+        return "imagecodecs" in str(exc).lower()
 
     def update_all_images(self, new_image_info):
         for info in new_image_info:

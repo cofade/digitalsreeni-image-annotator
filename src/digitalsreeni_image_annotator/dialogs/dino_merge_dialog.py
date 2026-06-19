@@ -6,7 +6,6 @@ Ported from annotation_tool_v4.py _MergeCOCODialog.
 
 import json
 import math
-import os
 import random
 import traceback
 from collections import defaultdict
@@ -180,7 +179,7 @@ class DinoMergeDialog(QDialog):
             # Load and validate
             records = []
             for path in coco_files:
-                with open(path) as f:
+                with open(path, encoding='utf-8') as f:
                     data = json.load(f)
                 if not data.get("images") or not data.get("annotations"):
                     self._log_msg(f"  [skip] {path.name}: empty.")
@@ -295,9 +294,9 @@ class DinoMergeDialog(QDialog):
             train_data = _build_coco(train_imgs)
             val_data = _build_coco(val_imgs)
 
-            with open(out_path / "train.json", "w") as f:
+            with open(out_path / "train.json", "w", encoding='utf-8') as f:
                 json.dump(train_data, f, indent=2)
-            with open(out_path / "val.json", "w") as f:
+            with open(out_path / "val.json", "w", encoding='utf-8') as f:
                 json.dump(val_data, f, indent=2)
 
             self._log_msg(f"Train images: {len(train_imgs)}, annotations: {len(train_data['annotations'])}")

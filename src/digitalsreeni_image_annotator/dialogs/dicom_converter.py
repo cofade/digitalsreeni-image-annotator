@@ -3,8 +3,7 @@ import json
 import numpy as np
 from datetime import datetime
 from PyQt6.QtWidgets import (QDialog, QVBoxLayout, QHBoxLayout, QPushButton, QFileDialog, 
-                            QLabel, QProgressDialog, QRadioButton, QButtonGroup, 
-                            QMessageBox, QApplication, QGroupBox)
+                            QLabel, QProgressDialog, QRadioButton, QMessageBox, QApplication, QGroupBox)
 from PyQt6.QtCore import Qt
 import pydicom
 from pydicom.pixel_data_handlers.util import apply_voi_lut

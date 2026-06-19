@@ -280,7 +280,7 @@ def export_yolo_v5plus(all_annotations, class_mapping, image_paths, slices, imag
         print(f"[YOLO v5+]   image={image_name!r} annotation-classes={list(annotations.keys()) if annotations else '(none)'}")
         # Skip if there are no annotations for this image/slice
         if not annotations:
-            print(f"[YOLO v5+]     skipping: no annotations")
+            print("[YOLO v5+]     skipping: no annotations")
             continue
 
         # For simplicity, we'll put all data in the train directory

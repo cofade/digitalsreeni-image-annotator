@@ -6,7 +6,6 @@ Ported from annotation_tool_v4.py _MergeCOCODialog.
 
 import json
 import math
-import os
 import random
 import traceback
 from collections import defaultdict

@@ -540,7 +540,7 @@ class AnnotationController(QObject):
         msg_box.setText("Do you want to keep the original annotations?")
         msg_box.setIcon(QMessageBox.Icon.Question)
 
-        keep_button = msg_box.addButton("Keep", QMessageBox.ButtonRole.YesRole)
+        msg_box.addButton("Keep", QMessageBox.ButtonRole.YesRole)
         delete_button = msg_box.addButton("Delete", QMessageBox.ButtonRole.NoRole)
         cancel_button = msg_box.addButton("Cancel", QMessageBox.ButtonRole.RejectRole)
 

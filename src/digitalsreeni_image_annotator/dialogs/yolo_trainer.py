@@ -1,7 +1,7 @@
 import os
 from PyQt6.QtWidgets import QFileDialog, QMessageBox
 from PyQt6.QtWidgets import (QDialog, QVBoxLayout, QHBoxLayout, QPushButton,
-                             QLineEdit, QLabel, QFileDialog, QDialogButtonBox)
+                             QLineEdit, QLabel, QDialogButtonBox)
 import yaml
 import numpy as np
 from pathlib import Path
@@ -11,8 +11,8 @@ from ..io.export_formats import export_yolo_v5plus
 from collections import deque
 
 
-from PyQt6.QtWidgets import QDialog, QVBoxLayout, QTextEdit, QPushButton
-from PyQt6.QtCore import Qt, pyqtSignal, QObject
+from PyQt6.QtWidgets import QTextEdit
+from PyQt6.QtCore import pyqtSignal, QObject
 
 class TrainingInfoDialog(QDialog):
     stop_signal = pyqtSignal()
@@ -279,9 +279,9 @@ class YOLOTrainer(QObject):
             missing_dirs.append(f"Validation labels directory: {val_labels_dir}")
         
         if missing_dirs:
-            raise FileNotFoundError(f"The following directories were not found:\n" + "\n".join(missing_dirs))
+            raise FileNotFoundError("The following directories were not found:\n" + "\n".join(missing_dirs))
         
-        print(f"Dataset structure verified:")
+        print("Dataset structure verified:")
         print(f"Train images: {train_images_dir}")
         print(f"Train labels: {train_labels_dir}")
         print(f"Val images: {val_images_dir}")
@@ -332,7 +332,7 @@ class YOLOTrainer(QObject):
         info = f"Epoch {epoch}/{total_epochs}, Loss: {loss:.4f}"
         self.epoch_info.append(info)
         
-        display_text = f"Current Progress:\n" + "\n".join(self.epoch_info)
+        display_text = "Current Progress:\n" + "\n".join(self.epoch_info)
         if self.progress_callback:
             self.progress_callback(display_text)
 

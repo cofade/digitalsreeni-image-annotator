@@ -214,6 +214,10 @@ class SAMController(QObject):
 
         if model_name != "Pick a SAM Model":
             print(f"Changed SAM model to: {model_name}")
+            # One-time dialog if CUDA exists but the torch wheels can't
+            # run it (e.g. Pascal sm_61 on torch>=2.8) — upstream #57.
+            from ..core.torch_utils import maybe_warn_cpu_fallback
+            maybe_warn_cpu_fallback(self.mw)
         else:
             self.deactivate_sam_tools()
             print("SAM model unset")

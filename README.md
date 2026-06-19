@@ -99,6 +99,14 @@ python -c "import torch; print(torch.cuda.is_available(), torch.cuda.get_device_
 
 You should see `True` and your GPU name. For other platforms or driver combinations, use the official selector at <https://pytorch.org/get-started/locally/>.
 
+#### Older NVIDIA GPUs (Pascal / Maxwell)
+
+PyTorch ≥ 2.8 wheels no longer include kernels for GPUs older than Volta (compute capability < 7.0), e.g. the GTX 10xx series (sm_61). On such cards the app detects the mismatch, warns once, and automatically runs inference on the CPU instead of crashing with `CUDA error: no kernel image is available`. To keep using the GPU, install an older PyTorch that still supports it:
+
+```bash
+pip install torch==2.4.1 torchvision==0.19.1 --index-url https://download.pytorch.org/whl/cu121
+```
+
 ## Usage
 
 1. Run the DigitalSreeni Image Annotator application:

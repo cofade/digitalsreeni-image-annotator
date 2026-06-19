@@ -302,6 +302,7 @@ class SAMUtils(QObject):
         self.current_sam_model: str | None = None
         self._model = None  # ultralytics.SAM instance once loaded
         self._loaded_model_file: str | None = None
+        self._device: str | None = None  # resolved at model load
 
     # ── model lifecycle ────────────────────────────────────────────────
 
@@ -329,21 +330,23 @@ class SAMUtils(QObject):
     def _load_model_blocking(self, model_name: str) -> None:
         # Lazy import keeps app startup fast for users who never use SAM.
         from ultralytics import SAM
+        from ..core.torch_utils import resolve_torch_device
+
+        self._device, _ = resolve_torch_device()
         self._log_device()
         model_file = os.path.join(SAM_MODELS_DIR, MODEL_FILES[model_name])
         os.makedirs(os.path.dirname(model_file), exist_ok=True)
         self._model = SAM(model_file)
         self._loaded_model_file = model_file
 
-    @staticmethod
-    def _log_device() -> None:
+    def _log_device(self) -> None:
         try:
             import torch
-            if torch.cuda.is_available():
+            if self._device == "cuda":
                 dev = torch.cuda.get_device_name(0)
                 print(f"[SAM] Using CUDA: {torch.version.cuda} — {dev}")
             else:
-                print("[SAM] No GPU available, running on CPU")
+                print("[SAM] Running on CPU")
         except Exception:
             pass
 
@@ -406,7 +409,9 @@ class SAMUtils(QObject):
     def _sam_points_blocking(self, image_np, positive_points, negative_points):
         all_points = [positive_points + negative_points]
         all_labels = [([1] * len(positive_points)) + ([0] * len(negative_points))]
-        results = self._model(image_np, points=all_points, labels=all_labels)
+        results = self._model(
+            image_np, points=all_points, labels=all_labels, device=self._device
+        )
 
         masks = results[0].masks.data.cpu().numpy()
         confidences = results[0].boxes.conf.cpu().numpy()
@@ -438,7 +443,7 @@ class SAMUtils(QObject):
         )
 
     def _sam_bbox_blocking(self, image_np, bbox):
-        results = self._model(image_np, bboxes=[bbox])
+        results = self._model(image_np, bboxes=[bbox], device=self._device)
         res = results[0]
         if not (hasattr(res, "masks") and res.masks is not None):
             return None
@@ -481,7 +486,7 @@ class SAMUtils(QObject):
         )
 
     def _sam_batch_blocking(self, image_np, bboxes):
-        results = self._model(image_np, bboxes=bboxes)
+        results = self._model(image_np, bboxes=bboxes, device=self._device)
         res = results[0]
         if not (hasattr(res, "masks") and res.masks is not None):
             # Build a fresh dict per bbox so callers can mutate one

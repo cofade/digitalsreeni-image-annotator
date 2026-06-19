@@ -342,7 +342,7 @@ class YOLOTrainer(QObject):
             raise ValueError("No model to save. Please train a model first.")
         save_path, _ = QFileDialog.getSaveFileName(self.main_window, "Save YOLO Model", "", "YOLO Model (*.pt)")
         if save_path:
-            self.model.export(save_path)
+            self.model.save(save_path)
             return True
         return False
 

@@ -63,7 +63,7 @@ class COCOJSONCombinerDialog(QDialog):
     
         try:
             for file_path in self.json_files:
-                with open(file_path, 'r') as f:
+                with open(file_path, 'r', encoding='utf-8') as f:
                     data = json.load(f)
                 
                 # Combine categories
@@ -98,7 +98,7 @@ class COCOJSONCombinerDialog(QDialog):
     
             output_file, _ = QFileDialog.getSaveFileName(self, "Save Combined JSON", "", "JSON Files (*.json)")
             if output_file:
-                with open(output_file, 'w') as f:
+                with open(output_file, 'w', encoding='utf-8') as f:
                     json.dump(combined_data, f, indent=2)
                 QMessageBox.information(self, "Success", f"Combined JSON saved to {output_file}")
     

@@ -116,7 +116,7 @@ class ProjectController(QObject):
             try:
                 self.mw.is_loading_project = True
 
-                with open(project_file, "r") as f:
+                with open(project_file, "r", encoding='utf-8') as f:
                     project_data = json.load(f)
 
                 self.mw.clear_all(show_messages=False)
@@ -490,7 +490,7 @@ class ProjectController(QObject):
         if dino_cfg["phrases"] or dino_cfg["thresholds"]:
             project_data["dino_config"] = dino_cfg
 
-        with open(self.mw.current_project_file, "w") as f:
+        with open(self.mw.current_project_file, "w", encoding='utf-8') as f:
             json.dump(image_utils.convert_to_serializable(project_data), f, indent=2)
 
         if show_message:

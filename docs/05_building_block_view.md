@@ -209,7 +209,7 @@ the controller graph.
 | Controller | Responsibility |
 |------------|----------------|
 | `ProjectController` | `.iap` save/load, auto-save, backup/restore, missing-image prompts, window-title sync. Owns the `is_loading_project` autosave guard (load/save round-trip safety, v0.8.12). |
-| `ImageController` | Open / load / switch images and slices. TIFF + CZI loaders, the multi-dim `DimensionDialog`, the `[-ndim:]` axis-slice bug fix from the v0.9.0 era. Image-list annotation-status filter (`image_has_annotations`, `apply_image_filter` — upstream #27). |
+| `ImageController` | Open / load / switch images and slices. TIFF + CZI loaders (with `imagecodecs` codec-error handling — #56), the multi-dim `DimensionDialog`, the `[-ndim:]` axis-slice bug fix from the v0.9.0 era. Image-list annotation-status filter (`image_has_annotations`, `apply_image_filter` — #27) and alphabetical sort (`sort_image_list` — #60). |
 | `AnnotationController` | Annotation CRUD, list sorting, highlight, edit-mode entry/exit, `finish_polygon`, `finish_rectangle`, `replace_annotations` (eraser path). Validates writes before mutating `all_annotations`. |
 | `ClassController` | Class add / delete / rename / colour / visibility. `update_slice_list_colors`, `is_class_visible`. |
 | `SAMController` | SAM box/points tool lifecycle, debounce timer, `_sam_inference_in_flight` re-entrancy guard (ADR-013), model picker. |

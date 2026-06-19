@@ -558,6 +558,37 @@ emitters follow up with `annotationsBatchSaved`
 New mutation paths must keep one of those two routes — don't add
 bespoke `apply_image_filter()` call sites.
 
+## Image List Sorting — Rebuild, Don't `setSortingEnabled`
+
+The image list is kept alphabetical (upstream issue #60,
+`ImageController.sort_image_list`). Two constraints shape the
+implementation:
+
+- `currentRowChanged` is wired to `switch_image`, so `setSortingEnabled(True)`
+  is forbidden — a live re-sort would reorder rows and fire spurious
+  image switches.
+- COCO import (and other positional lookups) assume `all_images[i]`
+  matches `image_list.item(i)`. So the model and the view are sorted
+  **together**: `all_images` is sorted, then the list is cleared and
+  repopulated from it with `blockSignals(True)` around the rebuild, and
+  the prior (or newly added) selection is restored explicitly. The #27
+  filter is re-applied at the end of the rebuild.
+
+`update_image_list` routes through `sort_image_list`; `add_images_to_list`
+calls it with the first added file selected. It is skipped per-image
+during project load (the list is rebuilt once via `update_ui`) to avoid
+an O(n²) re-sort.
+
+## TIFF Compression Codecs
+
+Reading an LZW- (or otherwise) compressed TIFF requires the optional
+`imagecodecs` package; without it `tifffile` raises `ValueError` mid-read
+(upstream issue #56). `imagecodecs` is now a hard dependency, but
+`ImageController.add_images_to_list` also catches the codec `ValueError`
+(`_is_missing_codec_error`) and shows an actionable "pip install
+imagecodecs" dialog, skipping the file instead of crashing or leaving a
+half-added entry. Non-codec `ValueError`s still propagate.
+
 ## Canvas Decoupling — Signals + CanvasContext
 
 `ImageLabel` (the canvas widget) does **not** hold a reference to

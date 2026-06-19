@@ -33,6 +33,7 @@ setup(
         "numpy>=2.0.0",  # pip resolves 2.4+ on Py3.14, 2.2.x on Py3.10 (last 3.10-compatible)
         "Pillow>=10.0.0",
         "tifffile>=2023.0.0",
+        "imagecodecs>=2023.1.23",  # tifffile needs it for LZW/compressed TIFF (#56)
         "czifile>=2019.7.2",
         "opencv-python>=4.8.0",
         "pyyaml>=6.0.0",

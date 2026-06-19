@@ -67,6 +67,11 @@ def test_is_missing_codec_error_matches():
     assert ImageController._is_missing_codec_error(
         ValueError("requires the 'imagecodecs' package")
     )
+    # A bare "compression" mention must NOT match — that would swallow
+    # unrelated errors behind a misleading "install imagecodecs" dialog.
+    assert not ImageController._is_missing_codec_error(
+        ValueError("unsupported compression scheme")
+    )
 
 
 def test_unrelated_value_error_is_reraised(mw, monkeypatch):

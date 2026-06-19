@@ -217,7 +217,7 @@ class AnnotationController(QObject):
         if not file_name:
             return
 
-        with open(file_name, "r") as f:
+        with open(file_name, "r", encoding='utf-8') as f:
             self.mw.loaded_json = json.load(f)
 
         self.mw.class_list.clear()

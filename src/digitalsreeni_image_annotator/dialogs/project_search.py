@@ -83,7 +83,7 @@ class ProjectSearchDialog(QDialog):
                 if filename.endswith('.iap'):
                     project_path = os.path.join(root, filename)
                     try:
-                        with open(project_path, 'r') as f:
+                        with open(project_path, 'r', encoding='utf-8') as f:
                             project_data = json.load(f)
                         
                         if self.project_matches(project_data, query, start_date, end_date):

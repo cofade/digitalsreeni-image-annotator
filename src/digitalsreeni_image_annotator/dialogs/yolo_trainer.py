@@ -140,7 +140,7 @@ class YOLOTrainer(QObject):
         )
         
         yaml_path = Path(yaml_path)
-        with yaml_path.open('r') as f:
+        with yaml_path.open('r', encoding='utf-8') as f:
             yaml_content = yaml.safe_load(f)
         
         # Update paths for new YOLO v5+ structure
@@ -148,7 +148,7 @@ class YOLOTrainer(QObject):
         yaml_content['val'] = 'images/val'      # Changed from train/images
         yaml_content['test'] = '../test/images'
         
-        with yaml_path.open('w') as f:
+        with yaml_path.open('w', encoding='utf-8') as f:
             yaml.dump(yaml_content, f, default_flow_style=False)
         
         self.yaml_path = str(yaml_path)
@@ -158,7 +158,7 @@ class YOLOTrainer(QObject):
         if yaml_path is None:
             yaml_path, _ = QFileDialog.getOpenFileName(self.main_window, "Select YOLO Dataset YAML", "", "YAML Files (*.yaml *.yml)")
         if yaml_path and os.path.exists(yaml_path):
-            with open(yaml_path, 'r') as f:
+            with open(yaml_path, 'r', encoding='utf-8') as f:
                 try:
                     yaml_data = yaml.safe_load(f)
                     print(f"Loaded YAML contents: {yaml_data}")
@@ -175,7 +175,7 @@ class YOLOTrainer(QObject):
                     self.yaml_path = yaml_path
     
                     # Write the updated YAML back to the file
-                    with open(yaml_path, 'w') as f:
+                    with open(yaml_path, 'w', encoding='utf-8') as f:
                         yaml.dump(yaml_data, f, default_flow_style=False)
     
                     return True
@@ -218,7 +218,7 @@ class YOLOTrainer(QObject):
             print(f"Training with YAML: {yaml_path}")
             print(f"YAML directory: {yaml_dir}")
             
-            with yaml_path.open('r') as f:
+            with yaml_path.open('r', encoding='utf-8') as f:
                 yaml_content = yaml.safe_load(f)
             print(f"YAML content: {yaml_content}")
             
@@ -237,7 +237,7 @@ class YOLOTrainer(QObject):
             
             # Write updated YAML with adjusted paths
             temp_yaml_path = yaml_dir / 'temp_train.yaml'
-            with temp_yaml_path.open('w') as f:
+            with temp_yaml_path.open('w', encoding='utf-8') as f:
                 yaml.dump(yaml_content, f, default_flow_style=False)
             
             print(f"Training with updated YAML: {temp_yaml_path}")
@@ -258,7 +258,7 @@ class YOLOTrainer(QObject):
         yaml_path = Path(self.yaml_path)
         yaml_dir = yaml_path.parent
         
-        with yaml_path.open('r') as f:
+        with yaml_path.open('r', encoding='utf-8') as f:
             yaml_content = yaml.safe_load(f)
         
         # Use paths from YAML content
@@ -290,7 +290,7 @@ class YOLOTrainer(QObject):
     def check_ultralytics_settings(self):
         settings_path = Path.home() / ".config" / "Ultralytics" / "settings.yaml"
         if settings_path.exists():
-            with settings_path.open('r') as f:
+            with settings_path.open('r', encoding='utf-8') as f:
                 settings = yaml.safe_load(f)
             print(f"Ultralytics settings: {settings}")
         else:
@@ -351,7 +351,7 @@ class YOLOTrainer(QObject):
 
         try:
             self.model = YOLO(model_path)
-            with open(yaml_path, 'r') as f:
+            with open(yaml_path, 'r', encoding='utf-8') as f:
                 self.prediction_yaml = yaml.safe_load(f)
             
             if 'names' not in self.prediction_yaml:

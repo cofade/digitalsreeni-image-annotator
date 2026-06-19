@@ -14,7 +14,7 @@ from PyQt6.QtWidgets import QMessageBox
 
 def import_coco_json(file_path, class_mapping):
     try:
-        with open(file_path, 'r') as f:
+        with open(file_path, 'r', encoding='utf-8') as f:
             coco_data = json.load(f)
 
         # Validate required fields
@@ -127,7 +127,7 @@ def import_yolo_v4(yaml_file_path, class_mapping):
     
     directory_path = os.path.dirname(yaml_file_path)
     
-    with open(yaml_file_path, 'r') as f:
+    with open(yaml_file_path, 'r', encoding='utf-8') as f:
         yaml_data = yaml.safe_load(f)
     
     class_names = yaml_data.get('names', [])
@@ -184,7 +184,7 @@ def import_yolo_v4(yaml_file_path, class_mapping):
             imported_annotations[img_file] = {}
             
             label_path = os.path.join(labels_dir, label_file)
-            with open(label_path, 'r') as f:
+            with open(label_path, 'r', encoding='utf-8') as f:
                 lines = f.readlines()
             
             for line in lines:
@@ -267,7 +267,7 @@ def import_yolo_v5plus(yaml_file_path, class_mapping):
     
     root_dir = os.path.dirname(yaml_file_path)
     
-    with open(yaml_file_path, 'r') as f:
+    with open(yaml_file_path, 'r', encoding='utf-8') as f:
         yaml_data = yaml.safe_load(f)
     
     class_names = yaml_data.get('names', [])
@@ -320,7 +320,7 @@ def import_yolo_v5plus(yaml_file_path, class_mapping):
                 imported_annotations[img_file] = {}
                 
                 label_path = os.path.join(labels_dir, label_file)
-                with open(label_path, 'r') as f:
+                with open(label_path, 'r', encoding='utf-8') as f:
                     lines = f.readlines()
                 
                 for line in lines:

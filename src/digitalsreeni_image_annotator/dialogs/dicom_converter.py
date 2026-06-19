@@ -230,7 +230,7 @@ class DicomConverter(QDialog):
             metadata_file = os.path.join(self.output_directory, 
                                        os.path.splitext(os.path.basename(self.input_file))[0] + 
                                        "_metadata.json")
-            with open(metadata_file, 'w') as f:
+            with open(metadata_file, 'w', encoding='utf-8') as f:
                 json.dump(series_metadata, f, indent=2)
             
             # Get physical sizes from metadata

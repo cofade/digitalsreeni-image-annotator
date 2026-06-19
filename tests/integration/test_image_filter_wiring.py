@@ -16,6 +16,7 @@ and three controllers.
 import pytest
 
 
+FILTER_WITHOUT = 1  # combo index: "Without annotations"
 FILTER_WITH = 2  # combo index: "With annotations"
 
 
@@ -52,3 +53,35 @@ def test_annotation_commit_path_reapplies_filter(window):
     assert window.all_annotations["a.png"]  # save path ran
     assert not window.image_list.isRowHidden(0)  # a.png now annotated
     assert window.image_list.isRowHidden(1)  # b.png still hidden
+
+
+def test_hiding_current_row_keeps_canvas_and_fires_no_switch(window):
+    # Hiding the currently selected (non-matching) row must not change
+    # the displayed image or fire switch_image — the canvas stays on the
+    # worked-on image while its row leaves the list.
+    for name in ("annot.png", "plain.png"):
+        window.all_images.append({"file_name": name, "is_multi_slice": False})
+        window.image_list.addItem(name)
+    window.all_annotations["annot.png"] = {
+        "cell": [{"segmentation": [0, 0, 1, 0, 1, 1], "category_name": "cell"}]
+    }
+
+    # Pure counter (does NOT delegate to the real switch_image, which
+    # needs a loaded project): isolates whether the *filter* fires a
+    # switch. setCurrentRow below legitimately fires it once via
+    # currentRowChanged — that is product behavior and is cleared away.
+    calls = []
+    window.switch_image = lambda item: calls.append(item)
+
+    window.image_list.setCurrentRow(0)  # select the annotated image
+    sentinel = object()
+    window.current_image = sentinel
+    calls.clear()
+
+    # "Without annotations" must hide row 0 even though it is current.
+    window.image_filter_combo.setCurrentIndex(FILTER_WITHOUT)
+
+    assert window.image_list.isRowHidden(0)  # current row hidden
+    assert not window.image_list.isRowHidden(1)
+    assert window.current_image is sentinel  # canvas unchanged
+    assert calls == []  # hiding the current row fired no switch_image

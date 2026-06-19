@@ -539,9 +539,15 @@ filter uses `setRowHidden(i, True)` and must **never** remove items:
 - Removing the current item fires `currentRowChanged`, which is wired
   to `switch_image` — a filter change could silently switch the
   displayed image. Hiding fires nothing.
-- The currently selected row is exempt from hiding so the image being
-  worked on cannot vanish when it gains its first annotation under
-  the "Without annotations" filter.
+
+A non-matching row is hidden **even when it is the current selection**.
+`setRowHidden` does not change `current_image` or fire
+`currentRowChanged`, so the canvas keeps showing the worked-on image
+while its row leaves the list — e.g. the current image gains its first
+annotation under the "Without annotations" filter and disappears from
+the list, but stays on screen until the user navigates away. Keyboard
+nav skips hidden rows. (Guaranteed by
+`test_hiding_current_row_keeps_canvas_and_fires_no_switch`.)
 
 Re-apply runs from `ClassController.update_slice_list_colors()`. The
 contract: every annotation-mutation site either calls that method

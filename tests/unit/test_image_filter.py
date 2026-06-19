@@ -126,11 +126,14 @@ class TestApplyImageFilter:
         populated.image_controller.apply_image_filter()
         assert self._hidden(populated) == [False, True]
 
-    def test_current_row_is_never_hidden(self, populated):
+    def test_current_row_is_hidden_when_not_matching(self, populated):
+        # The current row is not exempt: a non-matching selected image
+        # leaves the list (the canvas keeps showing it — see the wiring
+        # test for the switch_image / canvas-unchanged guarantee).
         populated.image_list.setCurrentRow(0)  # annotated.png
         populated.image_filter_combo.setCurrentIndex(FILTER_WITHOUT)
         populated.image_controller.apply_image_filter()
-        assert self._hidden(populated) == [False, False]
+        assert self._hidden(populated) == [True, False]
 
     def test_no_combo_is_a_noop(self, mw):
         _add_image(mw, "plain.png")

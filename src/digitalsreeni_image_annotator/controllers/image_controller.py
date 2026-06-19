@@ -132,10 +132,13 @@ class ImageController(QObject):
         Rows are hidden via setRowHidden, never removed: other code
         (DINO batch navigation, COCO import) iterates the list by row
         index, and hiding fires no currentRowChanged so it cannot
-        trigger a spurious switch_image. The currently selected row is
-        never hidden so the image being worked on can't vanish when it
-        gains its first annotation under the "Without annotations"
-        filter.
+        trigger a spurious switch_image.
+
+        A non-matching row is hidden even when it is the current
+        selection — hiding does not change `current_image`, so the canvas
+        keeps showing the worked-on image while its row leaves the list
+        (e.g. the image just gained its first annotation under the
+        "Without annotations" filter). Keyboard nav skips hidden rows.
         """
         combo = getattr(self.mw, "image_filter_combo", None)
         if combo is None:
@@ -147,14 +150,11 @@ class ImageController(QObject):
             for i in range(self.mw.image_list.count()):
                 self.mw.image_list.setRowHidden(i, False)
             return
-        current_row = self.mw.image_list.currentRow()
         infos = {info["file_name"]: info for info in self.mw.all_images}
         for i in range(self.mw.image_list.count()):
-            hide = False
-            if i != current_row:
-                info = infos.get(self.mw.image_list.item(i).text())
-                annotated = bool(info) and self.image_has_annotations(info)
-                hide = annotated if mode == 1 else not annotated
+            info = infos.get(self.mw.image_list.item(i).text())
+            annotated = bool(info) and self.image_has_annotations(info)
+            hide = annotated if mode == 1 else not annotated
             self.mw.image_list.setRowHidden(i, hide)
 
     def setup_slice_list(self):

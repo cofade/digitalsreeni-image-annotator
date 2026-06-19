@@ -236,7 +236,25 @@ class ImageController(QObject):
                 }
 
                 if file_name.lower().endswith((".tif", ".tiff", ".czi")):
-                    self.load_multi_slice_image(file_name)
+                    try:
+                        self.load_multi_slice_image(file_name)
+                    except ValueError as e:
+                        # LZW/compressed TIFFs need the optional imagecodecs
+                        # package; without it tifffile raises ValueError and
+                        # the app used to crash (#56). Skip the file with an
+                        # actionable message instead of a half-added entry.
+                        if self._is_missing_codec_error(e):
+                            QMessageBox.critical(
+                                self.mw,
+                                "Cannot open TIFF",
+                                f"'{base_name}' uses a compression that requires "
+                                "the 'imagecodecs' package, which is not "
+                                "installed.\n\nInstall it with:\n"
+                                "    pip install imagecodecs\n\n"
+                                "then reopen the image.",
+                            )
+                            continue
+                        raise
                     base_name_without_ext = os.path.splitext(base_name)[0]
                     if (
                         base_name_without_ext in self.mw.image_slices
@@ -276,6 +294,13 @@ class ImageController(QObject):
 
         if not self.mw.is_loading_project:
             self.mw.auto_save()
+
+    @staticmethod
+    def _is_missing_codec_error(exc):
+        """True if a tifffile read failed because a compression codec
+        (imagecodecs) is unavailable — e.g. LZW (#56)."""
+        msg = str(exc).lower()
+        return "imagecodecs" in msg or "compression" in msg
 
     def update_all_images(self, new_image_info):
         for info in new_image_info:

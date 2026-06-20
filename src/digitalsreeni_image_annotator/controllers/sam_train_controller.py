@@ -171,22 +171,29 @@ class SAMTrainController(QObject):
         self.mw.sam_controller.deactivate_sam_tools()
         self._set_sam_ui_locked(True)
 
-        self.mw.sam_finetuner = SAMFineTuner()
-        if not hasattr(self.mw, "sam_training_dialog"):
-            self.mw.sam_training_dialog = TrainingInfoDialog(self.mw)
-        self.mw.sam_training_dialog.setWindowTitle("SAM Fine-Tuning Progress")
-        self.mw.sam_training_dialog.stop_button.setEnabled(True)
-        self.mw.sam_training_dialog.stop_button.setText("Stop Training")
-        self.mw.sam_training_dialog.show()
+        # Everything from here to start() must restore the UI if it raises —
+        # otherwise training_finished (the only other unlock site) never fires
+        # and the SAM tools stay disabled until app restart.
+        try:
+            self.mw.sam_finetuner = SAMFineTuner()
+            if not hasattr(self.mw, "sam_training_dialog"):
+                self.mw.sam_training_dialog = TrainingInfoDialog(self.mw)
+            self.mw.sam_training_dialog.setWindowTitle("SAM Fine-Tuning Progress")
+            self.mw.sam_training_dialog.stop_button.setEnabled(True)
+            self.mw.sam_training_dialog.stop_button.setText("Stop Training")
+            self.mw.sam_training_dialog.show()
 
-        self.mw.sam_finetuner.progress_signal.connect(self.mw.sam_training_dialog.update_info)
-        self.mw.sam_training_dialog.stop_signal.connect(self.mw.sam_finetuner.stop_training_signal)
+            self.mw.sam_finetuner.progress_signal.connect(self.mw.sam_training_dialog.update_info)
+            self.mw.sam_training_dialog.stop_signal.connect(self.mw.sam_finetuner.stop_training_signal)
 
-        self.mw.sam_training_thread = SAMTrainingThread(
-            self.mw.sam_finetuner, base_model, groups, cfg
-        )
-        self.mw.sam_training_thread.finished.connect(self.training_finished)
-        self.mw.sam_training_thread.start()
+            self.mw.sam_training_thread = SAMTrainingThread(
+                self.mw.sam_finetuner, base_model, groups, cfg
+            )
+            self.mw.sam_training_thread.finished.connect(self.training_finished)
+            self.mw.sam_training_thread.start()
+        except Exception as e:
+            self._set_sam_ui_locked(False)
+            QMessageBox.critical(self.mw, "Could Not Start Training", str(e))
 
     def _gpu_gate(self) -> bool:
         """Warn (and let the user back out) when no usable GPU is present."""

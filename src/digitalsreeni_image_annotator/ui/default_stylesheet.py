@@ -45,6 +45,14 @@ QListWidget::item:selected {
 }
 
 
+QHeaderView::section {
+    background-color: #E0E0E0;
+    color: #333333;
+    border: 1px solid #CCCCCC;
+    padding: 4px;
+}
+
+
 QLabel {
     color: #333333;
 }

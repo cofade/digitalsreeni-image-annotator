@@ -75,8 +75,10 @@ class SAMTrainConfigDialog(QDialog):
             "imagery but needs more GPU memory and labels."
         )
         note.setWordWrap(True)
-        # palette(text) so it follows the active light/dark stylesheet.
-        note.setStyleSheet("color:palette(text);")
+        # No inline color — inside a QDialog `palette(text)` resolves against the
+        # stale OS palette and renders near-white in light mode. Let the global
+        # QLabel stylesheet rule provide a theme-correct colour (No Hardcoded
+        # Colors Rule, docs/08_crosscutting_concepts.md).
         layout.addWidget(note)
 
         buttons = QDialogButtonBox(

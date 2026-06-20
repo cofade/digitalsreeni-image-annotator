@@ -179,6 +179,10 @@ class SAMTrainController(QObject):
             if not hasattr(self.mw, "sam_training_dialog"):
                 self.mw.sam_training_dialog = TrainingInfoDialog(self.mw)
             self.mw.sam_training_dialog.setWindowTitle("SAM Fine-Tuning Progress")
+            # The dialog is reused across runs (same TrainingInfoDialog class as
+            # YOLO, but a separate instance) — clear the previous run's log so a
+            # new run doesn't append under stale output.
+            self.mw.sam_training_dialog.info_text.clear()
             self.mw.sam_training_dialog.stop_button.setEnabled(True)
             self.mw.sam_training_dialog.stop_button.setText("Stop Training")
             self.mw.sam_training_dialog.show()
@@ -226,7 +230,10 @@ class SAMTrainController(QObject):
     def training_finished(self, result):
         self._set_sam_ui_locked(False)
         dlg = self.mw.sam_training_dialog
-        dlg.stop_button.setEnabled(True)
+        # Training is over — DISABLE Stop so a post-completion click can't strand
+        # the button on "Stopping…" forever (it only un-sticks when a run
+        # finishes, and none is running). _launch re-enables it for the next run.
+        dlg.stop_button.setEnabled(False)
         dlg.stop_button.setText("Stop Training")
         try:
             self.mw.sam_finetuner.progress_signal.disconnect(dlg.update_info)

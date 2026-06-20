@@ -146,12 +146,10 @@ class ProjectController(QObject):
                 self.mw.initialize_yolo_trainer()
                 self.update_window_title()
 
+                # No success dialog — the loaded canvas + updated window title
+                # already make a successful open obvious; a modal just adds a
+                # click. Errors below still surface as dialogs.
                 print(f"Project opened successfully: {project_file}")
-                QMessageBox.information(
-                    self.mw,
-                    "Project Opened",
-                    f"Project opened successfully: {os.path.basename(project_file)}",
-                )
 
             except Exception as e:
                 self.mw.is_loading_project = False

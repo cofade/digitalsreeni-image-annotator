@@ -405,7 +405,7 @@ def export_sam_dataset(all_annotations, class_mapping, image_paths, slices, imag
             if qimage is None:
                 for stack_slices in image_slices.values():
                     qimage = next((s[1] for s in stack_slices if s[0] == image_name), None)
-                    if qimage:
+                    if qimage is not None:
                         break
             if qimage is None:
                 continue

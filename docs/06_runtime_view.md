@@ -386,7 +386,8 @@ User: SAM Fine-Tune (beta) > Train on Current Project…
     ├─> SAMTrainConfigDialog: base model, epochs, lr, batch, prompt (bbox/point),
     │                          "also fine-tune image encoder?"
     │
-    ├─> sam_controller.deactivate_sam_tools()   (model is driven from the worker thread)
+    ├─> deactivate_sam_tools() + lock SAM inference UI (tools, selector, menu)
+    │       trainer loads its OWN SAM instance; locking avoids a 2nd model on the same CUDA context
     │
     └─> SAMTrainingThread → SAMFineTuner.train(...)
             │  build predictor (one warmup predict), pin device, apply freeze policy

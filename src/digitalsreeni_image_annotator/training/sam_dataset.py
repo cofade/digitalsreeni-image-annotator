@@ -56,7 +56,14 @@ def build_groups_from_project(all_annotations, image_paths, slices, image_slices
             if qimage is None:
                 print(f"[SAM dataset] skip slice {image_name!r}: no image data")
                 continue
-            groups.append(SampleGroup(lambda q=qimage: _qimage_to_numpy(q), specs))
+            # Convert the in-memory slice QImage to numpy HERE, on the GUI
+            # thread. The array is later consumed by the training worker
+            # thread; reading constBits() of a live, GUI-shared QImage from
+            # another thread is exactly what _qimage_to_numpy warns against,
+            # so we hand the worker a thread-owned copy instead of a lambda
+            # that defers the buffer read onto the worker.
+            arr = _qimage_to_numpy(qimage)
+            groups.append(SampleGroup(lambda a=arr: a, specs))
             continue
 
         image_path = image_paths.get(image_name)

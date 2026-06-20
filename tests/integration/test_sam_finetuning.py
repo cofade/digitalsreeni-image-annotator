@@ -251,3 +251,42 @@ def test_end_to_end_train_save_reload(temp_dir):
     from ultralytics import SAM
     SAM(out)((np.random.rand(120, 120, 3) * 255).astype(np.uint8),
              bboxes=[[40, 40, 80, 80]], verbose=False)
+
+
+@pytest.mark.skipif(
+    os.environ.get("SAM_TRAIN_E2E") != "1",
+    reason="set SAM_TRAIN_E2E=1 to run the encoder-path multi-instance test",
+)
+def test_encoder_path_multi_instance_per_image(temp_dir):
+    """Regression: encoder fine-tuning (freeze_image_encoder=False) on images
+    with >1 instance used to crash with 'backward through the graph a second
+    time' because all instances shared the one encoder feature graph. The
+    engine now backprops once per image."""
+    pytest.importorskip("ultralytics")
+    from src.digitalsreeni_image_annotator.training.sam_trainer import (
+        SAM_MODELS_DIR,
+        SAMFineTuner,
+    )
+
+    if not os.path.exists(os.path.join(SAM_MODELS_DIR, "sam2_t.pt")):
+        pytest.skip("sam2_t.pt not cached")
+
+    def two_instance_image(seed):
+        rng = np.random.RandomState(seed)
+        img = (rng.rand(140, 140, 3) * 255).astype(np.uint8)
+        specs = []
+        for cy, cx in [(40, 40), (95, 95)]:
+            yy, xx = np.ogrid[:140, :140]
+            m = (yy - cy) ** 2 + (xx - cx) ** 2 < 18 ** 2
+            img[m] = [30, 220, 30]
+            x1, y1, x2, y2 = mask_to_xyxy(m)
+            specs.append({"bbox": [x1, y1, x2 - x1, y2 - y1]})
+        return SampleGroup(lambda im=img: im.copy(), specs)
+
+    out = os.path.join(temp_dir, "enc_sam2_t.pt")
+    res = SAMFineTuner().train(
+        "SAM 2 tiny", [two_instance_image(i) for i in range(2)],
+        epochs=1, lr=1e-5, batch_size=1, freeze_image_encoder=False,
+        prompt_type="bbox", out_path=out,
+    )
+    assert res["verified"] and res["instances"] == 4

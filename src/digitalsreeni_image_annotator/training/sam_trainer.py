@@ -29,9 +29,15 @@ Threading
 ``train()`` is **blocking and CPU/GPU-bound**; the controller runs it on a
 dedicated ``QThread`` (never the GUI thread). Unlike SAM inference it does
 *not* go through ``sam_utils._run_sync`` — that helper's re-entry guard is
-GUI-thread-local. The controller is responsible for deactivating SAM tools and
-disabling inference buttons for the duration so the resident model isn't driven
-from two threads at once.
+GUI-thread-local.
+
+The trainer loads its **own** ``SAM`` instance (see ``_build_predictor``); it
+never touches ``SAMUtils._model``, so this is not "two threads driving one
+model". The hazard it *does* create is two SAM models (the resident inference
+one and this training one) competing for the same GPU/CUDA context. The
+controller therefore locks the SAM inference UI (tools + model selector + the
+fine-tune menu) for the duration so no concurrent inference or model swap can
+be triggered while a run is in flight.
 """
 
 from __future__ import annotations
@@ -294,12 +300,19 @@ class SAMFineTuner(QObject):
                 h, w = image.shape[:2]
                 im_t = self._set_image(pred, image, freeze_image_encoder)
 
+                # Accumulate all of THIS image's instance losses and backward
+                # ONCE per image. When the image encoder is trainable, every
+                # instance's decoder graph hangs off the one shared encoder
+                # feature graph; a per-instance backward() would free that
+                # shared graph and make the next instance raise "backward
+                # through the graph a second time". One backward per image
+                # keeps the shared graph alive for exactly one pass.
+                inst_losses = []
                 for inst in instances:
-                    mask = inst["mask"]
-                    bbox = mask_to_xyxy(mask)
+                    bbox = mask_to_xyxy(inst["mask"])
                     if bbox is None:
                         continue
-                    prompt = self._prompt_kwargs(prompt_type, mask, bbox)
+                    prompt = self._prompt_kwargs(prompt_type, inst["mask"], bbox)
                     with torch.enable_grad():
                         pm, _ = pred.prompt_inference(
                             im_t, multimask_output=False, **prompt
@@ -308,18 +321,24 @@ class SAMFineTuner(QObject):
                         pm[:1].unsqueeze(0).float(), size=(h, w),
                         mode="bilinear", align_corners=False,
                     )
-                    target = torch.from_numpy(mask.astype(np.float32))[None, None].to(device)
-                    loss = _focal_dice_loss(logits, target) / max(1, batch_size)
-                    loss.backward()
-                    epoch_loss += loss.detach().item() * max(1, batch_size)
-                    seen += 1
-                    accum += 1
-                    if accum >= batch_size:
-                        optimizer.step()
-                        optimizer.zero_grad()
-                        accum = 0
+                    target = torch.from_numpy(inst["mask"].astype(np.float32))[None, None].to(device)
+                    inst_losses.append(_focal_dice_loss(logits, target))
 
                 del image  # bound memory: encoder features recomputed per epoch
+                if not inst_losses:
+                    continue
+
+                # batch_size = number of IMAGES to accumulate before an
+                # optimizer step (gradient accumulation over images).
+                image_loss = torch.stack(inst_losses).mean() / max(1, batch_size)
+                image_loss.backward()
+                epoch_loss += image_loss.detach().item() * max(1, batch_size)
+                seen += 1
+                accum += 1
+                if accum >= batch_size:
+                    optimizer.step()
+                    optimizer.zero_grad()
+                    accum = 0
 
             if accum > 0:  # flush partial accumulation
                 optimizer.step()

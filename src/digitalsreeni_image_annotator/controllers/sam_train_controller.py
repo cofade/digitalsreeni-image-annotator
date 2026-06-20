@@ -8,9 +8,11 @@ Ultralytics has no SAM trainer (see the SAM fine-tuning ADR).
 Key differences from YOLO training:
 - **GPU gate**: decoder fine-tuning is realistically GPU-only, so a CPU-only
   box is hard-warned before a run starts.
-- **Re-entrancy**: training and inference both drive the resident SAM model, so
-  SAM inference tools are deactivated for the duration. The trainer runs on its
-  own ``QThread`` and never goes through ``sam_utils._run_sync``.
+- **Re-entrancy**: the trainer loads its own SAM instance on a worker thread
+  (separate from the resident inference model), so this is not a one-model
+  race. But two SAM models on one CUDA context is, so the SAM inference UI
+  (tools + model selector + this menu) is locked for the duration and the
+  trainer never goes through ``sam_utils._run_sync``.
 - On success the fine-tuned checkpoint is registered into the SAM model
   selector so it's immediately usable for annotation.
 """
@@ -63,6 +65,7 @@ class SAMTrainController(QObject):
 
     def setup_sam_train_menu(self):
         menu = self.mw.menuBar().addMenu("SAM &Fine-Tune (beta)")
+        self._menu = menu
 
         train_project = QAction("Train on Current Project…", self.mw)
         train_project.triggered.connect(self.train_on_project)
@@ -159,9 +162,14 @@ class SAMTrainController(QObject):
         out_name = cfg.pop("out_name")
         cfg["out_path"] = make_custom_filename(base_model, out_name)
 
-        # Training and inference both drive the resident SAM model — don't let a
-        # debounced inference fire mid-training.
+        # The trainer loads its OWN SAM instance on a worker thread. The
+        # resident inference model is separate, but it stays reachable from the
+        # GUI — running inference (its own CUDA work) alongside training on the
+        # same device/context invites OOM and contention. Deactivate the tools
+        # and lock the SAM inference UI for the duration so no concurrent
+        # inference or model-swap can be triggered.
         self.mw.sam_controller.deactivate_sam_tools()
+        self._set_sam_ui_locked(True)
 
         self.mw.sam_finetuner = SAMFineTuner()
         if not hasattr(self.mw, "sam_training_dialog"):
@@ -197,7 +205,19 @@ class SAMTrainController(QObject):
         )
         return choice == QMessageBox.StandardButton.Yes
 
+    def _set_sam_ui_locked(self, locked: bool):
+        """Disable/enable SAM inference controls + the fine-tune menu so no
+        concurrent inference, model swap, or second training run can start
+        while a run is in flight."""
+        for attr in ("sam_box_button", "sam_points_button", "sam_model_selector"):
+            widget = getattr(self.mw, attr, None)
+            if widget is not None:
+                widget.setEnabled(not locked)
+        if getattr(self, "_menu", None) is not None:
+            self._menu.setEnabled(not locked)
+
     def training_finished(self, result):
+        self._set_sam_ui_locked(False)
         dlg = self.mw.sam_training_dialog
         dlg.stop_button.setEnabled(True)
         dlg.stop_button.setText("Stop Training")

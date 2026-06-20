@@ -54,8 +54,8 @@ class SAMTrainConfigDialog(QDialog):
         self.batch_size.setRange(1, 64)
         self.batch_size.setValue(2)
         self.batch_size.setToolTip(
-            "Gradient-accumulation count — SAM prompts are per-object, so the "
-            "optimizer steps every N instances."
+            "Gradient-accumulation count — the optimizer steps every N images "
+            "(all of an image's objects are backpropagated together)."
         )
         form.addRow("Batch size:", self.batch_size)
 

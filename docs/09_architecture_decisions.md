@@ -792,10 +792,14 @@ won't reload (cf. facebookresearch/sam2#337 key-mismatch failures).
   already-exercised predictor methods, guarded by
   `test_sam_finetuning.py::TestUltralyticsAPI` (fails on an upgrade
   that renames them).
-- ⚠️ Training drives the resident SAM model on its own `QThread` and
-  must **not** use `sam_utils._run_sync` (its re-entry guard is
-  GUI-thread-local). `SAMTrainController` deactivates SAM tools for the
-  duration so inference can't fire concurrently.
+- ⚠️ The trainer loads its **own** `SAM` instance on its `QThread`
+  (it does not touch `SAMUtils._model`), and must **not** use
+  `sam_utils._run_sync` (its re-entry guard is GUI-thread-local). The
+  real hazard is two SAM models (resident inference + training) on one
+  CUDA context, so `SAMTrainController` locks the SAM inference UI
+  (tools + model selector + the fine-tune menu) for the duration —
+  re-enabled in `training_finished` on both the success and error
+  paths.
 - ⚠️ Decoder fine-tuning is realistically GPU-only; a CPU-only box is
   hard-warned before a run (`resolve_torch_device`), and the device is
   pinned so an incompatible GPU is honoured as CPU instead of crashing.

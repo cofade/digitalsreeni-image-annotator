@@ -409,7 +409,9 @@ def export_sam_dataset(all_annotations, class_mapping, image_paths, slices, imag
                         break
             if qimage is None:
                 continue
-            file_name_img = f"{image_name}.png"
+            # basename guards against a separator in an image/slice key
+            # escaping images/ during write.
+            file_name_img = f"{os.path.basename(image_name)}.png"
             save_path = os.path.join(images_dir, file_name_img)
             if not os.path.exists(save_path):
                 qimage.save(save_path)
@@ -424,7 +426,7 @@ def export_sam_dataset(all_annotations, class_mapping, image_paths, slices, imag
                 continue
             if image_path.lower().endswith(('.tif', '.tiff', '.czi')):
                 continue
-            file_name_img = image_name
+            file_name_img = os.path.basename(image_name)
             dst_path = os.path.join(images_dir, file_name_img)
             if not os.path.exists(dst_path):
                 shutil.copy2(image_path, dst_path)

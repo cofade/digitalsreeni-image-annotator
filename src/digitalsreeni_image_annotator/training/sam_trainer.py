@@ -228,6 +228,19 @@ class SAMFineTuner(QObject):
         return model, model.predictor, model_file
 
     @staticmethod
+    def _device_label(device) -> str:
+        """``cuda:0 (NVIDIA GeForce RTX 4070)`` — make it obvious the GPU is in
+        use (a bare ``cuda:0`` reads to users like the GPU wasn't detected)."""
+        try:
+            import torch
+            if str(device).startswith("cuda"):
+                idx = device.index if getattr(device, "index", None) is not None else 0
+                return f"{device} ({torch.cuda.get_device_name(idx)})"
+        except Exception:
+            pass
+        return str(device)
+
+    @staticmethod
     def _apply_freeze(net, freeze_image_encoder: bool):
         net.eval()
         for p in net.parameters():
@@ -258,11 +271,13 @@ class SAMFineTuner(QObject):
     ) -> dict:
         """Fine-tune and save. Returns a small result dict; raises on failure.
 
-        ``groups`` is an iterable of :class:`SampleGroup`. ``batch_size`` is
-        treated as a gradient-accumulation count (SAM prompts are per-object,
-        so we step the optimizer every ``batch_size`` instances).
+        ``groups`` is an iterable of :class:`SampleGroup`. ``batch_size`` is a
+        gradient-accumulation count over **images** — all of an image's objects
+        are backpropagated together (one backward per image), so the optimizer
+        steps every ``batch_size`` images.
         """
         import torch
+        from ultralytics.utils import ops
 
         groups = list(groups)
         if not groups:
@@ -275,7 +290,7 @@ class SAMFineTuner(QObject):
         device = next(net.parameters()).device
         trainable, n_trainable = self._apply_freeze(net, freeze_image_encoder)
         self.progress_signal.emit(
-            f"Base: {os.path.basename(base_file)} | device: {device} | "
+            f"Base: {os.path.basename(base_file)} | device: {self._device_label(device)} | "
             f"images: {len(groups)} | trainable params: {n_trainable:,} | "
             f"encoder {'TRAINED' if not freeze_image_encoder else 'frozen'}"
         )
@@ -317,9 +332,16 @@ class SAMFineTuner(QObject):
                         pm, _ = pred.prompt_inference(
                             im_t, multimask_output=False, **prompt
                         )
-                    logits = torch.nn.functional.interpolate(
-                        pm[:1].unsqueeze(0).float(), size=(h, w),
-                        mode="bilinear", align_corners=False,
+                    # Map the low-res logits back to the original image with the
+                    # SAME transform inference uses (SAM2Predictor.postprocess →
+                    # ops.scale_masks(padding=False)). SAM2 letterboxes the image
+                    # (resize-min-ratio + pad bottom/right) and scale_masks crops
+                    # that padding before upsampling. A naive interpolate over the
+                    # full low-res mask instead bakes the padding region into the
+                    # target, so the decoder learns masks shifted by the pad — the
+                    # downward shift seen on non-square images (issue #73 testing).
+                    logits = ops.scale_masks(
+                        pm[:1].unsqueeze(0).float(), (h, w), padding=False
                     )
                     target = torch.from_numpy(inst["mask"].astype(np.float32))[None, None].to(device)
                     inst_losses.append(_focal_dice_loss(logits, target))

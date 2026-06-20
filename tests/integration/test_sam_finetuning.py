@@ -210,6 +210,29 @@ class TestUltralyticsAPI:
                      "_prepare_prompts", "set_image"):
             assert hasattr(SAM2Predictor, name), f"SAM2Predictor.{name} missing"
 
+    def test_ops_scale_masks_padding_false_geometry(self):
+        """The training loss maps logits back with the same letterbox-aware
+        transform inference uses (ops.scale_masks, padding=False). Guard the
+        *behavior*, not just the name: with padding=False the crop is
+        top-left-anchored, so foreground in the bottom padding band of a
+        non-square target is dropped while top content survives. A semantic
+        change in Ultralytics (not just a rename) trips this fast test rather
+        than only the GPU-gated e2e."""
+        torch = pytest.importorskip("torch")
+        pytest.importorskip("ultralytics")
+        from ultralytics.utils import ops
+
+        assert hasattr(ops, "scale_masks")
+        # Target 600x1000 (landscape) -> ~bottom 40% of a 256-tall mask is padding.
+        top = torch.zeros(1, 1, 256, 256)
+        top[..., 0:40, :] = 1.0
+        bottom = torch.zeros(1, 1, 256, 256)
+        bottom[..., 215:256, :] = 1.0
+        out_top = ops.scale_masks(top, (600, 1000), padding=False)
+        out_bottom = ops.scale_masks(bottom, (600, 1000), padding=False)
+        assert out_top.sum() > 0, "top content must survive the crop"
+        assert out_bottom.sum() == 0, "bottom padding band must be cropped (padding=False)"
+
 
 # ── opt-in end-to-end (needs weights; realistically GPU) ─────────────────────
 
@@ -290,3 +313,66 @@ def test_encoder_path_multi_instance_per_image(temp_dir):
         prompt_type="bbox", out_path=out,
     )
     assert res["verified"] and res["instances"] == 4
+
+
+@pytest.mark.skipif(
+    os.environ.get("SAM_TRAIN_E2E") != "1",
+    reason="set SAM_TRAIN_E2E=1 to run the landscape mask-shift regression",
+)
+def test_landscape_no_mask_shift(temp_dir):
+    """Regression for the downward mask shift (issue #73 GUI testing).
+
+    SAM2 letterboxes (pad bottom/right) and inference crops the padding via
+    ops.scale_masks(padding=False). The training loss must use the SAME
+    transform; a naive interpolate baked the padding into the target and the
+    decoder learned masks shifted down. This must use a NON-square image (square
+    images have zero padding and so never exposed the bug).
+    """
+    pytest.importorskip("ultralytics")
+    import cv2
+    from ultralytics import SAM
+
+    from src.digitalsreeni_image_annotator.training.sam_trainer import (
+        SAM_MODELS_DIR,
+        SAMFineTuner,
+    )
+
+    if not os.path.exists(os.path.join(SAM_MODELS_DIR, "sam2_t.pt")):
+        pytest.skip("sam2_t.pt not cached")
+
+    H, W = 600, 1000  # landscape -> SAM2 pads the bottom
+
+    def disk(seed, cy, cx):
+        rng = np.random.RandomState(seed)
+        img = (rng.rand(H, W, 3) * 50).astype(np.uint8)
+        yy, xx = np.ogrid[:H, :W]
+        m = (yy - cy) ** 2 + (xx - cx) ** 2 < 60 ** 2
+        img[m] = [230, 40, 40]
+        return img, m
+
+    groups = []
+    for i in range(4):
+        img, m = disk(i, 460 + (i % 2) * 40, 300 + i * 120)
+        cnts, _ = cv2.findContours(m.astype(np.uint8), cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
+        groups.append(SampleGroup(lambda im=img: im.copy(), [{"segmentation": cnts[0].flatten().tolist()}]))
+
+    out = os.path.join(temp_dir, "landscape_sam2_t.pt")
+    SAMFineTuner().train(
+        "SAM 2 tiny", groups, epochs=8, lr=1e-4, batch_size=2,
+        freeze_image_encoder=True, prompt_type="bbox", out_path=out,
+    )
+
+    # Evaluate on a fresh image, object near the bottom (worst case for the shift).
+    img, m = disk(99, 480, 520)
+    x1, y1, x2, y2 = mask_to_xyxy(m)
+    gt_cy = float(np.where(m)[0].mean())
+
+    r = SAM(out)(img, bboxes=[[x1, y1, x2, y2]], verbose=False)
+    pm = r[0].masks.data.cpu().numpy()[0].astype(bool)
+    ys, xs = np.where(pm)
+    assert xs.size > 0, "fine-tuned model produced an empty mask"
+    pred_cy = ys.mean()
+    iou = (pm & m).sum() / (pm | m).sum()
+
+    assert abs(pred_cy - gt_cy) < 25, f"vertical shift {pred_cy - gt_cy:.1f}px (regression)"
+    assert iou > 0.7, f"IoU {iou:.3f} too low"

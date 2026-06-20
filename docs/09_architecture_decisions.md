@@ -805,6 +805,17 @@ won't reload (cf. facebookresearch/sam2#337 key-mismatch failures).
   pinned so an incompatible GPU is honoured as CPU instead of crashing.
 - ⚠️ Encoder features are recomputed per epoch (bounded memory) rather
   than cached across epochs; revisit if large datasets need the speedup.
+- ⚠️ **Loss must use the inference coordinate frame.** SAM2 letterboxes
+  the image (`LetterBox(1024, center=False)`, pad bottom/right) and
+  inference maps masks back with `ops.scale_masks(..., padding=False)`,
+  which crops that padding before upsampling. The training loss therefore
+  runs the decoder logits through the *same* `ops.scale_masks` before
+  comparing to the GT mask — a naive `F.interpolate` over the full
+  low-res mask bakes the padding into the target and the decoder learns
+  masks shifted by the pad (a downward shift on non-square images, caught
+  only during GUI testing because the e2e tests used square images). The
+  landscape regression test (`test_landscape_no_mask_shift`) and the
+  `ops.scale_masks` API-drift guard protect this.
 
 ---
 

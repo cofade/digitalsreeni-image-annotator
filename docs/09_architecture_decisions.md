@@ -739,6 +739,86 @@ persistence mechanism in the app.
 
 ---
 
+## ADR-021: SAM Fine-Tuning via a Custom Loop over the Ultralytics SAM2 Module
+
+**Status**: Accepted
+
+**Context**: Users annotating domain-specific imagery (microscopy,
+medical, materials) get generic SAM masks that need heavy correction.
+We want to let them fine-tune SAM 2 / 2.1 on their own annotations and
+reuse the result in the existing SAM-box / SAM-points workflow
+(upstream issue bnsreenu#73).
+
+The obvious approach — mirror the YOLO trainer's `model.train(...)` —
+**does not work**: Ultralytics registers only a *predictor* for SAM's
+`segment` task (`SAM.task_map`), so `SAM(...).train()` raises
+`NotImplementedError` (verified on ultralytics 8.4.51).
+
+**Decision**: Fine-tune with a custom PyTorch loop that **reuses
+Ultralytics' own forward path**. `SAM(...).model` is a plain
+`SAM2Model` `nn.Module`; its `SAM2Predictor` exposes the forward in
+reusable pieces — `get_im_features` (image encoder) and
+`prompt_inference` / `_inference_features` (prompt encoder + mask
+decoder). These are *not* wrapped in `inference_mode` unless reached
+via the public `__call__`, so calling them directly under
+`torch.enable_grad()` yields differentiable mask logits. The engine
+(`training/sam_trainer.py`) adds focal+dice loss (≈20:1) + AdamW +
+backward. Default freeze policy: train only `sam_mask_decoder`
+(image + prompt encoders frozen); an optional flag also unfreezes the
+image encoder.
+
+Checkpoints are saved as `{"model": state_dict}` — the exact shape
+Ultralytics' `_load_checkpoint` reads (it rebuilds the architecture
+from the filename suffix and `load_state_dict`s the nested `model`
+key). Consequently a fine-tuned file **must keep its base token in the
+name** (e.g. `myrun_sam2_t.pt`), enforced by `make_custom_filename`;
+`build_sam` selects the architecture by `ckpt.endswith(token)`. Every
+save is round-trip-verified by reloading through `SAM(out_path)` and
+running one forward — failing loudly rather than producing a file that
+won't reload (cf. facebookresearch/sam2#337 key-mismatch failures).
+
+**Alternatives considered**:
+- *facebookresearch/sam2 training code* — rejected: heavy extra
+  dependency overlapping Ultralytics' bundled SAM2, and its checkpoints
+  need state-dict conversion to reload into our `SAM()` inference path.
+- *Export dataset + train externally* — rejected as the default (less
+  "integrated"), though `Prepare SAM Dataset` + folder training give a
+  similar offline path for users who want it.
+
+**Consequences**:
+- ✅ No new runtime dependency; fine-tuned models drop straight into
+  the existing SAM selector and inference path.
+- ✅ Exposure to Ultralytics internals is confined to a few
+  already-exercised predictor methods, guarded by
+  `test_sam_finetuning.py::TestUltralyticsAPI` (fails on an upgrade
+  that renames them).
+- ⚠️ The trainer loads its **own** `SAM` instance on its `QThread`
+  (it does not touch `SAMUtils._model`), and must **not** use
+  `sam_utils._run_sync` (its re-entry guard is GUI-thread-local). The
+  real hazard is two SAM models (resident inference + training) on one
+  CUDA context, so `SAMTrainController` locks the SAM inference UI
+  (tools + model selector + the fine-tune menu) for the duration —
+  re-enabled in `training_finished` on both the success and error
+  paths.
+- ⚠️ Decoder fine-tuning is realistically GPU-only; a CPU-only box is
+  hard-warned before a run (`resolve_torch_device`), and the device is
+  pinned so an incompatible GPU is honoured as CPU instead of crashing.
+- ⚠️ Encoder features are recomputed per epoch (bounded memory) rather
+  than cached across epochs; revisit if large datasets need the speedup.
+- ⚠️ **Loss must use the inference coordinate frame.** SAM2 letterboxes
+  the image (`LetterBox(1024, center=False)`, pad bottom/right) and
+  inference maps masks back with `ops.scale_masks(..., padding=False)`,
+  which crops that padding before upsampling. The training loss therefore
+  runs the decoder logits through the *same* `ops.scale_masks` before
+  comparing to the GT mask — a naive `F.interpolate` over the full
+  low-res mask bakes the padding into the target and the decoder learns
+  masks shifted by the pad (a downward shift on non-square images, caught
+  only during GUI testing because the e2e tests used square images). The
+  landscape regression test (`test_landscape_no_mask_shift`) and the
+  `ops.scale_masks` API-drift guard protect this.
+
+---
+
 ## Decisions Under Consideration
 
 ### Consider pytest-qt for Utility Testing

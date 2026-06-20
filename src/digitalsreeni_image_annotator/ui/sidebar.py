@@ -146,11 +146,11 @@ def build_sidebar(window):
     dino_browse_layout.setContentsMargins(0, 0, 0, 0)
     window.lbl_dino_custom = QLabel("No path set")
     window.lbl_dino_custom.setWordWrap(True)
-    # Use palette(text) so the colour follows the active stylesheet
-    # (light or dark) — hardcoded #555 used to render unreadable on
-    # dark mode. See "No Hardcoded Colors Rule" in CLAUDE.md.
-    # No font-size here — the caption follows the global ui_font_pt rule.
-    window.lbl_dino_custom.setStyleSheet("color:palette(text);")
+    # No inline colour: `palette(text)` resolves to a near-white role in light
+    # mode (rendering this caption unreadable). The global QLabel stylesheet
+    # rule gives a theme-correct colour in both modes — leave the property out
+    # so the global sheet wins. See "No Hardcoded Colors Rule" in CLAUDE.md.
+    # No font-size here either — the caption follows the global ui_font_pt rule.
     btn_dino_browse = QPushButton("Browse")
     # No fixed width — a 60px cap clipped the caption at large UI font
     # sizes (low-vision zoom); sizeHint tracks the active font.

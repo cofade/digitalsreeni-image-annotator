@@ -303,6 +303,21 @@ class SAMUtils(QObject):
         self._model = None  # ultralytics.SAM instance once loaded
         self._loaded_model_file: str | None = None
         self._device: str | None = None  # resolved at model load
+        # Fine-tuned checkpoints: {display_name: checkpoint_path}. Populated
+        # from training.sam_trainer.list_custom_models() so they load through
+        # the same SAM(path) path as the built-ins (see SAM fine-tuning ADR).
+        self.custom_models: dict[str, str] = {}
+
+    def register_custom_models(self, mapping: dict) -> None:
+        """Merge fine-tuned model entries so they become selectable."""
+        self.custom_models.update(mapping or {})
+
+    def _resolve_model_file(self, model_name: str) -> str:
+        if model_name in MODEL_NAMES:
+            return os.path.join(SAM_MODELS_DIR, MODEL_FILES[model_name])
+        if model_name in self.custom_models:
+            return self.custom_models[model_name]
+        raise ValueError(f"Unknown SAM model: {model_name}")
 
     # ── model lifecycle ────────────────────────────────────────────────
 
@@ -314,27 +329,27 @@ class SAMUtils(QObject):
             print("SAM model unset")
             return
 
-        if model_name not in MODEL_NAMES:
-            raise ValueError(f"Unknown SAM model: {model_name}")
+        # Resolve to a checkpoint path first (built-in name or fine-tuned
+        # model) so an unknown name fails before we touch a worker thread.
+        model_file = self._resolve_model_file(model_name)
 
         # Load on a worker thread to avoid stalling the UI on the
         # ~1-3 s torch model-load. Behaves synchronously to callers and
         # re-raises any load-time exception (network, corrupt weights,
         # CUDA OOM) — only flip `current_sam_model` AFTER success so
         # callers don't see a stale name on failure.
-        _run_sync(self._load_model_blocking, model_name)
+        _run_sync(self._load_model_blocking, model_file)
         self.current_sam_model = model_name
         self.model_changed.emit(model_name)
         print(f"SAM model loaded: {model_name}")
 
-    def _load_model_blocking(self, model_name: str) -> None:
+    def _load_model_blocking(self, model_file: str) -> None:
         # Lazy import keeps app startup fast for users who never use SAM.
         from ultralytics import SAM
         from ..core.torch_utils import resolve_torch_device
 
         self._device, _ = resolve_torch_device()
         self._log_device()
-        model_file = os.path.join(SAM_MODELS_DIR, MODEL_FILES[model_name])
         os.makedirs(os.path.dirname(model_file), exist_ok=True)
         self._model = SAM(model_file)
         self._loaded_model_file = model_file

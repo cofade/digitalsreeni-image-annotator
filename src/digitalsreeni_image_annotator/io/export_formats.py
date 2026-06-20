@@ -447,7 +447,7 @@ def export_sam_dataset(all_annotations, class_mapping, image_paths, slices, imag
     manifest_path = os.path.join(output_dir, 'manifest.json')
     with open(manifest_path, 'w', encoding='utf-8') as f:
         json.dump(manifest, f, indent=2)
-    print(f"[SAM dataset] wrote {len(manifest['images'])} image entries → {manifest_path}")
+    print(f"[SAM dataset] wrote {len(manifest['images'])} image entries -> {manifest_path}")
     return output_dir, manifest_path
 
 

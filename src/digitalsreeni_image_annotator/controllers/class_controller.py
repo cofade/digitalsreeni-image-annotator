@@ -27,6 +27,8 @@ from PyQt6.QtWidgets import (
     QMessageBox,
 )
 
+from ..core.constants import default_class_color
+
 
 class ClassController(QObject):
     def __init__(self, main_window):
@@ -143,7 +145,7 @@ class ClassController(QObject):
 
         if color is None:
             color = QColor(
-                Qt.GlobalColor(len(self.mw.image_label.class_colors) % 16 + 7)
+                default_class_color(len(self.mw.image_label.class_colors))
             )
         elif isinstance(color, str):
             color = QColor(color)

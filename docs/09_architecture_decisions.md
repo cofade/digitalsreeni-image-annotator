@@ -819,6 +819,70 @@ won't reload (cf. facebookresearch/sam2#337 key-mismatch failures).
 
 ---
 
+## ADR-022: Canvas Mask Selection Unified with the Annotation List
+
+**Status**: Accepted (issue bnsreenu#75)
+
+**Context**: Selecting an existing annotation was only possible through the
+bottom-left annotation list (already `ExtendedSelection`) or by *double*-clicking
+a mask on the canvas — which immediately enters vertex-edit mode. There was no
+single-click select, no box/multi-select on the image, and canvas `Delete` worked
+only while in vertex-edit mode. Issue #75 asked for single-click select (without
+entering edit), rubber-band box select, modifier multi-select, and multi-delete —
+all directly on the canvas.
+
+**Decision**: Add an **idle-mode selection layer** to `ImageLabel` and route it
+through the *existing* annotation-list selection so delete/merge/change-class are
+reused unchanged:
+
+- **Idle activation.** Selection is live only in `_is_select_mode()` — no drawing
+  tool, not editing, not SAM, no temp review. Picking any tool restores drawing.
+  No new tool button (matches the user's "a single click should select" ask).
+- **Gestures.** Plain click selects the smallest mask under the cursor (covers
+  segmentation *and* bbox); click on empty space clears; drag draws a rubber band
+  and selects every annotation whose bounds intersect it; **Shift** makes a click
+  toggle and a drag additive. Double-click is unchanged (still vertex edit).
+- **Ctrl stays pan.** Ctrl+drag pan (with its carefully tuned reference frame) is
+  left untouched; multi-select uses Shift instead of Ctrl.
+- **One selection, two surfaces.** The canvas emits
+  `canvasSelectionChanged(annotations, mode)`; `AnnotationController.apply_canvas_selection`
+  computes the new set (replace/add/toggle), sets `image_label.highlighted_annotations`,
+  and **mirrors it onto the list** with signals blocked. `Delete` on the canvas
+  reuses `delete_selected_annotations` (which reads the list selection).
+
+**Consequences**:
+- Delete / Merge / Change-Class need no new logic — they already operate on the
+  list selection, which the canvas now drives.
+- ⚠️ Matching between the canvas and list relies on **dict value-equality**, like
+  the rest of the selection code (`image_label.annotations` is a deepcopy of
+  `all_annotations`, and PyQt round-trips `UserRole` dicts as copies, so identity
+  is never stable). Value-equal duplicate masks would select together — a
+  pre-existing, accepted limitation. See the crosscutting "Canvas selection ↔
+  list selection" section.
+- ⚠️ The list mirror must block `itemSelectionChanged` while selecting, or it
+  recurses back through `update_highlighted_annotations` and overwrites the set.
+
+**Selection is rendered class-colour-independent (amendment).** The first cut
+drew the selected mask in solid **red** — invisible on a red-class mask, and the
+default palette assigned red as the *first* class colour. Selection is now an
+overlay drawn in a final pass on top of every mask, independent of class colour
+and modelled on the sibling open-garden-planner app's CAD selection: a dashed
+selection-blue **bounding-box marquee** (`_SELECTION_COLOR = QColor(0, 120, 215,
+220)`) plus bright opaque-blue **handle squares** at the 4 corners + 4 edge
+midpoints, white-cased and fixed on-screen size (`_draw_selection_overlay` in
+`widgets/image_label.py`). The handles are what make selection unmistakable
+regardless of mask colour (a single thin dashed outline was too faint; an earlier
+marching-ants + marquee was too busy). The handles are visual markers only —
+resizing via handles is a separate feature (upstream #40). The mask keeps its
+class colour; the rubber-band rect uses the same blue dashed style. Separately,
+the default class palette
+(`core/constants.py::DEFAULT_CLASS_COLORS` / `default_class_color`) was reordered
+so red is **last** (no fresh project starts on red) and muted, and the default
+fill opacity dropped to `0.2` (`DEFAULT_FILL_OPACITY`) so masks don't bury the
+image. Existing projects keep their persisted class colours.
+
+---
+
 ## Decisions Under Consideration
 
 ### Consider pytest-qt for Utility Testing

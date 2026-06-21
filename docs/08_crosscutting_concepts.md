@@ -404,6 +404,11 @@ def generate_slice_name(filename, t, z, c, s):
 |----------|--------|
 | Ctrl+Wheel | Zoom In/Out |
 | Ctrl+Drag | Pan |
+| Click (no tool) | Select mask under cursor |
+| Shift+Click (no tool) | Toggle mask in selection |
+| Drag (no tool) | Rubber-band box-select; Shift+Drag adds |
+| Delete | Delete selected mask(s) |
+| Double-click | Enter vertex-edit mode |
 | Esc | Cancel Current Annotation |
 | Enter | Finish/Accept Annotation |
 | Up/Down | Navigate Slices (multi-dimensional) |
@@ -639,3 +644,55 @@ paint commits into O(N). See ADR-018.
 
 See ADR-018 in `09_architecture_decisions.md` for the rationale and
 the full pattern.
+
+## Canvas Selection ↔ List Selection
+
+When no drawing tool is active (`ImageLabel._is_select_mode()`), the canvas
+behaves like a pointer: a single click selects the smallest mask under the
+cursor, a drag draws a rubber band that box-selects, and **Shift** toggles /
+adds. This is wired so there is **one** selection shared by the canvas overlay
+(`highlighted_annotations`, blue selection outline + handles) and the bottom-left
+annotation list — so
+`Delete` / `Merge` / `Change Class` (which read `annotation_list.selectedItems()`)
+work identically whether you selected on the image or in the list. See ADR-022.
+
+Flow: `ImageLabel` emits `canvasSelectionChanged(annotations, mode)` (mode =
+`replace` | `add` | `toggle`) → `AnnotationController.apply_canvas_selection`
+computes the new set, assigns `image_label.highlighted_annotations`, and mirrors
+it onto the list.
+
+Two non-obvious rules make this correct:
+
+- **Match by value-equality, never identity.** `image_label.annotations` is a
+  `deepcopy` of `all_annotations`, and PyQt round-trips dicts stored in a list
+  item's `UserRole` as *copies* — so the "same" annotation has different object
+  identity on the canvas, in `all_annotations`, and in a list item. Every
+  selection comparison therefore uses dict `==` (`a == b`), the same convention
+  as `select_annotation_in_list`, `delete_selected_annotations`, and the
+  `annotation in highlighted_annotations` test in `draw_annotations`. A
+  consequence: two value-equal duplicate masks select together — accepted, and
+  pre-existing.
+- **Block list signals while mirroring.** `apply_canvas_selection` wraps the
+  programmatic list selection in `annotation_list.blockSignals(True/False)`.
+  Without it, `setSelected` fires `itemSelectionChanged` →
+  `update_highlighted_annotations`, which would overwrite the freshly-computed
+  set with the list items' own objects (and clobber a `toggle`).
+
+**Ctrl is reserved for pan.** Multi-select uses **Shift**, not Ctrl, because
+Ctrl+drag is the pan gesture (whose reference-frame handling is deliberately
+delicate — see [Pan + Zoom Reference Frames](#pan--zoom-reference-frames)).
+Leaving Ctrl untouched keeps that gesture intact.
+
+**Selection is drawn independent of class colour.** A selected mask is *not*
+recoloured (the first version turned it red, which vanished on a red-class mask,
+and red was the default first class colour). Instead `draw_annotations` keeps the
+class colour and, in a final pass on top of every mask, draws a dashed
+selection-blue **bounding-box marquee plus bright handle squares** at the 4
+corners + 4 edge midpoints (`_SELECTION_COLOR`, `_draw_selection_overlay`) —
+modelled on the sibling open-garden-planner app's CAD selection. The handles
+carry the visibility (a single thin dashed outline was too faint); they are
+visual markers only — resize-by-handle is a separate feature (upstream #40). This
+never collides with any class colour. Relatedly, the default class palette
+(`core/constants.py`) was reordered so red is last and the fill opacity lowered
+to keep the image legible — see the No Hardcoded Colors Rule for the broader
+"don't fight the theme/colours" theme.

@@ -192,6 +192,8 @@ See [Runtime View](docs/06_runtime_view.md#multi-dimensional-image-loading) for 
 | GPU model unload | `model.cpu()` → `gc.collect()` → `torch.cuda.empty_cache()` + `ipc_collect()` + `synchronize()` — full reclaim requires app restart due to per-process CUDA context | Setting refs to None alone leaves circular refs pinned and shows zero Task Manager drop. See [Releasing Model GPU Memory](docs/08_crosscutting_concepts.md#releasing-model-gpu-memory). |
 | Export image-path lookup | Exact-key match first, substring fallback only | `"bee.jpg" in "honeybee.jpg"` is True — substring-only matching writes the wrong file. See [Export Format Filename Matching](docs/08_crosscutting_concepts.md#export-format-filename-matching). |
 | F2 / global shortcuts | Use `QShortcut` with `Qt.ShortcutContext.ApplicationShortcut`, not `keyPressEvent` | `QTableWidget` consumes F2 for in-cell edit before it bubbles up. |
+| Canvas ↔ list selection sync | Canvas selection (idle-mode click/Shift/rubber-band) drives the annotation list via `apply_canvas_selection`; mirror the list with `blockSignals(True/False)` and match annotations by **value-equality**, never identity | PyQt round-trips `UserRole` dicts as copies and `image_label.annotations` is a deepcopy, so identity is never stable; un-blocked `setSelected` recurses through `update_highlighted_annotations`. Multi-select uses **Shift** (Ctrl stays pan). See [ADR-022](docs/09_architecture_decisions.md#adr-022-canvas-mask-selection-unified-with-the-annotation-list). |
+| Selection rendering | Don't recolour a selected mask. Keep its class colour; draw a class-colour-independent overlay (dashed `_SELECTION_COLOR` blue bounding box + bright handle squares at corners/edge-midpoints, OGP-style) in a final pass — `_draw_selection_overlay`. Handles are visual-only (resize = #40). Default class colours come from `core/constants.py::default_class_color` (red last, muted) | Red selection was invisible on a red-class mask; a thin dashed outline alone was too faint; the handles carry the visibility. See ADR-022 amendment. |
 
 ## Development Workflow
 
@@ -268,6 +270,10 @@ See [Risks and Technical Debt](docs/11_risks_and_technical_debt.md) for full lis
 |--------|--------|
 | Ctrl+Wheel | Zoom |
 | Ctrl+Drag | Pan |
+| Click / Shift+Click (no tool) | Select / toggle mask |
+| Drag / Shift+Drag (no tool) | Rubber-band select / add |
+| Double-click | Vertex-edit mode |
+| Delete | Delete selected mask(s) |
 | Enter | Finish/Accept |
 | Esc | Cancel |
 | Up/Down | Navigate slices |

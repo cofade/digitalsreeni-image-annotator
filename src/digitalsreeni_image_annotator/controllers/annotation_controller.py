@@ -36,6 +36,7 @@ from PyQt6.QtWidgets import (
 from shapely.geometry import MultiPolygon, Polygon
 from shapely.ops import unary_union
 
+from ..core.constants import default_class_color
 from ..utils import calculate_area, calculate_bbox
 
 
@@ -229,7 +230,7 @@ class AnnotationController(QObject):
 
             if class_name not in self.mw.image_label.class_colors:
                 color = QColor(
-                    Qt.GlobalColor(len(self.mw.image_label.class_colors) % 16 + 7)
+                    default_class_color(len(self.mw.image_label.class_colors))
                 )
                 self.mw.image_label.class_colors[class_name] = color
 
@@ -333,6 +334,9 @@ class AnnotationController(QObject):
 
     def clear_highlighted_annotation(self):
         self.mw.image_label.highlighted_annotations.clear()
+        # Selection is gone — Merge/Change Class must follow, or they linger
+        # enabled against an empty list selection after an image/slice switch.
+        self._sync_selection_buttons(0)
         self.mw.image_label.update()
 
     def update_highlighted_annotations(self):
@@ -341,9 +345,59 @@ class AnnotationController(QObject):
             item.data(Qt.ItemDataRole.UserRole) for item in selected_items
         ]
         self.mw.image_label.update()
+        self._sync_selection_buttons(len(selected_items))
 
-        self.mw.merge_button.setEnabled(len(selected_items) >= 2)
-        self.mw.change_class_button.setEnabled(len(selected_items) > 0)
+    def _sync_selection_buttons(self, count):
+        """Merge needs ≥2 annotations; Change Class needs ≥1. Shared by the
+        list-driven and canvas-driven (issue #75) selection paths."""
+        self.mw.merge_button.setEnabled(count >= 2)
+        self.mw.change_class_button.setEnabled(count > 0)
+
+    def apply_canvas_selection(self, annotations, mode):
+        """Apply a selection change that originated on the canvas (issue #75)
+        and mirror it onto the annotation list so Delete / Merge / Change
+        Class operate on the same set. Matching uses dict value-equality,
+        consistent with the rest of the selection code.
+
+        ``mode`` is one of ``"replace"``, ``"add"``, ``"toggle"``.
+        """
+        current = list(self.mw.image_label.highlighted_annotations)
+
+        def contains(seq, ann):
+            return any(a == ann for a in seq)
+
+        if mode == "replace":
+            new = list(annotations)
+        elif mode == "add":
+            new = current + [a for a in annotations if not contains(current, a)]
+        elif mode == "toggle":
+            new = list(current)
+            for a in annotations:
+                match = next((x for x in new if x == a), None)
+                if match is not None:
+                    new.remove(match)
+                else:
+                    new.append(a)
+        else:
+            return
+
+        self.mw.image_label.highlighted_annotations = new
+
+        # Mirror onto the list widget. Block signals so the programmatic
+        # selection doesn't retrigger itemSelectionChanged →
+        # update_highlighted_annotations, which would overwrite `new` with
+        # the list items' own (all_annotations) object identities.
+        lst = self.mw.annotation_list
+        lst.blockSignals(True)
+        lst.clearSelection()
+        for i in range(lst.count()):
+            item = lst.item(i)
+            if contains(new, item.data(Qt.ItemDataRole.UserRole)):
+                item.setSelected(True)
+        lst.blockSignals(False)
+
+        self._sync_selection_buttons(len(new))
+        self.mw.image_label.update()
 
     def highlight_annotation_in_list(self, annotation):
         for i in range(self.mw.annotation_list.count()):
@@ -422,6 +476,8 @@ class AnnotationController(QObject):
                 self.sort_annotations_by_class()
 
             self.mw.image_label.highlighted_annotations.clear()
+            # Selection is now empty — Merge/Change Class must follow.
+            self._sync_selection_buttons(0)
             self.mw.image_label.update()
 
             self.mw.update_slice_list_colors()

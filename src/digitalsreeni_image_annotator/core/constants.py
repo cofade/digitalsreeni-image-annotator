@@ -21,5 +21,32 @@ MAX_ZOOM = 500
 DEFAULT_ZOOM = 100
 
 # Annotation settings
-DEFAULT_FILL_OPACITY = 0.3
+# Mask fill alpha — kept low so the underlying image stays legible through
+# overlapping masks (the border still carries the class colour).
+DEFAULT_FILL_OPACITY = 0.2
+
+# Default class colour palette (tab10-style, moderately muted so masks don't
+# overpower the image). Red is intentionally LAST so a fresh project's first
+# class isn't red — selection highlighting is class-colour-independent, but
+# starting on red was needlessly harsh. Hex strings keep this module Qt-free.
+DEFAULT_CLASS_COLORS = [
+    "#1F77B4",  # blue
+    "#FF7F0E",  # orange
+    "#2CA02C",  # green
+    "#9467BD",  # purple
+    "#17BECF",  # cyan
+    "#BCBD22",  # olive
+    "#E377C2",  # pink
+    "#8C564B",  # brown
+    "#7F7F7F",  # gray
+    "#D62728",  # red (last)
+]
+
+
+def default_class_color(index: int) -> str:
+    """Hex colour for the index-th class, cycling through DEFAULT_CLASS_COLORS.
+
+    Callers wrap the result in ``QColor(...)`` (kept out of this module so the
+    core stays Qt-free)."""
+    return DEFAULT_CLASS_COLORS[index % len(DEFAULT_CLASS_COLORS)]
 

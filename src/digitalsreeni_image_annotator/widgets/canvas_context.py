@@ -38,6 +38,12 @@ class CanvasContext:
     def current_image_key(self):
         return self._mw.current_slice or self._mw.image_file_name
 
+    def has_annotation_selection(self) -> bool:
+        # The annotation list is the source of truth for what a Delete acts
+        # on; the canvas Delete must read it (not the possibly-stale red
+        # highlight) so it can't fire on an empty list selection. See ADR-022.
+        return bool(self._mw.annotation_list.selectedItems())
+
     def all_annotations(self) -> dict:
         return self._mw.all_annotations
 

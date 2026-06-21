@@ -66,6 +66,37 @@ User presses Enter
     └─> update() to show final annotation
 ```
 
+## Mask Selection & Deletion on the Canvas (issue #75)
+
+Active only when no drawing/SAM tool is selected (`ImageLabel._is_select_mode()`).
+Double-click still enters vertex-edit; Ctrl+drag still pans.
+
+```
+User clicks / drags on image (no tool active)
+    │
+    ├─> ImageLabel mouse press/move/release
+    │   ├─> click            → annotation_at(pos)        (smallest mask, seg or bbox)
+    │   ├─> click empty      → []                        (clears selection)
+    │   ├─> drag             → annotations_in_rect(rect) (rubber band, bounds-intersect)
+    │   └─> Shift            → toggle (click) / add (drag)
+    │
+    ├─> emit canvasSelectionChanged(annotations, mode)   mode = replace|add|toggle
+    │
+    └─> AnnotationController.apply_canvas_selection()
+        ├─> compute new set from highlighted_annotations + annotations per mode
+        ├─> image_label.highlighted_annotations = new    (blue selection overlay)
+        ├─> mirror onto annotation_list (blockSignals while selecting)
+        └─> enable Merge (≥2) / Change Class (≥1)
+
+User presses Delete (canvas focused)
+    │
+    ├─> ImageLabel.keyPressEvent → deleteSelectionRequested
+    └─> AnnotationController.delete_selected_annotations()  (confirm → remove → re-sort → autosave)
+```
+
+The canvas and the list share one selection (matched by dict value-equality), so
+Delete/Merge/Change-Class behave the same from either surface. See ADR-022.
+
 ## SAM-Assisted Annotation (SAM-box / SAM-points)
 
 ```

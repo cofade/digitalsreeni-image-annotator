@@ -115,10 +115,11 @@ class ImageLabel(QLabel):
         self.selection_origin = None
         self.selecting = False
         self.selection_rect = None
-        # Direct-manipulation bbox edit (issue #40). None when idle; otherwise a
-        # dict {annotation, mode: resize|pending_move|move, handle, orig_bbox,
+        # Direct-manipulation shape edit via the selection handles (issue #40).
+        # None when idle; otherwise a dict {annotation, mode:
+        # resize|pending_move|move, handle, kind: seg|bbox, orig_bbox, orig_seg,
         # start_pos, moved} while a handle/interior drag of the single selected
-        # bbox is live.
+        # shape is live.
         self.bbox_edit = None
         self.setMouseTracking(True)
         self.setFocusPolicy(Qt.FocusPolicy.StrongFocus)
@@ -843,7 +844,7 @@ class ImageLabel(QLabel):
         elif self._is_select_mode() and self.selection_origin is not None and left_down:
             self._update_selection_drag(pos)
         elif self._is_select_mode() and not left_down:
-            # Hover feedback over a selected bbox's handles/interior (#40).
+            # Hover feedback over a selected shape's handles/interior (#40).
             self._update_select_cursor(pos)
         else:
             handler = self.active_tool_handler
@@ -1028,27 +1029,32 @@ class ImageLabel(QLabel):
 
     @staticmethod
     def _annotation_contains(annotation, pos):
-        """Hit-test a single annotation (segmentation polygon or bbox)."""
-        if "segmentation" in annotation:
-            seg = annotation["segmentation"]
+        """Hit-test a single annotation (segmentation polygon or bbox). Falls
+        through to the bbox when segmentation is absent/None/empty — an imported
+        bbox-only annotation carries ``"segmentation": None``."""
+        seg = annotation.get("segmentation")
+        if seg:
             points = [QPoint(int(x), int(y)) for x, y in zip(seg[0::2], seg[1::2])]
             return len(points) >= 3 and ImageLabel.point_in_polygon(pos, points)
-        if "bbox" in annotation:
-            x, y, w, h = annotation["bbox"]
+        bbox = annotation.get("bbox")
+        if bbox:
+            x, y, w, h = bbox
             return x <= pos[0] <= x + w and y <= pos[1] <= y + h
         return False
 
     @staticmethod
     def _annotation_bbox(annotation):
-        """Axis-aligned bounds (x0, y0, x1, y1) of an annotation, or None."""
-        if "segmentation" in annotation:
-            seg = annotation["segmentation"]
+        """Axis-aligned bounds (x0, y0, x1, y1) of an annotation, or None. Falls
+        through to the bbox when segmentation is absent/None/empty (imported
+        bbox-only annotations carry ``"segmentation": None``)."""
+        seg = annotation.get("segmentation")
+        if seg:
             xs, ys = seg[0::2], seg[1::2]
-            if not xs or not ys:
-                return None
-            return (min(xs), min(ys), max(xs), max(ys))
-        if "bbox" in annotation:
-            x, y, w, h = annotation["bbox"]
+            if xs and ys:
+                return (min(xs), min(ys), max(xs), max(ys))
+        bbox = annotation.get("bbox")
+        if bbox:
+            x, y, w, h = bbox
             return (x, y, x + w, y + h)
         return None
 

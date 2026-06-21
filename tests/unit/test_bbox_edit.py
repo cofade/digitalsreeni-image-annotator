@@ -67,15 +67,15 @@ def test_bbox_handle_at_corners_and_edges(label):
     assert label._bbox_handle_at(box, (300, 300)) is None  # far away
 
 
-def test_single_selected_bbox(label):
+def test_single_selected_shape(label):
     box = _bbox(10, 10, 80, 80)
     seg = _seg(0, 0, 20)
     label.highlighted_annotations = [box]
-    assert label._single_selected_bbox() is box
-    label.highlighted_annotations = [seg]          # segmentation, not a bbox
-    assert label._single_selected_bbox() is None
-    label.highlighted_annotations = [box, _bbox(0, 0, 5, 5)]  # multi-select
-    assert label._single_selected_bbox() is None
+    assert label._single_selected_shape() is box
+    label.highlighted_annotations = [seg]          # polygons are editable too
+    assert label._single_selected_shape() is seg
+    label.highlighted_annotations = [box, seg]     # multi-select
+    assert label._single_selected_shape() is None
 
 
 # --- resize math -----------------------------------------------------------
@@ -105,14 +105,11 @@ def test_resize_past_anchor_normalises_without_negative_size():
 
 # --- drag lifecycle: move ---------------------------------------------------
 
-def _arm(label, box, mode, handle, start):
+def _arm(label, ann, mode, handle, start):
     label.original_pixmap = QPixmap(100, 100)
-    label.annotations = {box["category_name"]: [box]}
-    label.highlighted_annotations = [box]
-    label.bbox_edit = {
-        "annotation": box, "mode": mode, "handle": handle,
-        "orig_bbox": list(box["bbox"]), "start_pos": start, "moved": False,
-    }
+    label.annotations = {ann["category_name"]: [ann]}
+    label.highlighted_annotations = [ann]
+    label._begin_shape_edit(ann, mode, handle, start)
 
 
 def test_pending_move_promotes_only_after_threshold(label):
@@ -159,7 +156,7 @@ def test_live_annotation_resolves_to_object_not_highlighted_copy(label):
     copy = dict(box)
     label.annotations = {"cell": [box]}
     label.highlighted_annotations = [copy]        # a copy, different identity
-    assert label._single_selected_bbox() is copy  # geometry entry (the copy)
+    assert label._single_selected_shape() is copy  # geometry entry (the copy)
     assert label._live_annotation(copy) is box     # resolves to the live object
 
 
@@ -182,6 +179,65 @@ def test_commit_without_drag_falls_through_to_selection(label):
     label._commit_bbox_drag((40, 40), _FakeEvent())
     assert captured == [([box], "replace")]
     assert label.bbox_edit is None
+
+
+# --- polygon (segmentation) transform: resize scales, move translates --------
+
+def test_resize_scales_polygon(label):
+    seg = _seg(20, 20, 40)                         # square 20..60
+    _arm(label, seg, "resize", "br", (60, 60))
+    label._update_bbox_drag((100, 100))            # drag br to (100,100)
+    # br anchored at the opposite (top-left) corner; the square scales 2x.
+    assert seg["segmentation"] == [20, 20, 100, 20, 100, 100, 20, 100]
+
+
+def test_move_translates_polygon(label):
+    seg = _seg(20, 20, 40)
+    _arm(label, seg, "move", None, (40, 40))
+    label.bbox_edit["mode"] = "move"
+    label._update_bbox_drag((50, 55))              # dx=10, dy=15
+    assert seg["segmentation"] == [30, 35, 70, 35, 70, 75, 30, 75]
+
+
+def test_commit_polygon_move_off_edge_slides_inside(label, qtbot):
+    seg = _seg(70, 70, 20)                          # 70..90
+    _arm(label, seg, "move", None, (80, 80))
+    label.bbox_edit["mode"] = "move"
+    label._update_bbox_drag((120, 120))            # push fully past bottom-right
+    with qtbot.waitSignal(label.bboxEditCommitted, timeout=500):
+        label._commit_bbox_drag((120, 120), _FakeEvent())
+    xs, ys = seg["segmentation"][0::2], seg["segmentation"][1::2]
+    assert min(xs) >= 0 and min(ys) >= 0 and max(xs) <= 100 and max(ys) <= 100
+    assert max(xs) - min(xs) == 20 and max(ys) - min(ys) == 20  # shape preserved
+
+
+def test_resize_polygon_syncs_bbox_key(label):
+    # An imported annotation carries both segmentation and bbox; editing the
+    # polygon must keep the bbox key consistent (it feeds export/training).
+    seg = {
+        "segmentation": [20, 20, 60, 20, 60, 60, 20, 60],
+        "bbox": [20, 20, 40, 40], "category_name": "cell",
+    }
+    label.original_pixmap = QPixmap(100, 100)
+    label.annotations = {"cell": [seg]}
+    label.highlighted_annotations = [seg]
+    label._begin_shape_edit(seg, "resize", "br", (60, 60))
+    label._update_bbox_drag((100, 100))
+    assert seg["bbox"] == [20, 20, 80, 80]         # recomputed from scaled verts
+
+
+def test_escape_restores_polygon(label):
+    seg = _seg(20, 20, 40)
+    orig = list(seg["segmentation"])
+    _arm(label, seg, "move", None, (40, 40))
+    label.bbox_edit["mode"] = "move"
+    label._update_bbox_drag((80, 80))
+    assert seg["segmentation"] != orig
+    label.keyPressEvent(
+        QKeyEvent(QEvent.Type.KeyPress, Qt.Key.Key_Escape, Qt.KeyboardModifier.NoModifier)
+    )
+    assert label.bbox_edit is None
+    assert seg["segmentation"] == orig
 
 
 def test_hover_cursor_reflects_handle_interior_and_outside(label):

@@ -32,6 +32,13 @@ def _bbox(x, y, w, h, number):
     return {"bbox": [x, y, w, h], "category_name": "cell", "number": number}
 
 
+def _seg(x0, y0, side, number):
+    return {
+        "segmentation": [x0, y0, x0 + side, y0, x0 + side, y0 + side, x0, y0 + side],
+        "category_name": "cell", "number": number,
+    }
+
+
 def _seed(window, anns):
     window.image_file_name = "img.png"
     window.current_slice = None
@@ -59,10 +66,7 @@ def test_resize_persists_into_all_annotations(window, monkeypatch):
     window.annotation_controller.apply_canvas_selection([live], "replace")
 
     # Drag the bottom-right handle out to (80, 70) — fully in bounds.
-    il.bbox_edit = {
-        "annotation": live, "mode": "resize", "handle": "br",
-        "orig_bbox": list(live["bbox"]), "start_pos": (50, 50), "moved": False,
-    }
+    il._begin_shape_edit(live, "resize", "br", (50, 50))
     il._update_bbox_drag((80, 70))
     il._commit_bbox_drag((80, 70), _FakeEvent())  # emits bboxEditCommitted → commit
 
@@ -87,13 +91,10 @@ def test_list_selected_bbox_resize_persists(window, monkeypatch):
     window.annotation_controller.update_highlighted_annotations()
     assert il.highlighted_annotations and il.highlighted_annotations[0] is not live
 
-    bbox = il._single_selected_bbox()              # the list copy (geometry)
-    live_obj = il._live_annotation(bbox)           # press handler resolves to live
+    shape = il._single_selected_shape()            # the list copy (geometry)
+    live_obj = il._live_annotation(shape)          # press handler resolves to live
     assert live_obj is live
-    il.bbox_edit = {
-        "annotation": live_obj, "mode": "resize", "handle": "br",
-        "orig_bbox": list(live_obj["bbox"]), "start_pos": (50, 50), "moved": False,
-    }
+    il._begin_shape_edit(live_obj, "resize", "br", (50, 50))
     il._update_bbox_drag((80, 70))
     il._commit_bbox_drag((80, 70), _FakeEvent())
 
@@ -107,13 +108,28 @@ def test_resize_out_of_bounds_is_clamped_on_commit(window, monkeypatch):
     il = window.image_label
     window.annotation_controller.apply_canvas_selection([live], "replace")
 
-    il.bbox_edit = {
-        "annotation": live, "mode": "resize", "handle": "br",
-        "orig_bbox": list(live["bbox"]), "start_pos": (50, 50), "moved": False,
-    }
+    il._begin_shape_edit(live, "resize", "br", (50, 50))
     il._update_bbox_drag((300, 300))               # way past the image edge
     il._commit_bbox_drag((300, 300), _FakeEvent())
 
     x, y, w, h = window.all_annotations["img.png"]["cell"][0]["bbox"]
     assert x >= 0 and y >= 0
     assert x + w <= 100 and y + h <= 100           # clamped inside the image
+
+
+def test_polygon_resize_persists_into_all_annotations(window, monkeypatch):
+    """The common case: a segmentation mask (no bbox key) resized via its
+    handles scales the vertices and persists — the path the bbox-only feature
+    missed."""
+    monkeypatch.setattr(window, "auto_save", lambda: None)
+    (live,) = _seed(window, [_seg(20, 20, 40, 1)])   # square 20..60
+    il = window.image_label
+    window.annotation_controller.apply_canvas_selection([live], "replace")
+
+    il._begin_shape_edit(live, "resize", "br", (60, 60))
+    il._update_bbox_drag((100, 100))                 # scale the square 2x
+    il._commit_bbox_drag((100, 100), _FakeEvent())
+
+    saved = window.all_annotations["img.png"]["cell"][0]["segmentation"]
+    assert saved == [20, 20, 100, 20, 100, 100, 20, 100]
+    assert _selected_data(window) == [live]

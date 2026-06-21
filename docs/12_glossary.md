@@ -66,6 +66,20 @@ edit. See ADR-022.
 A dashed selection rectangle dragged on the canvas in Select Mode; every annotation
 whose bounds intersect it is selected. Shift+drag adds to the current selection.
 
+### Bbox Resize Handle
+One of the 8 blue squares (4 corners + 4 edge midpoints) drawn around a selected
+annotation. For a single selected **bbox** they are direct-manipulation grab
+targets: dragging one resizes the box (opposite side anchored, stays rectangular);
+dragging the interior moves it. For a polygon they are visual markers only. See
+ADR-023.
+
+### Clamp vs Clip
+Two ways to keep annotation coordinates inside the image. **Clamp** snaps each
+coordinate into `[0,w]×[0,h]` and preserves the vertex count — used for live manual
+edits (polygon vertex drag, bbox resize/move). **Clip** intersects the polygon with
+the image rectangle (shapely), which may split or drop it — used for augmented
+polygons. See ADR-024.
+
 ### Semantic Labels
 Single-channel image where each pixel value represents the class ID. Used for semantic segmentation training.
 

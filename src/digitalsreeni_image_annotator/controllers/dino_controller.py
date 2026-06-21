@@ -38,6 +38,8 @@ from PyQt6.QtWidgets import (
     QTextEdit,
 )
 
+from ..core.constants import default_class_color
+
 
 class DINOReviewEventFilter(QObject):
     """Application-wide event filter that lets Enter / Escape accept or
@@ -687,7 +689,7 @@ class DINOController(QObject):
         for temp_class_name, annotations in temp_annotations.items():
             if temp_class_name not in self.mw.image_label.class_colors:
                 color = QColor(
-                    Qt.GlobalColor(len(self.mw.image_label.class_colors) % 16 + 7)
+                    default_class_color(len(self.mw.image_label.class_colors))
                 )
                 self.mw.image_label.class_colors[temp_class_name] = color
             self.mw.image_label.annotations[temp_class_name] = annotations

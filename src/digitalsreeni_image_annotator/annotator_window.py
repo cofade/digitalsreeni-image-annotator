@@ -191,6 +191,7 @@ class ImageAnnotator(QMainWindow):
         il.annotationsReplaced.connect(ac.replace_annotations)
         il.annotationListUpdateRequested.connect(ac.update_annotation_list)
         il.annotationSelected.connect(ac.select_annotation_in_list)
+        il.canvasSelectionChanged.connect(ac.apply_canvas_selection)
         il.deleteSelectionRequested.connect(ac.delete_selected_annotations)
         il.finishPolygonRequested.connect(ac.finish_polygon)
         il.finishRectangleRequested.connect(ac.finish_rectangle)

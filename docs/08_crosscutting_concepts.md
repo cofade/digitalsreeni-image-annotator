@@ -29,14 +29,15 @@ Annotations are stored in image coordinates (unzoomed, absolute pixels):
 ### Bounds Enforcement — Clamp vs Clip (issues #32 / #36)
 
 No commit path may persist coordinates outside the image rectangle (out-of-bounds
-masks silently poison training data). Three pure helpers live in `utils.py`, and
+masks silently poison training data). Four pure helpers live in `utils.py`, and
 the path picks **clamp** or **clip** by whether vertex correspondence must
 survive:
 
 | Helper | Semantics | Used by |
 |--------|-----------|---------|
-| `clamp_segmentation(seg, w, h)` | per-coordinate snap into `[0,w]×[0,h]`; **count-preserving** | polygon vertex-edit commit (Enter) |
-| `clamp_bbox(box, w, h)` | snap `[x,y,w,h]` inside, keep rectangular & ≥1px | bbox resize/move commit (#40) |
+| `clamp_segmentation(seg, w, h)` | per-coordinate snap into `[0,w]×[0,h]`; **count-preserving** | polygon vertex-edit commit (Enter); polygon shape-edit commit (#40) |
+| `clamp_bbox(box, w, h)` | snap `[x,y,w,h]` inside (independent corners — trim); keep rectangular & ≥1px | box **resize** commit (#40) |
+| `fit_bbox_inside(box, w, h)` | translate `[x,y,w,h]` back inside, **size-preserving** | box / polygon **move** commit (#40) |
 | `clip_polygon_to_bounds(seg, w, h)` | shapely intersection (largest part; `buffer(0)` repairs self-intersections); **may split/drop** → `None` | Image Augmenter per transformed polygon (#36) |
 
 **Clamp** for live manual edits (a dragged polygon must not lose or reorder
@@ -426,8 +427,8 @@ def generate_slice_name(filename, t, z, c, s):
 | Click (no tool) | Select mask under cursor |
 | Shift+Click (no tool) | Toggle mask in selection |
 | Drag (no tool) | Rubber-band box-select; Shift+Drag adds |
-| Drag bbox handle (one bbox selected) | Resize the box (stays rectangular) |
-| Drag inside bbox (one bbox selected) | Move the whole box |
+| Drag handle (one shape selected) | Resize — scales a polygon, edits a box |
+| Drag inside (one shape selected) | Move the whole shape |
 | Delete | Delete selected mask(s) |
 | Double-click | Enter vertex-edit mode |
 | Esc | Cancel Current Annotation |
@@ -712,10 +713,11 @@ selection-blue **bounding-box marquee plus bright handle squares** at the 4
 corners + 4 edge midpoints (`_SELECTION_COLOR`, `_draw_selection_overlay`) —
 modelled on the sibling open-garden-planner app's CAD selection. The handles
 carry the visibility (a single thin dashed outline was too faint). For a **single
-selected bbox** those same handle squares are now resize grab targets (and the
+selected shape** those same handle squares are resize grab targets (and the
 interior is a move target) — `_draw_selection_overlay` and the `_bbox_handle_at`
 hit-test share `_bbox_handle_points`, so the squares you see *are* the targets;
-see ADR-023. For a polygon they stay visual markers (vertex edit is double-click).
+see ADR-023. Resizing scales a polygon's vertices (a box edits `[x,y,w,h]`);
+reshaping a polygon vertex-by-vertex is still double-click vertex edit.
 This never collides with any class colour. Relatedly, the default class palette
 (`core/constants.py`) was reordered so red is last and the fill opacity lowered
 to keep the image legible — see the No Hardcoded Colors Rule for the broader

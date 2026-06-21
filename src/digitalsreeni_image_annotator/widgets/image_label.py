@@ -30,7 +30,13 @@ from PyQt6.QtWidgets import QLabel, QMessageBox
 
 from .tools import EraserTool, PaintBrushTool, PolygonTool, RectangleTool
 from ..core.constants import DEFAULT_FILL_OPACITY
-from ..utils import calculate_area, clamp_bbox, clamp_segmentation, fit_bbox_inside
+from ..utils import (
+    calculate_area,
+    calculate_bbox,
+    clamp_bbox,
+    clamp_segmentation,
+    fit_bbox_inside,
+)
 
 warnings.filterwarnings("ignore", category=UserWarning)
 
@@ -775,27 +781,21 @@ class ImageLabel(QLabel):
             elif self.editing_polygon:
                 self.handle_editing_click(pos, event)
             elif self._is_select_mode():
-                bbox = self._single_selected_bbox()
-                handle = self._bbox_handle_at(bbox, pos) if bbox is not None else None
+                shape = self._single_selected_shape()
+                handle = self._bbox_handle_at(shape, pos) if shape is not None else None
                 if handle is not None:
-                    # Grab a resize handle of the single selected bbox (#40).
-                    # Resolve to the live object so the in-place edit isn't lost
-                    # when the selection came from the list (a UserRole copy).
-                    live = self._live_annotation(bbox)
-                    self.bbox_edit = {
-                        "annotation": live, "mode": "resize", "handle": handle,
-                        "orig_bbox": list(live["bbox"]), "start_pos": pos,
-                        "moved": False,
-                    }
-                elif bbox is not None and self._annotation_contains(bbox, pos):
-                    # Press inside the selected bbox: a move, deferred until the
-                    # drag clears the click threshold (see _update_bbox_drag).
-                    live = self._live_annotation(bbox)
-                    self.bbox_edit = {
-                        "annotation": live, "mode": "pending_move", "handle": None,
-                        "orig_bbox": list(live["bbox"]), "start_pos": pos,
-                        "moved": False,
-                    }
+                    # Grab a resize handle of the single selected shape (#40).
+                    # Resolve to the live object first so an edit on a
+                    # list-selected (UserRole copy) shape isn't lost.
+                    self._begin_shape_edit(
+                        self._live_annotation(shape), "resize", handle, pos
+                    )
+                elif shape is not None and self._annotation_contains(shape, pos):
+                    # Press inside the shape: a move, deferred until the drag
+                    # clears the click threshold (see _update_bbox_drag).
+                    self._begin_shape_edit(
+                        self._live_annotation(shape), "pending_move", None, pos
+                    )
                 else:
                     # Idle-mode mask selection (issue #75): remember the press as
                     # the potential rubber-band origin; a click vs. drag is
@@ -1125,7 +1125,7 @@ class ImageLabel(QLabel):
         self.selecting = False
         self.selection_rect = None
 
-    # --- Direct-manipulation bbox editing (issue #40) ---
+    # --- Direct-manipulation shape editing via the selection handles (#40) ---
 
     @staticmethod
     def _bbox_handle_points(bb):
@@ -1140,17 +1140,17 @@ class ImageLabel(QLabel):
             "bl": (x0, y1), "bm": (cx, y1), "br": (x1, y1),
         }
 
-    def _single_selected_bbox(self):
-        """The selected annotation iff exactly one bbox is selected — the only
-        state in which the handles are draggable. Returns the highlighted entry
-        as-is (geometry is all the hover cursor + handle hit-test need); the
-        press handler resolves it to the live object via ``_live_annotation``
-        before mutating. None for a polygon or multi-selection. Cheap — no scan,
-        so it's safe to call on every hover frame."""
+    def _single_selected_shape(self):
+        """The selected annotation iff exactly one shape is selected and it has
+        a bounding box (segmentation or bbox) — the state in which the handles
+        are draggable. Returns the highlighted entry as-is (its geometry is all
+        the hover cursor + handle hit-test need); the press handler resolves it
+        to the live object via ``_live_annotation`` before mutating. None for a
+        multi-selection. Cheap — no scan, so it's safe per hover frame."""
         if len(self.highlighted_annotations) != 1:
             return None
         sel = self.highlighted_annotations[0]
-        return sel if "bbox" in sel else None
+        return sel if self._annotation_bbox(sel) is not None else None
 
     def _live_annotation(self, annotation):
         """Resolve a (possibly list-copied) annotation to the live object inside
@@ -1166,8 +1166,8 @@ class ImageLabel(QLabel):
         return annotation
 
     def _bbox_handle_at(self, annotation, pos):
-        """Handle id under pos for a bbox annotation, or None. Grab radius is
-        zoom-compensated so it stays a constant on-screen target."""
+        """Handle id under pos for a shape's bounding box, or None. Grab radius
+        is zoom-compensated so it stays a constant on-screen target."""
         bb = self._annotation_bbox(annotation)
         if bb is None:
             return None
@@ -1197,48 +1197,134 @@ class ImageLabel(QLabel):
         nw, nh = max(1, abs(x1 - x0)), max(1, abs(y1 - y0))
         return [nx, ny, nw, nh]
 
+    @staticmethod
+    def _scale_segmentation(orig_seg, old_aabb, new_aabb):
+        """Map every vertex from the old bounding box to the new one (affine
+        scale), so resizing the box scales the whole polygon proportionally."""
+        ox0, oy0, ox1, oy1 = old_aabb
+        nx0, ny0, nx1, ny1 = new_aabb
+        sx = (nx1 - nx0) / ((ox1 - ox0) or 1.0)
+        sy = (ny1 - ny0) / ((oy1 - oy0) or 1.0)
+        out = list(orig_seg)
+        for i in range(0, len(out) - 1, 2):
+            out[i] = nx0 + (orig_seg[i] - ox0) * sx
+            out[i + 1] = ny0 + (orig_seg[i + 1] - oy0) * sy
+        return out
+
+    @staticmethod
+    def _translate_segmentation(orig_seg, dx, dy):
+        """Shift every vertex by (dx, dy)."""
+        out = list(orig_seg)
+        for i in range(0, len(out) - 1, 2):
+            out[i] = orig_seg[i] + dx
+            out[i + 1] = orig_seg[i + 1] + dy
+        return out
+
+    @staticmethod
+    def _sync_bbox_key(ann):
+        """Keep a stored bbox key consistent with an edited segmentation.
+        Imported annotations carry both (the bbox feeds export / SAM training);
+        drawn shapes have no bbox key and are left untouched."""
+        if ann.get("bbox") is not None and ann.get("segmentation"):
+            ann["bbox"] = calculate_bbox(ann["segmentation"])
+
+    def _begin_shape_edit(self, live, mode, handle, pos):
+        """Arm a resize/move of one selected shape. `kind` picks the geometry
+        the handles drive: a polygon ("seg") scales/translates its vertices, a
+        box-only annotation ("bbox") edits [x, y, w, h]. orig_bbox is the AABB
+        used as the resize reference for both."""
+        bb = self._annotation_bbox(live)
+        kind = "seg" if live.get("segmentation") else "bbox"
+        self.bbox_edit = {
+            "annotation": live,
+            "mode": mode,
+            "handle": handle,
+            "kind": kind,
+            "orig_bbox": [bb[0], bb[1], bb[2] - bb[0], bb[3] - bb[1]],
+            "orig_seg": list(live["segmentation"]) if kind == "seg" else None,
+            "start_pos": pos,
+            "moved": False,
+        }
+
     def _update_select_cursor(self, pos):
-        """Hover feedback in select mode: resize cursors over a selected bbox's
+        """Hover feedback in select mode: resize cursors over a selected shape's
         handles, a move cursor over its interior, arrow otherwise."""
-        bbox = self._single_selected_bbox()
-        if bbox is not None:
-            handle = self._bbox_handle_at(bbox, pos)
+        shape = self._single_selected_shape()
+        if shape is not None:
+            handle = self._bbox_handle_at(shape, pos)
             if handle is not None:
                 self.setCursor(self._BBOX_HANDLE_CURSORS[handle])
                 return
-            if self._annotation_contains(bbox, pos):
+            if self._annotation_contains(shape, pos):
                 self.setCursor(Qt.CursorShape.SizeAllCursor)
                 return
         self.setCursor(Qt.CursorShape.ArrowCursor)
 
     def _update_bbox_drag(self, pos):
-        """Advance an in-progress bbox resize/move, mutating the annotation's
-        bbox in place so the canvas + selection overlay redraw live."""
+        """Advance an in-progress shape resize/move, mutating the annotation's
+        geometry in place so the canvas + selection overlay redraw live."""
         edit = self.bbox_edit
         if edit is None:
             return
         if edit["mode"] == "pending_move":
             # Promote to a real move only once the drag clears the click
             # threshold, so a plain click still falls through to selection
-            # (e.g. picking a smaller mask nested in the box).
+            # (e.g. picking a smaller mask nested in the shape).
             threshold = 3.0 / max(self.zoom_factor, 1e-6)
             if self.distance(pos, edit["start_pos"]) < threshold:
                 return
             edit["mode"] = "move"
+        ann = edit["annotation"]
         if edit["mode"] == "resize":
-            edit["annotation"]["bbox"] = self._resize_bbox(
-                edit["orig_bbox"], edit["handle"], pos
-            )
+            new_box = self._resize_bbox(edit["orig_bbox"], edit["handle"], pos)
+            if edit["kind"] == "seg":
+                ox, oy, ow, oh = edit["orig_bbox"]
+                nx, ny, nw, nh = new_box
+                ann["segmentation"] = self._scale_segmentation(
+                    edit["orig_seg"], (ox, oy, ox + ow, oy + oh),
+                    (nx, ny, nx + nw, ny + nh),
+                )
+                self._sync_bbox_key(ann)
+            else:
+                ann["bbox"] = new_box
             edit["moved"] = True
         elif edit["mode"] == "move":
-            ox, oy = edit["start_pos"]
-            x, y, w, h = edit["orig_bbox"]
-            edit["annotation"]["bbox"] = [x + (pos[0] - ox), y + (pos[1] - oy), w, h]
+            dx, dy = pos[0] - edit["start_pos"][0], pos[1] - edit["start_pos"][1]
+            if edit["kind"] == "seg":
+                ann["segmentation"] = self._translate_segmentation(
+                    edit["orig_seg"], dx, dy
+                )
+                self._sync_bbox_key(ann)
+            else:
+                x, y, w, h = edit["orig_bbox"]
+                ann["bbox"] = [x + dx, y + dy, w, h]
             edit["moved"] = True
 
+    def _clamp_edited_shape(self, ann, edit, width, height):
+        """Clamp a just-edited shape into the image. A move slides the intact
+        shape back inside (size/shape preserving); a resize trims to the border.
+        clamp_segmentation is the final safety net guaranteeing the bounds even
+        for an oversized shape that a translate can't fully fit."""
+        if edit["kind"] == "seg":
+            seg = ann["segmentation"]
+            if edit["mode"] == "move":
+                bb = self._annotation_bbox(ann)
+                fitted = fit_bbox_inside(
+                    [bb[0], bb[1], bb[2] - bb[0], bb[3] - bb[1]], width, height
+                )
+                seg = self._translate_segmentation(
+                    seg, fitted[0] - bb[0], fitted[1] - bb[1]
+                )
+            ann["segmentation"] = clamp_segmentation(seg, width, height)
+            self._sync_bbox_key(ann)
+        elif edit["mode"] == "move":
+            ann["bbox"] = fit_bbox_inside(ann["bbox"], width, height)
+        else:
+            ann["bbox"] = clamp_bbox(ann["bbox"], width, height)
+
     def _commit_bbox_drag(self, pos, event):
-        """Finish a bbox drag: clamp to the image and persist if the box
-        actually moved; otherwise treat the press as a plain click → select."""
+        """Finish a shape drag: clamp into the image and persist if it actually
+        moved; otherwise treat the press as a plain click → select."""
         edit = self.bbox_edit
         self.bbox_edit = None
         if edit is None:
@@ -1246,13 +1332,10 @@ class ImageLabel(QLabel):
         if edit["moved"]:
             ann = edit["annotation"]
             if self.original_pixmap is not None:
-                w, h = self.original_pixmap.width(), self.original_pixmap.height()
-                # Move slides the intact box back inside (size-preserving);
-                # resize trims the dragged edge to the border.
-                if edit["mode"] == "move":
-                    ann["bbox"] = fit_bbox_inside(ann["bbox"], w, h)
-                else:
-                    ann["bbox"] = clamp_bbox(ann["bbox"], w, h)
+                self._clamp_edited_shape(
+                    ann, edit, self.original_pixmap.width(),
+                    self.original_pixmap.height(),
+                )
             # Point the selection at the live, mutated object so the controller
             # can re-select it by value-equality after the list rebuild. A no-op
             # for a canvas-click selection (already the live object); the real
@@ -1268,11 +1351,17 @@ class ImageLabel(QLabel):
             self._finish_selection(pos, event)
 
     def _cancel_bbox_drag(self):
-        """Escape during a bbox drag: restore the original box, drop the edit."""
+        """Escape during a shape drag: restore the original geometry, drop it."""
         edit = self.bbox_edit
         self.bbox_edit = None
         if edit is not None:
-            edit["annotation"]["bbox"] = list(edit["orig_bbox"])
+            ann = edit["annotation"]
+            if edit["kind"] == "seg":
+                ann["segmentation"] = list(edit["orig_seg"])
+                self._sync_bbox_key(ann)
+            else:
+                x, y, w, h = edit["orig_bbox"]
+                ann["bbox"] = [x, y, w, h]
         self.update()
 
     def start_polygon_edit(self, pos):

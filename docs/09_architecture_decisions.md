@@ -872,9 +872,8 @@ selection-blue **bounding-box marquee** (`_SELECTION_COLOR = QColor(0, 120, 215,
 midpoints, white-cased and fixed on-screen size (`_draw_selection_overlay` in
 `widgets/image_label.py`). The handles are what make selection unmistakable
 regardless of mask colour (a single thin dashed outline was too faint; an earlier
-marching-ants + marquee was too busy). For a **bbox** selection the handles are
-now also grab targets for resize (see ADR-023); for a polygon they remain visual
-markers (vertex editing is via double-click). The mask keeps its
+marching-ants + marquee was too busy). The handles are now grab targets for
+resize/move of any selected shape (see ADR-023). The mask keeps its
 class colour; the rubber-band rect uses the same blue dashed style. Separately,
 the default class palette
 (`core/constants.py::DEFAULT_CLASS_COLORS` / `default_class_color`) was reordered
@@ -884,50 +883,61 @@ image. Existing projects keep their persisted class colours.
 
 ---
 
-## ADR-023: Direct-Manipulation Bbox Editing on the Selection Handles
+## ADR-023: Direct-Manipulation Shape Editing on the Selection Handles
 
 **Status**: Accepted (issue bnsreenu#40)
 
 **Context**: `"bbox"`-keyed annotations (from COCO/YOLO import and detectors)
-were **not editable at all** — `start_polygon_edit` only matches
-`"segmentation"`, so double-click vertex edit skipped them entirely. Rectangles
-*drawn* in-app are stored as 4-point `"segmentation"` (so they are already
-vertex-editable, though that can warp them out of square); the gap is genuine
-`"bbox"` annotations. ADR-022 already draws 8 handle squares around any selected
-annotation, but they were visual-only.
+were **not editable at all** — `start_polygon_edit` only matches `"segmentation"`,
+so double-click vertex edit skipped them. ADR-022 draws 8 handle squares around
+*any* selected annotation, but they were visual-only. A first cut wired them up
+for `"bbox"`-typed annotations only — but almost everything in this app is stored
+as `"segmentation"` (drawn rectangles, polygons, SAM/DINO masks all are), so the
+handles looked grabbable on every shape yet did nothing on the shapes users
+actually have. The handles must act on **any** selected shape.
 
-**Decision**: Wire those handles up as **direct-manipulation** resize/move,
-modelled on the sibling open-garden-planner app's `ResizeHandle`. No new mode and
-no double-click — it works directly off the existing idle-mode selection:
+**Decision**: Wire the handles up as **direct-manipulation** resize/move of the
+single selected shape, modelled on the sibling open-garden-planner app's
+`ResizeHandle`. No new mode, no double-click — it works off the existing idle-mode
+selection:
 
-- **Single-bbox only.** Handles become draggable only when exactly one selected
-  annotation is a `"bbox"` (`_single_selected_bbox()`); a polygon or multi-select
-  leaves them visual.
-- **Anchor-from-handle.** Dragging a corner/edge handle replaces that
-  corner/edge's coordinate and keeps the opposite side fixed
-  (`_resize_bbox`), normalising so width/height never go negative (drag-past-anchor
-  flips) and stay ≥ 1. Per-handle resize cursors match OGP
-  (`_BBOX_HANDLE_CURSORS`: diagonal on corners, straight on edges, `SizeAll` over
-  the interior).
-- **Move is drag-gated.** A press inside the box starts a *pending* move that
-  promotes to an actual move only once the drag clears the existing `3px/zoom`
-  click threshold — so a plain click still falls through to selection (preserving
-  nested-mask click-through). The box mutates **in place** so the canvas + the
-  selection overlay redraw live.
-- **Commit / cancel.** Release clamps the box into the image (ADR-024) and emits
-  `bboxEditCommitted` → `AnnotationController.commit_bbox_edit` (save + list
-  rebuild so the displayed area refreshes + re-mirror the selection). Escape
-  restores the original box.
+- **Single-shape, any kind.** Handles are draggable when exactly one annotation
+  with a bounding box is selected (`_single_selected_shape()`); a multi-select
+  leaves them visual. The press handler resolves to the live object
+  (`_live_annotation`) and records `kind` — `"seg"` (polygon/mask) or `"bbox"`
+  (box-only import) — which picks the geometry the handles drive
+  (`_begin_shape_edit`).
+- **Anchor-from-handle.** A corner/edge drag computes the new bounding box
+  (`_resize_bbox`: replaces the dragged coordinate, opposite side fixed,
+  normalised, ≥ 1px). A `"bbox"` shape sets `[x, y, w, h]` directly; a polygon
+  **scales every vertex** from the old box to the new one
+  (`_scale_segmentation`), so the outline resizes proportionally. Per-handle
+  resize cursors match OGP (`_BBOX_HANDLE_CURSORS`; `SizeAll` over the interior).
+- **Move is drag-gated.** A press inside the shape starts a *pending* move that
+  promotes only once the drag clears the `3px/zoom` threshold — so a plain click
+  still falls through to selection (preserving nested-mask click-through). Move
+  translates the box (`[x,y,w,h]`) or all vertices (`_translate_segmentation`).
+  The geometry mutates **in place** so the canvas + overlay redraw live.
+- **Bbox key stays in sync.** Imported annotations carry both `segmentation` and
+  `bbox`; editing the polygon recomputes the `bbox` key (`_sync_bbox_key`) so
+  export/training stay consistent. Drawn shapes have no bbox key and gain none.
+- **Commit / cancel.** Release clamps into the image (ADR-024 — move slides the
+  intact shape back inside, resize trims/clamps) and emits `bboxEditCommitted` →
+  `AnnotationController.commit_bbox_edit` (save + list rebuild + re-mirror the
+  selection). Escape restores the original geometry.
 
 **Consequences**:
 - The handles you see are exactly the grab targets — `_draw_selection_overlay`
   and `_bbox_handle_at` share `_bbox_handle_points`, so visual and hit geometry
-  can't drift.
-- Resizing keeps the annotation rectangular by construction (it edits
-  `[x, y, w, h]`), unlike vertex-editing a drawn rectangle.
-- ⚠️ The bbox-drag branches sit **before** the rubber-band branch in the idle-mode
-  mouse dispatch; both are gated on `_is_select_mode()` so a tool/edit/SAM state
-  still wins.
+  can't drift — and now they work on every selected shape, not just imported boxes.
+- Resizing a polygon **scales** it (handles drive the bounding box); reshaping a
+  polygon vertex-by-vertex is still double-click vertex edit. A `"bbox"` shape
+  stays rectangular by construction.
+- ⚠️ The shape-drag branches sit **before** the rubber-band branch in the
+  idle-mode mouse dispatch; both are gated on `_is_select_mode()` so a
+  tool/edit/SAM state still wins. (Internal names keep the `bbox_edit` /
+  `bboxEditCommitted` prefix — they denote editing via the bounding-box handles,
+  whatever the underlying geometry.)
 
 ---
 

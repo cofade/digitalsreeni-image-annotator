@@ -97,33 +97,36 @@ User presses Delete (canvas focused)
 The canvas and the list share one selection (matched by dict value-equality), so
 Delete/Merge/Change-Class behave the same from either surface. See ADR-022.
 
-## Bounding-Box Editing on the Canvas (issue #40)
+## Shape Editing on the Canvas (issue #40)
 
-When exactly one **bbox** annotation is selected (idle mode), its 8 selection
-handles become draggable — direct manipulation, no separate mode. The box mutates
-in place so the canvas updates live; release clamps it into the image and persists.
+When exactly one shape is selected (idle mode), its 8 selection handles become
+draggable — direct manipulation, no separate mode, for **any** shape (polygon,
+mask, or imported box). The geometry mutates in place so the canvas updates live;
+release clamps it into the image and persists.
 
 ```
-One bbox selected → handles are grab targets (hover shows resize/move cursors)
+One shape selected → handles are grab targets (hover shows resize/move cursors)
     │
-    ├─> press on a handle      → bbox_edit "resize"  (anchor = opposite corner/edge)
-    ├─> press inside the box   → bbox_edit "pending_move" → "move" once drag > 3px/zoom
+    ├─> press on a handle      → "resize"  (anchor = opposite corner/edge)
+    ├─> press inside the shape → "pending_move" → "move" once drag > 3px/zoom
     │                            (plain click, no drag → falls through to select)
-    ├─> press outside / on a non-bbox → normal rubber-band selection (#75)
+    ├─> press outside          → normal rubber-band selection (#75)
     │
-    ├─> drag  → _update_bbox_drag(): mutate annotation["bbox"] in place
-    │           (resize keeps it rectangular & ≥1px; move translates)
+    ├─> drag → _update_bbox_drag(): mutate geometry in place
+    │          ├─ bbox kind → set [x,y,w,h]   (resize trims; move translates)
+    │          └─ seg  kind → scale vertices (resize) / translate (move);
+    │                         _sync_bbox_key keeps an imported bbox consistent
     │
-    ├─> release → clamp_bbox(...) into the image (ADR-024)
+    ├─> release → clamp into the image (ADR-024: move slides inside, resize clamps)
     │             emit bboxEditCommitted
     │             └─> AnnotationController.commit_bbox_edit()
     │                 save → rebuild list (area refreshes) → re-mirror selection → autosave
     │
-    └─> Esc during drag → restore original box, cancel
+    └─> Esc during drag → restore original geometry, cancel
 ```
 
 Polygon vertex edits (double-click) are likewise clamped into the image on Enter.
-See ADR-023 (bbox editing) and ADR-024 (bounds enforcement).
+See ADR-023 (shape editing) and ADR-024 (bounds enforcement).
 
 ## SAM-Assisted Annotation (SAM-box / SAM-points)
 

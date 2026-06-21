@@ -87,11 +87,12 @@ def test_list_selected_bbox_resize_persists(window, monkeypatch):
     window.annotation_controller.update_highlighted_annotations()
     assert il.highlighted_annotations and il.highlighted_annotations[0] is not live
 
-    bbox = il._single_selected_bbox()              # resolves back to the live obj
-    assert bbox is live
+    bbox = il._single_selected_bbox()              # the list copy (geometry)
+    live_obj = il._live_annotation(bbox)           # press handler resolves to live
+    assert live_obj is live
     il.bbox_edit = {
-        "annotation": bbox, "mode": "resize", "handle": "br",
-        "orig_bbox": list(bbox["bbox"]), "start_pos": (50, 50), "moved": False,
+        "annotation": live_obj, "mode": "resize", "handle": "br",
+        "orig_bbox": list(live_obj["bbox"]), "start_pos": (50, 50), "moved": False,
     }
     il._update_bbox_drag((80, 70))
     il._commit_bbox_drag((80, 70), _FakeEvent())

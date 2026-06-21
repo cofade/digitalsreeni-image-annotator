@@ -9,6 +9,7 @@ from src.digitalsreeni_image_annotator.utils import (
     clamp_bbox,
     clamp_segmentation,
     clip_polygon_to_bounds,
+    fit_bbox_inside,
 )
 
 
@@ -57,6 +58,27 @@ def test_clamp_bbox_fully_outside_keeps_min_size_inside():
     assert w >= 1 and h >= 1
     assert 0 <= x and x + w <= 100        # stays inside even after min-size bump
     assert 0 <= y and y + h <= 100
+
+
+# --- fit_bbox_inside (move path: translate inside, preserve size) ----------
+
+def test_fit_bbox_inside_in_bounds_unchanged():
+    assert fit_bbox_inside([10, 10, 30, 30], 100, 100) == [10, 10, 30, 30]
+
+
+def test_fit_bbox_inside_off_bottom_right_preserves_size():
+    # A move that overshot the bottom-right slides back in, keeping 30x30.
+    assert fit_bbox_inside([120, 120, 30, 30], 100, 100) == [70, 70, 30, 30]
+
+
+def test_fit_bbox_inside_off_top_left_preserves_size():
+    # The bug clamp_bbox had: crossing the top/left edge must NOT collapse.
+    assert fit_bbox_inside([-50, -50, 40, 40], 100, 100) == [0, 0, 40, 40]
+    assert fit_bbox_inside([10, -50, 40, 40], 100, 100) == [10, 0, 40, 40]
+
+
+def test_fit_bbox_inside_larger_than_image_shrinks_to_fit():
+    assert fit_bbox_inside([-10, -10, 200, 200], 100, 100) == [0, 0, 100, 100]
 
 
 # --- clip_polygon_to_bounds ------------------------------------------------

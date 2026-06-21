@@ -150,15 +150,17 @@ def test_commit_move_off_top_left_preserves_size(label, qtbot):
     assert box["bbox"] == [0, 0, 40, 40]         # not collapsed to a sliver
 
 
-def test_resize_targets_live_object_not_highlighted_copy(label):
+def test_live_annotation_resolves_to_object_not_highlighted_copy(label):
     # List-driven selection puts a value-equal COPY in highlighted_annotations
-    # (item.data(UserRole) round-trips as a copy). The handle drag must still
-    # mutate the live object inside label.annotations, or the edit is lost.
+    # (item.data(UserRole) round-trips as a copy). The handle drag must mutate
+    # the live object inside label.annotations, or the edit is lost — so the
+    # press handler resolves the selection via _live_annotation before arming.
     box = _bbox(10, 10, 40, 40)
+    copy = dict(box)
     label.annotations = {"cell": [box]}
-    label.highlighted_annotations = [dict(box)]   # a copy, different identity
-    assert label.highlighted_annotations[0] is not box
-    assert label._single_selected_bbox() is box   # resolves to the live object
+    label.highlighted_annotations = [copy]        # a copy, different identity
+    assert label._single_selected_bbox() is copy  # geometry entry (the copy)
+    assert label._live_annotation(copy) is box     # resolves to the live object
 
 
 def test_commit_resize_clamps(label, qtbot):

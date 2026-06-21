@@ -135,7 +135,8 @@ def clip_polygon_to_bounds(segmentation, width, height):
         return None
     coords = list(chosen.exterior.coords)
     # shapely returns a closed ring (first vertex repeated last); drop it so the
-    # output matches the app's unclosed flat-ring convention.
+    # output matches the app's unclosed flat-ring convention. shapely emits the
+    # closing vertex as the identical tuple, so the `==` here is an exact match.
     if len(coords) > 1 and coords[0] == coords[-1]:
         coords = coords[:-1]
     return [c for point in coords for c in point]

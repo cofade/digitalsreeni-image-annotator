@@ -779,17 +779,21 @@ class ImageLabel(QLabel):
                 handle = self._bbox_handle_at(bbox, pos) if bbox is not None else None
                 if handle is not None:
                     # Grab a resize handle of the single selected bbox (#40).
+                    # Resolve to the live object so the in-place edit isn't lost
+                    # when the selection came from the list (a UserRole copy).
+                    live = self._live_annotation(bbox)
                     self.bbox_edit = {
-                        "annotation": bbox, "mode": "resize", "handle": handle,
-                        "orig_bbox": list(bbox["bbox"]), "start_pos": pos,
+                        "annotation": live, "mode": "resize", "handle": handle,
+                        "orig_bbox": list(live["bbox"]), "start_pos": pos,
                         "moved": False,
                     }
                 elif bbox is not None and self._annotation_contains(bbox, pos):
                     # Press inside the selected bbox: a move, deferred until the
                     # drag clears the click threshold (see _update_bbox_drag).
+                    live = self._live_annotation(bbox)
                     self.bbox_edit = {
-                        "annotation": bbox, "mode": "pending_move", "handle": None,
-                        "orig_bbox": list(bbox["bbox"]), "start_pos": pos,
+                        "annotation": live, "mode": "pending_move", "handle": None,
+                        "orig_bbox": list(live["bbox"]), "start_pos": pos,
                         "moved": False,
                     }
                 else:
@@ -1137,25 +1141,29 @@ class ImageLabel(QLabel):
         }
 
     def _single_selected_bbox(self):
-        """The annotation iff exactly one bbox is selected — the only state in
-        which the selection handles become draggable. A polygon selection or a
-        multi-selection returns None (handles stay visual-only).
-
-        Resolves to the **live object inside self.annotations** (what the canvas
-        renders and save_current_annotations persists), not the highlighted
-        entry: a list-driven selection stores ``item.data(UserRole)``, which
-        PyQt round-trips as a copy, so mutating that in place would be lost.
-        Match by value-equality (identity is unstable — see ADR-022)."""
+        """The selected annotation iff exactly one bbox is selected — the only
+        state in which the handles are draggable. Returns the highlighted entry
+        as-is (geometry is all the hover cursor + handle hit-test need); the
+        press handler resolves it to the live object via ``_live_annotation``
+        before mutating. None for a polygon or multi-selection. Cheap — no scan,
+        so it's safe to call on every hover frame."""
         if len(self.highlighted_annotations) != 1:
             return None
         sel = self.highlighted_annotations[0]
-        if "bbox" not in sel:
-            return None
+        return sel if "bbox" in sel else None
+
+    def _live_annotation(self, annotation):
+        """Resolve a (possibly list-copied) annotation to the live object inside
+        ``self.annotations`` — what the canvas renders and
+        ``save_current_annotations`` persists. A list-driven selection stores
+        ``item.data(UserRole)``, which PyQt round-trips as a *copy*, so mutating
+        that copy in place would be lost. Match by value-equality; identity is
+        unstable (ADR-022). Only the drag-arm path pays this scan, not hover."""
         for anns in self.annotations.values():
             for ann in anns:
-                if ann == sel:
+                if ann == annotation:
                     return ann
-        return sel
+        return annotation
 
     def _bbox_handle_at(self, annotation, pos):
         """Handle id under pos for a bbox annotation, or None. Grab radius is
@@ -1246,8 +1254,9 @@ class ImageLabel(QLabel):
                 else:
                     ann["bbox"] = clamp_bbox(ann["bbox"], w, h)
             # Point the selection at the live, mutated object so the controller
-            # can re-select it by value-equality after the list rebuild (the
-            # highlighted entry may have been a stale list-selection copy).
+            # can re-select it by value-equality after the list rebuild. A no-op
+            # for a canvas-click selection (already the live object); the real
+            # work is replacing a stale list-selection copy.
             self.highlighted_annotations = [ann]
             self.bboxEditCommitted.emit()
         else:

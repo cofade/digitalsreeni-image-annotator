@@ -240,6 +240,21 @@ def test_escape_restores_polygon(label):
     assert seg["segmentation"] == orig
 
 
+def test_bbox_only_annotation_is_selectable_and_resizable(label):
+    # Imported bbox-only annotations carry "segmentation": None — the hover/
+    # select hit-test must not crash on the None, and resize edits the box.
+    ann = {"segmentation": None, "bbox": [10, 10, 40, 40], "category_name": "cell"}
+    label.original_pixmap = QPixmap(100, 100)
+    label.annotations = {"cell": [ann]}
+    label.highlighted_annotations = [ann]
+    assert label._single_selected_shape() is ann       # no TypeError on None seg
+    assert label._bbox_handle_at(ann, (10, 10)) == "tl"
+    label._begin_shape_edit(ann, "resize", "br", (50, 50))
+    label._update_bbox_drag((80, 70))
+    assert ann["bbox"] == [10, 10, 70, 60]             # edited as a box
+    assert ann["segmentation"] is None                  # left untouched
+
+
 def test_hover_cursor_reflects_handle_interior_and_outside(label):
     box = _bbox(10, 10, 80, 80)
     label.annotations = {"cell": [box]}

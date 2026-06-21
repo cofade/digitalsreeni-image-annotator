@@ -399,6 +399,18 @@ class AnnotationController(QObject):
         self._sync_selection_buttons(len(new))
         self.mw.image_label.update()
 
+    def commit_bbox_edit(self):
+        """Persist a bbox resize/move performed directly on the canvas
+        (issue #40). ImageLabel already mutated + clamped the bbox in place, so
+        we save (pushing the new coords into all_annotations), rebuild the list
+        so the displayed area refreshes, then re-mirror the selection so the
+        edited box stays selected and list/canvas stay in sync."""
+        selected = list(self.mw.image_label.highlighted_annotations)
+        self.save_current_annotations()
+        self.update_annotation_list()
+        self.apply_canvas_selection(selected, "replace")
+        self.mw.auto_save()
+
     def highlight_annotation_in_list(self, annotation):
         for i in range(self.mw.annotation_list.count()):
             item = self.mw.annotation_list.item(i)

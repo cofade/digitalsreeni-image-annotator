@@ -872,14 +872,109 @@ selection-blue **bounding-box marquee** (`_SELECTION_COLOR = QColor(0, 120, 215,
 midpoints, white-cased and fixed on-screen size (`_draw_selection_overlay` in
 `widgets/image_label.py`). The handles are what make selection unmistakable
 regardless of mask colour (a single thin dashed outline was too faint; an earlier
-marching-ants + marquee was too busy). The handles are visual markers only —
-resizing via handles is a separate feature (upstream #40). The mask keeps its
+marching-ants + marquee was too busy). The handles are now grab targets for
+resize/move of any selected shape (see ADR-023). The mask keeps its
 class colour; the rubber-band rect uses the same blue dashed style. Separately,
 the default class palette
 (`core/constants.py::DEFAULT_CLASS_COLORS` / `default_class_color`) was reordered
 so red is **last** (no fresh project starts on red) and muted, and the default
 fill opacity dropped to `0.2` (`DEFAULT_FILL_OPACITY`) so masks don't bury the
 image. Existing projects keep their persisted class colours.
+
+---
+
+## ADR-023: Direct-Manipulation Shape Editing on the Selection Handles
+
+**Status**: Accepted (issue bnsreenu#40)
+
+**Context**: `"bbox"`-keyed annotations (from COCO/YOLO import and detectors)
+were **not editable at all** — `start_polygon_edit` only matches `"segmentation"`,
+so double-click vertex edit skipped them. ADR-022 draws 8 handle squares around
+*any* selected annotation, but they were visual-only. A first cut wired them up
+for `"bbox"`-typed annotations only — but almost everything in this app is stored
+as `"segmentation"` (drawn rectangles, polygons, SAM/DINO masks all are), so the
+handles looked grabbable on every shape yet did nothing on the shapes users
+actually have. The handles must act on **any** selected shape.
+
+**Decision**: Wire the handles up as **direct-manipulation** resize/move of the
+single selected shape, modelled on the sibling open-garden-planner app's
+`ResizeHandle`. No new mode, no double-click — it works off the existing idle-mode
+selection:
+
+- **Single-shape, any kind.** Handles are draggable when exactly one annotation
+  with a bounding box is selected (`_single_selected_shape()`); a multi-select
+  leaves them visual. The press handler resolves to the live object
+  (`_live_annotation`) and records `kind` — `"seg"` (polygon/mask) or `"bbox"`
+  (box-only import) — which picks the geometry the handles drive
+  (`_begin_shape_edit`).
+- **Anchor-from-handle.** A corner/edge drag computes the new bounding box
+  (`_resize_bbox`: replaces the dragged coordinate, opposite side fixed,
+  normalised, ≥ 1px). A `"bbox"` shape sets `[x, y, w, h]` directly; a polygon
+  **scales every vertex** from the old box to the new one
+  (`_scale_segmentation`), so the outline resizes proportionally. Per-handle
+  resize cursors match OGP (`_BBOX_HANDLE_CURSORS`; `SizeAll` over the interior).
+- **Move is drag-gated.** A press inside the shape starts a *pending* move that
+  promotes only once the drag clears the `3px/zoom` threshold — so a plain click
+  still falls through to selection (preserving nested-mask click-through). Move
+  translates the box (`[x,y,w,h]`) or all vertices (`_translate_segmentation`).
+  The geometry mutates **in place** so the canvas + overlay redraw live.
+- **Bbox key stays in sync.** Imported annotations carry both `segmentation` and
+  `bbox`; editing the polygon recomputes the `bbox` key (`_sync_bbox_key`) so
+  export/training stay consistent. Drawn shapes have no bbox key and gain none.
+- **Commit / cancel.** Release clamps into the image (ADR-024 — move slides the
+  intact shape back inside, resize trims/clamps) and emits `bboxEditCommitted` →
+  `AnnotationController.commit_bbox_edit` (save + list rebuild + re-mirror the
+  selection). Escape restores the original geometry.
+
+**Consequences**:
+- The handles you see are exactly the grab targets — `_draw_selection_overlay`
+  and `_bbox_handle_at` share `_bbox_handle_points`, so visual and hit geometry
+  can't drift — and now they work on every selected shape, not just imported boxes.
+- Resizing a polygon **scales** it (handles drive the bounding box); reshaping a
+  polygon vertex-by-vertex is still double-click vertex edit. A `"bbox"` shape
+  stays rectangular by construction.
+- ⚠️ The shape-drag branches sit **before** the rubber-band branch in the
+  idle-mode mouse dispatch; both are gated on `_is_select_mode()` so a
+  tool/edit/SAM state still wins. (Internal names keep the `bbox_edit` /
+  `bboxEditCommitted` prefix — they denote editing via the bounding-box handles,
+  whatever the underlying geometry.)
+
+---
+
+## ADR-024: Bounds Enforcement — Clamp Manual Edits, Clip Augmented Data
+
+**Status**: Accepted (issues bnsreenu#32, bnsreenu#36)
+
+**Context**: Annotation coordinates could be persisted outside the image
+rectangle and silently poison training data. *Drawn* shapes were already safe
+(`finish_polygon`/`finish_rectangle` shapely-intersect with the image boundary),
+but two paths weren't: **manual edits** (polygon vertex drag; the new bbox drag)
+clamped nothing, and the **Image Augmenter** wrote rotated/zoomed/flipped polygons
+verbatim.
+
+**Decision**: Add three pure helpers in `utils.py` and apply the right one per
+path:
+
+- **Clamp manual edits** with `clamp_segmentation` / `clamp_bbox` — per-coordinate
+  snap into `[0, w] × [0, h]`. Per-coordinate (not a shapely cut) is deliberate:
+  it **preserves the vertex count and ordering**, so a polygon being dragged never
+  loses or splits points mid-edit. Applied in place at edit commit (polygon Enter;
+  bbox release), persisting through the existing save-by-reference path.
+- **Clip augmented data** with `clip_polygon_to_bounds` — a shapely intersection
+  (largest resulting polygon; `buffer(0)` first to repair self-intersections an
+  affine augmentation can introduce). Geometric trimming is correct here because an
+  augmented shape genuinely extends past the frame and should be cut at the edge,
+  not have stray vertices snapped onto it. A polygon left fully outside returns
+  `None` and is **dropped** by the augmenter loop.
+
+**Consequences**:
+- One vocabulary, two semantics: *clamp* (cheap, count-preserving, for live edits)
+  vs *clip* (exact, may drop/split, for batch augmentation). The choice is about
+  whether vertex correspondence must survive, not about which is "more correct".
+- ⚠️ `clip_polygon_to_bounds` can return fewer/more vertices than the input and may
+  return `None`; callers must handle the drop (the augmenter `continue`s).
+- The existing `finish_polygon`/`finish_rectangle` inline clips were left as-is to
+  keep the diff contained; they could later delegate to `clip_polygon_to_bounds`.
 
 ---
 

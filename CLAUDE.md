@@ -48,8 +48,6 @@ Issue numbers refer to https://github.com/bnsreenu/digitalsreeni-image-annotator
 
 | Issue | Size | Task |
 |-------|------|------|
-| #32 + #36 | medium | Annotations can extend outside image bounds (manual edit + Image Augmenter) → clamp coords on commit; clip augmented polygons to image rect (shapely intersection). Silently poisons training data |
-| #40 | medium | True bbox editing (move whole box, drag edges, keep rectangularity). Currently bbox annotations aren't editable at all — `start_polygon_edit` only matches `"segmentation"` |
 | #63 | blocked | SAM 3 support — blocked on Ultralytics shipping SAM 3; re-check their releases before attempting |
 | #35 | large | Keypoint annotation tool |
 | #24 | large | Magic-wand-style point add/remove mask refinement (partially covered by SAM point prompts) |
@@ -193,7 +191,9 @@ See [Runtime View](docs/06_runtime_view.md#multi-dimensional-image-loading) for 
 | Export image-path lookup | Exact-key match first, substring fallback only | `"bee.jpg" in "honeybee.jpg"` is True — substring-only matching writes the wrong file. See [Export Format Filename Matching](docs/08_crosscutting_concepts.md#export-format-filename-matching). |
 | F2 / global shortcuts | Use `QShortcut` with `Qt.ShortcutContext.ApplicationShortcut`, not `keyPressEvent` | `QTableWidget` consumes F2 for in-cell edit before it bubbles up. |
 | Canvas ↔ list selection sync | Canvas selection (idle-mode click/Shift/rubber-band) drives the annotation list via `apply_canvas_selection`; mirror the list with `blockSignals(True/False)` and match annotations by **value-equality**, never identity | PyQt round-trips `UserRole` dicts as copies and `image_label.annotations` is a deepcopy, so identity is never stable; un-blocked `setSelected` recurses through `update_highlighted_annotations`. Multi-select uses **Shift** (Ctrl stays pan). See [ADR-022](docs/09_architecture_decisions.md#adr-022-canvas-mask-selection-unified-with-the-annotation-list). |
-| Selection rendering | Don't recolour a selected mask. Keep its class colour; draw a class-colour-independent overlay (dashed `_SELECTION_COLOR` blue bounding box + bright handle squares at corners/edge-midpoints, OGP-style) in a final pass — `_draw_selection_overlay`. Handles are visual-only (resize = #40). Default class colours come from `core/constants.py::default_class_color` (red last, muted) | Red selection was invisible on a red-class mask; a thin dashed outline alone was too faint; the handles carry the visibility. See ADR-022 amendment. |
+| Selection rendering | Don't recolour a selected mask. Keep its class colour; draw a class-colour-independent overlay (dashed `_SELECTION_COLOR` blue bounding box + bright handle squares at corners/edge-midpoints, OGP-style) in a final pass — `_draw_selection_overlay`. For a single selected shape those handles are draggable (resize/move, any shape). Default class colours come from `core/constants.py::default_class_color` (red last, muted) | Red selection was invisible on a red-class mask; a thin dashed outline alone was too faint; the handles carry the visibility. See ADR-022 amendment. |
+| Shape editing (#40) | Direct manipulation on the selection handles for **any** single selected shape (`_single_selected_shape()` — most shapes are `"segmentation"`, not `"bbox"`; gating on a bbox key made it unreachable). `_begin_shape_edit` records `kind`: a `"seg"` polygon **scales** its vertices (`_scale_segmentation`) / translates them; a `"bbox"` edits `[x,y,w,h]`. `_draw_selection_overlay` + `_bbox_handle_at` share `_bbox_handle_points` (visual == grab); resize anchors the opposite side (`_resize_bbox`); interior drag moves, **drag-gated**. `_sync_bbox_key` keeps an imported bbox consistent. Clamp + `bboxEditCommitted` → `commit_bbox_edit` on release; Esc reverts | Handles drawn since #75 were visual-only; dispatch sits before the rubber-band branch but stays gated on `_is_select_mode()`. Names keep the `bbox_edit` prefix = "edit via the bounding-box handles". See [ADR-023](docs/09_architecture_decisions.md). |
+| Bounds enforcement (#32/#36) | No commit may persist coords outside the image. **Clamp** manual edits (`clamp_segmentation`/`clamp_bbox`, per-coordinate, count-preserving) at edit commit; **clip** augmented polygons (`clip_polygon_to_bounds`, shapely intersection, may drop → `None`, augmenter must `continue`). Drawn shapes already clip in `finish_polygon`/`finish_rectangle` | Clamp keeps vertex correspondence mid-edit; clip is geometrically correct for batch augmentation. See [ADR-024](docs/09_architecture_decisions.md). |
 
 ## Development Workflow
 
@@ -272,6 +272,7 @@ See [Risks and Technical Debt](docs/11_risks_and_technical_debt.md) for full lis
 | Ctrl+Drag | Pan |
 | Click / Shift+Click (no tool) | Select / toggle mask |
 | Drag / Shift+Drag (no tool) | Rubber-band select / add |
+| Drag handle / inside (one shape selected) | Resize (scale) / move the shape |
 | Double-click | Vertex-edit mode |
 | Delete | Delete selected mask(s) |
 | Enter | Finish/Accept |

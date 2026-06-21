@@ -97,6 +97,37 @@ User presses Delete (canvas focused)
 The canvas and the list share one selection (matched by dict value-equality), so
 Delete/Merge/Change-Class behave the same from either surface. See ADR-022.
 
+## Shape Editing on the Canvas (issue #40)
+
+When exactly one shape is selected (idle mode), its 8 selection handles become
+draggable — direct manipulation, no separate mode, for **any** shape (polygon,
+mask, or imported box). The geometry mutates in place so the canvas updates live;
+release clamps it into the image and persists.
+
+```
+One shape selected → handles are grab targets (hover shows resize/move cursors)
+    │
+    ├─> press on a handle      → "resize"  (anchor = opposite corner/edge)
+    ├─> press inside the shape → "pending_move" → "move" once drag > 3px/zoom
+    │                            (plain click, no drag → falls through to select)
+    ├─> press outside          → normal rubber-band selection (#75)
+    │
+    ├─> drag → _update_bbox_drag(): mutate geometry in place
+    │          ├─ bbox kind → set [x,y,w,h]   (resize trims; move translates)
+    │          └─ seg  kind → scale vertices (resize) / translate (move);
+    │                         _sync_bbox_key keeps an imported bbox consistent
+    │
+    ├─> release → clamp into the image (ADR-024: move slides inside, resize clamps)
+    │             emit bboxEditCommitted
+    │             └─> AnnotationController.commit_bbox_edit()
+    │                 save → rebuild list (area refreshes) → re-mirror selection → autosave
+    │
+    └─> Esc during drag → restore original geometry, cancel
+```
+
+Polygon vertex edits (double-click) are likewise clamped into the image on Enter.
+See ADR-023 (shape editing) and ADR-024 (bounds enforcement).
+
 ## SAM-Assisted Annotation (SAM-box / SAM-points)
 
 ```

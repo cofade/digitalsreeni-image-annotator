@@ -56,6 +56,16 @@ Segment Anything Model - Meta's foundation model for image segmentation. Version
 ### SAM Point Mode
 Annotation mode where user clicks positive points (inside object) and negative points (outside object) to guide SAM segmentation.
 
+### Select Mode (Canvas)
+The idle canvas state (no drawing/SAM tool active, not editing, no temp review) in
+which clicks and drags select existing masks instead of drawing. Single-click
+selects, Shift toggles/adds, drag box-selects; double-click still enters vertex
+edit. See ADR-022.
+
+### Rubber-Band Selection
+A dashed selection rectangle dragged on the canvas in Select Mode; every annotation
+whose bounds intersect it is selected. Shift+drag adds to the current selection.
+
 ### Semantic Labels
 Single-channel image where each pixel value represents the class ID. Used for semantic segmentation training.
 

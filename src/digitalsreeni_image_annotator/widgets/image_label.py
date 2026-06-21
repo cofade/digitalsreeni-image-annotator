@@ -30,7 +30,7 @@ from PyQt6.QtWidgets import QLabel, QMessageBox
 
 from .tools import EraserTool, PaintBrushTool, PolygonTool, RectangleTool
 from ..core.constants import DEFAULT_FILL_OPACITY
-from ..utils import calculate_area, clamp_bbox, clamp_segmentation
+from ..utils import calculate_area, clamp_bbox, clamp_segmentation, fit_bbox_inside
 
 warnings.filterwarnings("ignore", category=UserWarning)
 
@@ -1139,11 +1139,23 @@ class ImageLabel(QLabel):
     def _single_selected_bbox(self):
         """The annotation iff exactly one bbox is selected — the only state in
         which the selection handles become draggable. A polygon selection or a
-        multi-selection returns None (handles stay visual-only)."""
+        multi-selection returns None (handles stay visual-only).
+
+        Resolves to the **live object inside self.annotations** (what the canvas
+        renders and save_current_annotations persists), not the highlighted
+        entry: a list-driven selection stores ``item.data(UserRole)``, which
+        PyQt round-trips as a copy, so mutating that in place would be lost.
+        Match by value-equality (identity is unstable — see ADR-022)."""
         if len(self.highlighted_annotations) != 1:
             return None
-        ann = self.highlighted_annotations[0]
-        return ann if "bbox" in ann else None
+        sel = self.highlighted_annotations[0]
+        if "bbox" not in sel:
+            return None
+        for anns in self.annotations.values():
+            for ann in anns:
+                if ann == sel:
+                    return ann
+        return sel
 
     def _bbox_handle_at(self, annotation, pos):
         """Handle id under pos for a bbox annotation, or None. Grab radius is
@@ -1226,11 +1238,17 @@ class ImageLabel(QLabel):
         if edit["moved"]:
             ann = edit["annotation"]
             if self.original_pixmap is not None:
-                ann["bbox"] = clamp_bbox(
-                    ann["bbox"],
-                    self.original_pixmap.width(),
-                    self.original_pixmap.height(),
-                )
+                w, h = self.original_pixmap.width(), self.original_pixmap.height()
+                # Move slides the intact box back inside (size-preserving);
+                # resize trims the dragged edge to the border.
+                if edit["mode"] == "move":
+                    ann["bbox"] = fit_bbox_inside(ann["bbox"], w, h)
+                else:
+                    ann["bbox"] = clamp_bbox(ann["bbox"], w, h)
+            # Point the selection at the live, mutated object so the controller
+            # can re-select it by value-equality after the list rebuild (the
+            # highlighted entry may have been a stale list-selection copy).
+            self.highlighted_annotations = [ann]
             self.bboxEditCommitted.emit()
         else:
             # No drag happened — behave exactly like an idle click so

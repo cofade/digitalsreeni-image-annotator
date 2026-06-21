@@ -126,7 +126,7 @@ def test_pending_move_promotes_only_after_threshold(label):
     assert box["bbox"] == [40, 30, 40, 40]       # translated by (+20, +10)
 
 
-def test_commit_move_clamps_and_emits(label, qtbot):
+def test_commit_move_slides_inside_preserving_size(label, qtbot):
     box = _bbox(80, 80, 30, 30)
     _arm(label, box, "move", None, (90, 90))
     label.bbox_edit["mode"] = "move"
@@ -135,9 +135,30 @@ def test_commit_move_clamps_and_emits(label, qtbot):
 
     with qtbot.waitSignal(label.bboxEditCommitted, timeout=500):
         label._commit_bbox_drag((130, 130), _FakeEvent())
-    x, y, w, h = box["bbox"]
-    assert x + w <= 100 and y + h <= 100         # clamped into the image
+    assert box["bbox"] == [70, 70, 30, 30]       # slid inside, size preserved
     assert label.bbox_edit is None
+
+
+def test_commit_move_off_top_left_preserves_size(label, qtbot):
+    # The clamp_bbox-collapse bug: moving past the top-left must keep 40x40.
+    box = _bbox(20, 20, 40, 40)
+    _arm(label, box, "move", None, (40, 40))
+    label.bbox_edit["mode"] = "move"
+    label._update_bbox_drag((-30, -30))          # drag past the top-left corner
+    with qtbot.waitSignal(label.bboxEditCommitted, timeout=500):
+        label._commit_bbox_drag((-30, -30), _FakeEvent())
+    assert box["bbox"] == [0, 0, 40, 40]         # not collapsed to a sliver
+
+
+def test_resize_targets_live_object_not_highlighted_copy(label):
+    # List-driven selection puts a value-equal COPY in highlighted_annotations
+    # (item.data(UserRole) round-trips as a copy). The handle drag must still
+    # mutate the live object inside label.annotations, or the edit is lost.
+    box = _bbox(10, 10, 40, 40)
+    label.annotations = {"cell": [box]}
+    label.highlighted_annotations = [dict(box)]   # a copy, different identity
+    assert label.highlighted_annotations[0] is not box
+    assert label._single_selected_bbox() is box   # resolves to the live object
 
 
 def test_commit_resize_clamps(label, qtbot):

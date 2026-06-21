@@ -73,6 +73,33 @@ def test_resize_persists_into_all_annotations(window, monkeypatch):
     assert _selected_data(window) == [live]
 
 
+def test_list_selected_bbox_resize_persists(window, monkeypatch):
+    """Selecting via the annotation LIST (not the canvas) puts a value-equal
+    copy in highlighted_annotations; the handle drag must still mutate the live
+    object so the edit is saved, not silently lost."""
+    monkeypatch.setattr(window, "auto_save", lambda: None)
+    (live,) = _seed(window, [_bbox(10, 10, 40, 40, 1)])
+    il = window.image_label
+
+    # Select through the list widget — drives update_highlighted_annotations,
+    # which stores item.data(UserRole) (a copy, distinct from `live`).
+    window.annotation_list.item(0).setSelected(True)
+    window.annotation_controller.update_highlighted_annotations()
+    assert il.highlighted_annotations and il.highlighted_annotations[0] is not live
+
+    bbox = il._single_selected_bbox()              # resolves back to the live obj
+    assert bbox is live
+    il.bbox_edit = {
+        "annotation": bbox, "mode": "resize", "handle": "br",
+        "orig_bbox": list(bbox["bbox"]), "start_pos": (50, 50), "moved": False,
+    }
+    il._update_bbox_drag((80, 70))
+    il._commit_bbox_drag((80, 70), _FakeEvent())
+
+    assert window.all_annotations["img.png"]["cell"][0]["bbox"] == [10, 10, 70, 60]
+    assert _selected_data(window) == [live]        # still selected after rebuild
+
+
 def test_resize_out_of_bounds_is_clamped_on_commit(window, monkeypatch):
     monkeypatch.setattr(window, "auto_save", lambda: None)
     (live,) = _seed(window, [_bbox(10, 10, 40, 40, 1)])

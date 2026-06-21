@@ -68,9 +68,11 @@ def clamp_segmentation(segmentation, width, height):
 
 
 def clamp_bbox(bbox, width, height):
-    """Clamp a ``[x, y, w, h]`` box so it stays inside the image rectangle,
-    keeping it rectangular and at least 1x1. Used after a bbox move/resize that
-    ran past the image edge. (upstream #32 / #40)"""
+    """Trim a ``[x, y, w, h]`` box to the image rectangle by clamping each
+    corner independently, keeping it rectangular and at least 1x1. This is the
+    **resize** clamp: the dragged edge snaps to the image border while the
+    anchored (opposite) edge — already in bounds — stays put. For a **move**
+    use :func:`fit_bbox_inside` instead, which preserves size. (upstream #40)"""
     x, y, w, h = bbox
     x0 = min(max(x, 0), width)
     y0 = min(max(y, 0), height)
@@ -83,6 +85,19 @@ def clamp_bbox(bbox, width, height):
     if ny + nh > height:
         ny = max(0, height - nh)
     return [nx, ny, nw, nh]
+
+
+def fit_bbox_inside(bbox, width, height):
+    """Translate a ``[x, y, w, h]`` box back inside the image **preserving its
+    size** (shrinking only if it is larger than the image). For the move path:
+    a box dragged past any edge should slide back in, not collapse at it the way
+    independent-corner clamping (:func:`clamp_bbox`) would. (upstream #40)"""
+    x, y, w, h = bbox
+    w = min(w, width)
+    h = min(h, height)
+    x = min(max(x, 0), width - w)
+    y = min(max(y, 0), height - h)
+    return [x, y, w, h]
 
 
 def clip_polygon_to_bounds(segmentation, width, height):
@@ -118,7 +133,12 @@ def clip_polygon_to_bounds(segmentation, width, height):
         chosen = max(polys, key=lambda p: p.area)
     if chosen.is_empty or chosen.area == 0:
         return None
-    return [coord for point in chosen.exterior.coords for coord in point]
+    coords = list(chosen.exterior.coords)
+    # shapely returns a closed ring (first vertex repeated last); drop it so the
+    # output matches the app's unclosed flat-ring convention.
+    if len(coords) > 1 and coords[0] == coords[-1]:
+        coords = coords[:-1]
+    return [c for point in coords for c in point]
 
 def normalize_image(image_array):
     """Normalize image array to 8-bit range."""

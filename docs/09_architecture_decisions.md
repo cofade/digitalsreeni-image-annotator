@@ -872,14 +872,99 @@ selection-blue **bounding-box marquee** (`_SELECTION_COLOR = QColor(0, 120, 215,
 midpoints, white-cased and fixed on-screen size (`_draw_selection_overlay` in
 `widgets/image_label.py`). The handles are what make selection unmistakable
 regardless of mask colour (a single thin dashed outline was too faint; an earlier
-marching-ants + marquee was too busy). The handles are visual markers only —
-resizing via handles is a separate feature (upstream #40). The mask keeps its
+marching-ants + marquee was too busy). For a **bbox** selection the handles are
+now also grab targets for resize (see ADR-023); for a polygon they remain visual
+markers (vertex editing is via double-click). The mask keeps its
 class colour; the rubber-band rect uses the same blue dashed style. Separately,
 the default class palette
 (`core/constants.py::DEFAULT_CLASS_COLORS` / `default_class_color`) was reordered
 so red is **last** (no fresh project starts on red) and muted, and the default
 fill opacity dropped to `0.2` (`DEFAULT_FILL_OPACITY`) so masks don't bury the
 image. Existing projects keep their persisted class colours.
+
+---
+
+## ADR-023: Direct-Manipulation Bbox Editing on the Selection Handles
+
+**Status**: Accepted (issue bnsreenu#40)
+
+**Context**: `"bbox"`-keyed annotations (from COCO/YOLO import and detectors)
+were **not editable at all** — `start_polygon_edit` only matches
+`"segmentation"`, so double-click vertex edit skipped them entirely. Rectangles
+*drawn* in-app are stored as 4-point `"segmentation"` (so they are already
+vertex-editable, though that can warp them out of square); the gap is genuine
+`"bbox"` annotations. ADR-022 already draws 8 handle squares around any selected
+annotation, but they were visual-only.
+
+**Decision**: Wire those handles up as **direct-manipulation** resize/move,
+modelled on the sibling open-garden-planner app's `ResizeHandle`. No new mode and
+no double-click — it works directly off the existing idle-mode selection:
+
+- **Single-bbox only.** Handles become draggable only when exactly one selected
+  annotation is a `"bbox"` (`_single_selected_bbox()`); a polygon or multi-select
+  leaves them visual.
+- **Anchor-from-handle.** Dragging a corner/edge handle replaces that
+  corner/edge's coordinate and keeps the opposite side fixed
+  (`_resize_bbox`), normalising so width/height never go negative (drag-past-anchor
+  flips) and stay ≥ 1. Per-handle resize cursors match OGP
+  (`_BBOX_HANDLE_CURSORS`: diagonal on corners, straight on edges, `SizeAll` over
+  the interior).
+- **Move is drag-gated.** A press inside the box starts a *pending* move that
+  promotes to an actual move only once the drag clears the existing `3px/zoom`
+  click threshold — so a plain click still falls through to selection (preserving
+  nested-mask click-through). The box mutates **in place** so the canvas + the
+  selection overlay redraw live.
+- **Commit / cancel.** Release clamps the box into the image (ADR-024) and emits
+  `bboxEditCommitted` → `AnnotationController.commit_bbox_edit` (save + list
+  rebuild so the displayed area refreshes + re-mirror the selection). Escape
+  restores the original box.
+
+**Consequences**:
+- The handles you see are exactly the grab targets — `_draw_selection_overlay`
+  and `_bbox_handle_at` share `_bbox_handle_points`, so visual and hit geometry
+  can't drift.
+- Resizing keeps the annotation rectangular by construction (it edits
+  `[x, y, w, h]`), unlike vertex-editing a drawn rectangle.
+- ⚠️ The bbox-drag branches sit **before** the rubber-band branch in the idle-mode
+  mouse dispatch; both are gated on `_is_select_mode()` so a tool/edit/SAM state
+  still wins.
+
+---
+
+## ADR-024: Bounds Enforcement — Clamp Manual Edits, Clip Augmented Data
+
+**Status**: Accepted (issues bnsreenu#32, bnsreenu#36)
+
+**Context**: Annotation coordinates could be persisted outside the image
+rectangle and silently poison training data. *Drawn* shapes were already safe
+(`finish_polygon`/`finish_rectangle` shapely-intersect with the image boundary),
+but two paths weren't: **manual edits** (polygon vertex drag; the new bbox drag)
+clamped nothing, and the **Image Augmenter** wrote rotated/zoomed/flipped polygons
+verbatim.
+
+**Decision**: Add three pure helpers in `utils.py` and apply the right one per
+path:
+
+- **Clamp manual edits** with `clamp_segmentation` / `clamp_bbox` — per-coordinate
+  snap into `[0, w] × [0, h]`. Per-coordinate (not a shapely cut) is deliberate:
+  it **preserves the vertex count and ordering**, so a polygon being dragged never
+  loses or splits points mid-edit. Applied in place at edit commit (polygon Enter;
+  bbox release), persisting through the existing save-by-reference path.
+- **Clip augmented data** with `clip_polygon_to_bounds` — a shapely intersection
+  (largest resulting polygon; `buffer(0)` first to repair self-intersections an
+  affine augmentation can introduce). Geometric trimming is correct here because an
+  augmented shape genuinely extends past the frame and should be cut at the edge,
+  not have stray vertices snapped onto it. A polygon left fully outside returns
+  `None` and is **dropped** by the augmenter loop.
+
+**Consequences**:
+- One vocabulary, two semantics: *clamp* (cheap, count-preserving, for live edits)
+  vs *clip* (exact, may drop/split, for batch augmentation). The choice is about
+  whether vertex correspondence must survive, not about which is "more correct".
+- ⚠️ `clip_polygon_to_bounds` can return fewer/more vertices than the input and may
+  return `None`; callers must handle the drop (the augmenter `continue`s).
+- The existing `finish_polygon`/`finish_rectangle` inline clips were left as-is to
+  keep the diff contained; they could later delegate to `clip_polygon_to_bounds`.
 
 ---
 

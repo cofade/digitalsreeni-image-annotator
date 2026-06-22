@@ -548,23 +548,6 @@ class AnnotationController(QObject):
 
     # --- Delete / merge / change-class ---
 
-    def delete_annotation(self):
-        tbl = self.mw.annotation_list
-        row = tbl.currentRow()
-        if row < 0:
-            return
-        id_item = tbl.item(row, ANNOT_COL_ID)
-        if id_item is None:
-            return
-        annotation = id_item.data(Qt.ItemDataRole.UserRole)
-        category_name = annotation["category_name"]
-        anns = self.mw.image_label.annotations.get(category_name, [])
-        if annotation in anns:
-            anns.remove(annotation)
-        tbl.removeRow(row)
-        self.mw.image_label.highlighted_annotations.clear()
-        self.mw.image_label.update()
-
     def delete_selected_annotations(self):
         selected_items = self._selected_row_items()
         if not selected_items:

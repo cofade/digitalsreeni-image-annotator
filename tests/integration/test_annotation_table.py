@@ -13,6 +13,8 @@ import json
 import math
 
 import pytest
+from PyQt6.QtCore import Qt
+from PyQt6.QtGui import QPixmap
 from PyQt6.QtWidgets import QSpinBox
 
 from digitalsreeni_image_annotator.core import image_utils
@@ -25,6 +27,11 @@ from digitalsreeni_image_annotator.core.constants import (
 from digitalsreeni_image_annotator.utils import calculate_area
 
 
+class _FakeEvent:
+    def modifiers(self):
+        return Qt.KeyboardModifier.NoModifier
+
+
 @pytest.fixture
 def window(qt_application):
     from digitalsreeni_image_annotator.annotator_window import ImageAnnotator
@@ -32,6 +39,16 @@ def window(qt_application):
     w = ImageAnnotator()
     yield w
     w.deleteLater()
+
+
+def _arm_canvas(window, live):
+    """Set up the image label for #40-style handle edits + select the mask."""
+    il = window.image_label
+    il.original_pixmap = QPixmap(100, 100)
+    il.zoom_factor = 1.0
+    il.ui_scale = 1.0
+    window.annotation_controller.apply_canvas_selection([live], "replace")
+    return il
 
 
 def _circle(cx, cy, r, n):
@@ -108,6 +125,35 @@ def test_simplified_persists_and_exports_simplified(window, monkeypatch):
     coco = window.annotation_controller.create_coco_annotation(live, 1, 1)
     assert coco["segmentation"] == [live["segmentation"]]
     assert coco["segmentation"][0] != live["segmentation_raw"]
+
+
+def test_reshape_invalidates_simplification_baseline(window, monkeypatch):
+    # #24 × #40 seam: thinning then reshaping a polygon must reset the raw
+    # baseline, so a later Detail %=100 can't silently revert the reshape.
+    (live,) = _seed(window, [_dense(1)], monkeypatch)
+    il = _arm_canvas(window, live)
+    window.annotation_list.cellWidget(0, ANNOT_COL_DETAIL).setValue(40)
+    assert live.get("segmentation_raw")               # raw captured by the thin
+
+    bb = il._annotation_bbox(live)                     # (x0, y0, x1, y1)
+    il._begin_shape_edit(live, "resize", "br", (bb[2], bb[3]))
+    il._update_bbox_drag((bb[2] + 8, bb[3] + 8))
+    il._commit_bbox_drag((bb[2] + 8, bb[3] + 8), _FakeEvent())
+
+    assert not live.get("segmentation_raw")           # baseline invalidated
+    assert live.get("detail_pct") == 100              # edited geometry is the new raw
+
+
+def test_detail_change_keeps_selection_resolvable_for_handle_drag(window, monkeypatch):
+    # #24 × #40 seam: after a detail change, the canvas selection must point at
+    # the mutated live object so the overlay + a later handle drag resolve it.
+    (live,) = _seed(window, [_dense(1)], monkeypatch)
+    il = _arm_canvas(window, live)
+    window.annotation_list.cellWidget(0, ANNOT_COL_DETAIL).setValue(30)
+
+    assert il.highlighted_annotations and il.highlighted_annotations[0] is live
+    shape = il._single_selected_shape()
+    assert il._live_annotation(shape) is live          # not a stale pre-thin copy
 
 
 def test_bbox_only_row_has_disabled_spinbox(window, monkeypatch):

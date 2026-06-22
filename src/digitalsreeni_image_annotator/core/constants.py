@@ -25,6 +25,14 @@ DEFAULT_ZOOM = 100
 # overlapping masks (the border still carries the class colour).
 DEFAULT_FILL_OPACITY = 0.2
 
+# Annotations panel table columns (issue #24). Column 0 (ID) carries the
+# annotation dict in its UserRole — the value-equality marker the canvas ↔ list
+# selection bridge (ADR-022) reads.
+ANNOT_COL_ID = 0
+ANNOT_COL_CLASS = 1
+ANNOT_COL_AREA = 2
+ANNOT_COL_DETAIL = 3
+
 # Default class colour palette (tab10-style, moderately muted so masks don't
 # overpower the image). Red is intentionally LAST so a fresh project's first
 # class isn't red — selection highlighting is class-colour-independent, but

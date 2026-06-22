@@ -895,7 +895,7 @@ class ImageController(QObject):
                 self.mw.image_file_name = ""
                 self.mw.current_slice = None
                 self.mw.image_label.clear()
-                self.mw.annotation_list.clear()
+                self.mw.annotation_list.setRowCount(0)
 
             if self.mw.image_list.count() > 0:
                 next_item = self.mw.image_list.item(0)
@@ -906,7 +906,7 @@ class ImageController(QObject):
                 self.mw.image_file_name = ""
                 self.mw.current_slice = None
                 self.mw.image_label.clear()
-                self.mw.annotation_list.clear()
+                self.mw.annotation_list.setRowCount(0)
                 self.mw.slice_list.clear()
 
             self.mw.update_ui()
@@ -947,7 +947,7 @@ class ImageController(QObject):
                     self.mw.image_file_name = ""
                     self.mw.current_slice = None
                     self.mw.image_label.clear()
-                    self.mw.annotation_list.clear()
+                    self.mw.annotation_list.setRowCount(0)
 
                 if self.mw.image_list.count() > 0:
                     next_item = self.mw.image_list.item(0)
@@ -958,7 +958,7 @@ class ImageController(QObject):
                     self.mw.image_file_name = ""
                     self.mw.current_slice = None
                     self.mw.image_label.clear()
-                    self.mw.annotation_list.clear()
+                    self.mw.annotation_list.setRowCount(0)
                     self.mw.slice_list.clear()
 
                 self.mw.update_ui()

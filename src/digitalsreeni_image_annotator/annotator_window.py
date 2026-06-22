@@ -745,7 +745,7 @@ class ImageAnnotator(QMainWindow):
 
         # Clear annotations
         self.all_annotations.clear()
-        self.annotation_list.clear()
+        self.annotation_list.setRowCount(0)
         self.image_label.annotations.clear()
         self.image_label.highlighted_annotations.clear()
 

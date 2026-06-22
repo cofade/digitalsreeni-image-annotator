@@ -41,10 +41,11 @@ def _seed(window, anns):
 
 
 def _selected_data(window):
-    return [
-        item.data(Qt.ItemDataRole.UserRole)
-        for item in window.annotation_list.selectedItems()
-    ]
+    # The annotations widget is now a QTableWidget; selection is per-row, with
+    # the annotation dict in column 0's UserRole. Dedupe selected cells to rows.
+    tbl = window.annotation_list
+    rows = sorted({idx.row() for idx in tbl.selectedIndexes()})
+    return [tbl.item(r, 0).data(Qt.ItemDataRole.UserRole) for r in rows]
 
 
 def test_replace_selects_one(window):

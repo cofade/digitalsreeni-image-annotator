@@ -1323,6 +1323,12 @@ class ImageLabel(QLabel):
                 )
             ann["segmentation"] = clamp_segmentation(seg, width, height)
             self._sync_bbox_key(ann)
+            # The polygon was reshaped — its old dense "raw" (issue #24) no
+            # longer describes it, so a later Detail %=100 must not revert this
+            # edit. Reset the simplification baseline to the edited geometry.
+            if ann.get("segmentation_raw"):
+                ann.pop("segmentation_raw", None)
+                ann["detail_pct"] = 100
         elif edit["mode"] == "move":
             ann["bbox"] = fit_bbox_inside(ann["bbox"], width, height)
         else:

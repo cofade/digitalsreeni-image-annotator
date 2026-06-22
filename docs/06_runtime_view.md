@@ -128,6 +128,27 @@ One shape selected → handles are grab targets (hover shows resize/move cursors
 Polygon vertex edits (double-click) are likewise clamped into the image on Enter.
 See ADR-023 (shape editing) and ADR-024 (bounds enforcement).
 
+## Adjusting Mask Complexity — Detail % (issue #24)
+
+The Annotations table carries a per-row **Detail %** spinbox (100 = raw). Dialing
+it down thins a dense SAM/DINO mask; dialing back to 100 restores it exactly.
+
+```
+User changes a row's Detail % spinbox (1..100)
+    │
+    └─> AnnotationController.on_detail_pct_changed(row, pct)
+        ├─> resolve the live drawn object (value-equality, _live_annotation)
+        ├─> pct == 100 → segmentation = segmentation_raw (restore)
+        │   pct  < 100 → lazy-init segmentation_raw (first time);
+        │                segmentation = simplify_polygon(raw, pct)  [Douglas-Peucker]
+        ├─> recompute bbox key if present
+        ├─> refresh the row's Area cell + UserRole in place (no rebuild)
+        └─> image_label.update() → save_current_annotations() → auto_save()
+```
+
+The effective (simplified) `segmentation` renders and exports; `segmentation_raw`
++ `detail_pct` persist in the `.iap`. See ADR-025.
+
 ## SAM-Assisted Annotation (SAM-box / SAM-points)
 
 ```

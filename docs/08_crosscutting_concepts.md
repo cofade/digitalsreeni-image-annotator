@@ -46,6 +46,16 @@ exits the frame and should be cut at the edge; a fully-outside polygon is droppe
 *Drawn* shapes were already shapely-clipped in `finish_polygon` /
 `finish_rectangle`. See ADR-024.
 
+### Polygon simplification — Detail % (issue #24)
+
+SAM/DINO masks are dense (hundreds of vertices). The Annotations table's per-row
+**Detail %** spinbox (100 = raw) thins a mask via `utils.simplify_polygon`
+(Douglas-Peucker, `cv2.approxPolyDP`, binary-searched to a vertex budget). It is
+**reversible**: the dense original is lazy-captured into `segmentation_raw` on
+first simplify, and 100 % restores it exactly. The effective (possibly simplified)
+`segmentation` is what renders and exports; `segmentation_raw` + `detail_pct` ride
+along in `.iap`. See ADR-025.
+
 ### Pan + Zoom Reference Frames
 
 Two non-obvious gotchas live in `ImageLabel.mouseMoveEvent` /
@@ -699,6 +709,14 @@ Two non-obvious rules make this correct:
   Without it, `setSelected` fires `itemSelectionChanged` →
   `update_highlighted_annotations`, which would overwrite the freshly-computed
   set with the list items' own objects (and clobber a `toggle`).
+
+**The Annotations panel is a `QTableWidget`** (ID | Class | Area | Detail %), not
+a `QListWidget` (issue #24, ADR-025). The bridge above is unchanged in spirit but
+the API maps to table calls: the annotation dict lives in **column 0's UserRole**;
+`count()/item(i)/selectedItems()` become `rowCount()/item(r, ANNOT_COL_ID)/row-
+deduped `selectedIndexes()`; and the mirror uses **`setRangeSelected` (additive)**,
+because `selectRow()` *replaces* the selection in `ExtendedSelection` mode and
+would drop all but the last row. `blockSignals` + value-equality are preserved.
 
 **Ctrl is reserved for pan.** Multi-select uses **Shift**, not Ctrl, because
 Ctrl+drag is the pan gesture (whose reference-frame handling is deliberately

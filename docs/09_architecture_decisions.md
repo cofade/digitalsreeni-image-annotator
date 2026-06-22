@@ -978,6 +978,66 @@ path:
 
 ---
 
+## ADR-025: Reversible Per-Annotation Polygon Simplification (Detail %)
+
+**Status**: Accepted (issue bnsreenu#24)
+
+**Context**: SAM/DINO masks are stored as raw dense polygons — `_mask_to_polygon`
+returns the flattened `cv2.findContours` boundary with no simplification, so a
+single mask can carry hundreds of vertices, bloating label files. Issue #24 asked
+for a "mask complexity — less ↔ more points" control. The point add/remove half of
+#24 was already covered by the SAM-points tool; this is the remaining piece.
+
+**Decision**: A **per-annotation, reversible Detail %** control, surfaced as a
+column in the Annotations panel:
+
+- **Detail % (1–100, 100 = raw).** `utils.simplify_polygon(raw, pct)` thins via
+  Douglas-Peucker (`cv2.approxPolyDP`), binary-searching the epsilon for the
+  richest polygon whose vertex count is still ≤ `round(raw_count × pct/100)`.
+- **Reversible via a preserved raw.** The dense original is **lazy-captured** into
+  `segmentation_raw` the first time a mask is thinned (nothing simplifies it
+  before that, so the live `segmentation` *is* the raw at capture). 100 % copies
+  `segmentation_raw` back into `segmentation` exactly. No edits to the SAM/DINO/
+  manual accept paths were needed.
+- **Two new annotation keys** (`segmentation_raw`, `detail_pct`) ride along: they
+  round-trip through `.iap` for free (project save does `ann.copy()` →
+  `convert_to_serializable` → JSON), and exports read only the effective
+  `segmentation`, so the *simplified* polygon is what's exported. Imported/old
+  annotations have neither key → handled by lazy-init.
+- **Live + in place.** The change handler resolves the selected row to the live
+  drawn object by value-equality (`image_label._live_annotation`, reused from
+  #40), mutates `segmentation` in place, refreshes the Area cell + the row's
+  UserRole, redraws, and saves. The `bbox` key (if present) is recomputed.
+
+**The Annotations panel became a `QTableWidget`** (ID | Class | Area | Detail %),
+mirroring `dialogs/dino_phrase_editor.ClassThresholdTable` (per-row spinbox via
+`setCellWidget`, `SelectRows`, `NoEditTriggers`, stylesheet-only header). This
+re-homes the #75 canvas↔list selection bridge onto a table:
+
+- The annotation dict lives in **column 0's UserRole** (the value-equality marker).
+- `count()/item(i)/selectedItems()` → `rowCount()/item(r, 0)/row-deduped
+  selectedIndexes()`; the mirror uses **`setRangeSelected` (additive)** because
+  `selectRow()` *replaces* the selection in ExtendedSelection mode and would drop
+  all but the last row. `blockSignals` + value-equality are preserved verbatim.
+
+**Consequences**:
+- Closing #24 with a small, contained change: the feature is the table UI + one
+  controller handler + one pure util; the accept paths are untouched.
+- ✅ Fully reversible per annotation: Detail %=100 restores `segmentation_raw`
+  exactly. **Exception:** reshaping a polygon with the #40 handles invalidates the
+  baseline — `_clamp_edited_shape` drops `segmentation_raw` and resets
+  `detail_pct=100`, so the *edited* geometry becomes the new raw (the old dense
+  outline no longer describes the reshaped polygon, and a later 100 % must not
+  silently revert the edit). The detail handler also re-points
+  `highlighted_annotations` at the mutated object so the overlay + a subsequent
+  handle drag stay coherent.
+- ⚠️ The spinbox `valueChanged` is connected **after** the initial `setValue`, so
+  building/rebuilding the table never fires the simplification handler.
+- ⚠️ The dead `core/annotation_utils.py` still references the old QListWidget API
+  but is unimported (confirmed) — left as-is to keep the diff contained.
+
+---
+
 ## Decisions Under Consideration
 
 ### Consider pytest-qt for Utility Testing

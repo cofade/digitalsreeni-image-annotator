@@ -44,13 +44,12 @@ entire section so CLAUDE.md returns to its clean state. Never let a finished
 item linger here.
 
 Issue numbers refer to https://github.com/bnsreenu/digitalsreeni-image-annotator/issues
-(validated 2026-06-12; already-fixed issues have close-request comments posted, not listed here).
+(validated 2026-06-22; already-fixed issues have close-request comments posted, not listed here).
 
 | Issue | Size | Task |
 |-------|------|------|
-| #63 | blocked | SAM 3 support — blocked on Ultralytics shipping SAM 3; re-check their releases before attempting |
+| #74 | large | MLflow experiment tracking for model training (SAM fine-tuning / YOLO) |
 | #35 | large | Keypoint annotation tool |
-| #24 | large | Magic-wand-style point add/remove mask refinement (partially covered by SAM point prompts) |
 
 ## Project Structure
 
@@ -194,6 +193,7 @@ See [Runtime View](docs/06_runtime_view.md#multi-dimensional-image-loading) for 
 | Selection rendering | Don't recolour a selected mask. Keep its class colour; draw a class-colour-independent overlay (dashed `_SELECTION_COLOR` blue bounding box + bright handle squares at corners/edge-midpoints, OGP-style) in a final pass — `_draw_selection_overlay`. For a single selected shape those handles are draggable (resize/move, any shape). Default class colours come from `core/constants.py::default_class_color` (red last, muted) | Red selection was invisible on a red-class mask; a thin dashed outline alone was too faint; the handles carry the visibility. See ADR-022 amendment. |
 | Shape editing (#40) | Direct manipulation on the selection handles for **any** single selected shape (`_single_selected_shape()` — most shapes are `"segmentation"`, not `"bbox"`; gating on a bbox key made it unreachable). `_begin_shape_edit` records `kind`: a `"seg"` polygon **scales** its vertices (`_scale_segmentation`) / translates them; a `"bbox"` edits `[x,y,w,h]`. `_draw_selection_overlay` + `_bbox_handle_at` share `_bbox_handle_points` (visual == grab); resize anchors the opposite side (`_resize_bbox`); interior drag moves, **drag-gated**. `_sync_bbox_key` keeps an imported bbox consistent. Clamp + `bboxEditCommitted` → `commit_bbox_edit` on release; Esc reverts | Handles drawn since #75 were visual-only; dispatch sits before the rubber-band branch but stays gated on `_is_select_mode()`. Names keep the `bbox_edit` prefix = "edit via the bounding-box handles". See [ADR-023](docs/09_architecture_decisions.md). |
 | Bounds enforcement (#32/#36) | No commit may persist coords outside the image. **Clamp** manual edits (`clamp_segmentation`/`clamp_bbox`, per-coordinate, count-preserving) at edit commit; **clip** augmented polygons (`clip_polygon_to_bounds`, shapely intersection, may drop → `None`, augmenter must `continue`). Drawn shapes already clip in `finish_polygon`/`finish_rectangle` | Clamp keeps vertex correspondence mid-edit; clip is geometrically correct for batch augmentation. See [ADR-024](docs/09_architecture_decisions.md). |
+| Annotations table + Detail % (#24) | The Annotations panel is a **`QTableWidget`** (ID \| Class \| Area \| Detail %), not a list — col 0's UserRole holds the annotation (the #75 value-equality marker). Selection-mirror uses **`setRangeSelected`** (additive); `selectRow()` replaces in `ExtendedSelection`. Per-row Detail % spinbox → `on_detail_pct_changed` resolves the live obj (`_live_annotation`), simplifies from a lazy-captured `segmentation_raw` (`simplify_polygon`, 100=raw), refreshes Area+UserRole in place, saves. Connect `valueChanged` **after** the initial `setValue` so building the table doesn't fire it | Re-homing the selection bridge onto a table is the risk; reversibility needs the raw preserved. See [ADR-025](docs/09_architecture_decisions.md). |
 
 ## Development Workflow
 

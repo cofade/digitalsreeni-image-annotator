@@ -141,6 +141,55 @@ def clip_polygon_to_bounds(segmentation, width, height):
         coords = coords[:-1]
     return [c for point in coords for c in point]
 
+
+def simplify_polygon(raw_segmentation, detail_pct):
+    """Reduce the vertex count of a flat ``[x1, y1, ...]`` polygon (Douglas-
+    Peucker via ``cv2.approxPolyDP``) so users can trade detail for smaller
+    label files. ``detail_pct`` is 1..100 where **100 = the raw polygon
+    unchanged** and lower keeps proportionally fewer vertices. Operates on the
+    *raw* (dense) polygon so the result is always derived from full precision
+    and is reversible. (upstream #24)
+
+    Returns a flat list (>= 6 coords). Falls back to the raw polygon if it's
+    already tiny or simplification can't keep a valid triangle.
+    """
+    import cv2
+
+    raw = list(raw_segmentation)
+    n = len(raw) // 2
+    if detail_pct >= 100 or n <= 4:
+        return raw
+
+    target = max(3, round(n * detail_pct / 100.0))
+    if target >= n:
+        return raw
+
+    contour = np.array(raw, dtype=np.float32).reshape(-1, 1, 2)
+    perimeter = cv2.arcLength(contour, True)
+    if perimeter <= 0:
+        return raw
+
+    # Binary-search the approxPolyDP epsilon for the *richest* polygon whose
+    # vertex count is still <= target (i.e. the smallest epsilon meeting the
+    # budget; >= 3 points). Higher epsilon -> fewer points.
+    lo, hi = 0.0, perimeter
+    best = None
+    for _ in range(24):
+        mid = (lo + hi) / 2.0
+        approx = cv2.approxPolyDP(contour, mid, True)
+        count = len(approx)
+        if count <= target:
+            if count >= 3:
+                best = approx
+            hi = mid  # try to keep more detail (smaller epsilon)
+        else:
+            lo = mid  # need more simplification
+    if best is None:
+        return raw
+    flat = best.flatten().tolist()
+    return flat if len(flat) >= 6 else raw
+
+
 def normalize_image(image_array):
     """Normalize image array to 8-bit range."""
     if image_array.dtype != np.uint8:

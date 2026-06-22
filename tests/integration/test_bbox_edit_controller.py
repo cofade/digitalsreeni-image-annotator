@@ -53,10 +53,11 @@ def _seed(window, anns):
 
 
 def _selected_data(window):
-    return [
-        item.data(Qt.ItemDataRole.UserRole)
-        for item in window.annotation_list.selectedItems()
-    ]
+    # The annotations widget is now a QTableWidget; selection is per-row, with
+    # the annotation dict in column 0's UserRole. Dedupe selected cells to rows.
+    tbl = window.annotation_list
+    rows = sorted({idx.row() for idx in tbl.selectedIndexes()})
+    return [tbl.item(r, 0).data(Qt.ItemDataRole.UserRole) for r in rows]
 
 
 def test_resize_persists_into_all_annotations(window, monkeypatch):
@@ -87,7 +88,7 @@ def test_list_selected_bbox_resize_persists(window, monkeypatch):
 
     # Select through the list widget — drives update_highlighted_annotations,
     # which stores item.data(UserRole) (a copy, distinct from `live`).
-    window.annotation_list.item(0).setSelected(True)
+    window.annotation_list.selectRow(0)
     window.annotation_controller.update_highlighted_annotations()
     assert il.highlighted_annotations and il.highlighted_annotations[0] is not live
 

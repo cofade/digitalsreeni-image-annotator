@@ -31,13 +31,22 @@ from PyQt6.QtWidgets import (
     QFileDialog,
     QListWidgetItem,
     QMessageBox,
+    QSpinBox,
+    QTableWidgetItem,
+    QTableWidgetSelectionRange,
     QVBoxLayout,
 )
 from shapely.geometry import MultiPolygon, Polygon
 from shapely.ops import unary_union
 
-from ..core.constants import default_class_color
-from ..utils import calculate_area, calculate_bbox
+from ..core.constants import (
+    ANNOT_COL_AREA,
+    ANNOT_COL_CLASS,
+    ANNOT_COL_DETAIL,
+    ANNOT_COL_ID,
+    default_class_color,
+)
+from ..utils import calculate_area, calculate_bbox, simplify_polygon
 
 
 class AnnotationController(QObject):
@@ -71,8 +80,59 @@ class AnnotationController(QObject):
             self.update_annotation_list(image_name)
         self.update_annotation_list()
 
+    # --- Annotations table (issue #24): ID | Class | Area | Detail % ---
+    # The table replaces the old QListWidget. Column 0 (ID) carries the
+    # annotation dict in its UserRole — the value-equality marker the canvas ↔
+    # list selection bridge reads (ADR-022). The Detail % spinbox per row drives
+    # reversible polygon simplification (ADR-025).
+
+    def _make_detail_spin(self, annotation):
+        """A per-row 1..100 Detail % spinbox (100 = raw). Disabled for
+        annotations with no polygon to simplify (bbox-only imports)."""
+        sp = QSpinBox()
+        sp.setRange(1, 100)
+        sp.setSuffix(" %")
+        has_seg = bool(annotation.get("segmentation"))
+        sp.setValue(int(annotation.get("detail_pct", 100)) if has_seg else 100)
+        sp.setEnabled(has_seg)
+        sp.setFrame(True)
+        return sp
+
+    def _insert_annotation_row(self, annotation, color):
+        """Append one annotation as a table row. valueChanged is connected
+        *after* the initial setValue so building the table never fires the
+        simplification handler."""
+        tbl = self.mw.annotation_list
+        row = tbl.rowCount()
+        tbl.insertRow(row)
+
+        id_item = QTableWidgetItem(str(annotation.get("number", 0)))
+        id_item.setData(Qt.ItemDataRole.UserRole, annotation)
+        id_item.setForeground(color)
+        tbl.setItem(row, ANNOT_COL_ID, id_item)
+
+        class_item = QTableWidgetItem(annotation["category_name"])
+        class_item.setForeground(color)
+        tbl.setItem(row, ANNOT_COL_CLASS, class_item)
+
+        area_item = QTableWidgetItem(f"{calculate_area(annotation):.2f}")
+        area_item.setForeground(color)
+        tbl.setItem(row, ANNOT_COL_AREA, area_item)
+
+        spin = self._make_detail_spin(annotation)
+        spin.valueChanged.connect(lambda val, r=row: self.on_detail_pct_changed(r, val))
+        tbl.setCellWidget(row, ANNOT_COL_DETAIL, spin)
+
+    def _selected_row_items(self):
+        """Col-0 items of the selected rows, deduped. The table selects whole
+        rows, but selectedItems()/selectedIndexes() yield a cell per column."""
+        tbl = self.mw.annotation_list
+        rows = sorted({idx.row() for idx in tbl.selectedIndexes()})
+        items = [tbl.item(r, ANNOT_COL_ID) for r in rows]
+        return [it for it in items if it is not None]
+
     def update_annotation_list(self, image_name=None):
-        self.mw.annotation_list.clear()
+        self.mw.annotation_list.setRowCount(0)
         current_name = image_name or self.mw.current_slice or self.mw.image_file_name
         annotations = self.mw.all_annotations.get(current_name, {})
         for class_name, class_annotations in annotations.items():
@@ -81,20 +141,15 @@ class AnnotationController(QObject):
                     class_name, QColor(Qt.GlobalColor.white)
                 )
                 for annotation in class_annotations:
-                    number = annotation.get("number", 0)
-                    area = calculate_area(annotation)
-                    item_text = f"{class_name} - {number:<3} Area: {area:.2f}"
-                    item = QListWidgetItem(item_text)
-                    item.setData(Qt.ItemDataRole.UserRole, annotation)
-                    item.setForeground(color)
-                    self.mw.annotation_list.addItem(item)
-
-        self.mw.annotation_list.repaint()
+                    self._insert_annotation_row(annotation, color)
 
     def update_annotation_list_colors(self, class_name=None, color=None):
-        for i in range(self.mw.annotation_list.count()):
-            item = self.mw.annotation_list.item(i)
-            annotation = item.data(Qt.ItemDataRole.UserRole)
+        tbl = self.mw.annotation_list
+        for i in range(tbl.rowCount()):
+            id_item = tbl.item(i, ANNOT_COL_ID)
+            if id_item is None:
+                continue
+            annotation = id_item.data(Qt.ItemDataRole.UserRole)
             if class_name is None or annotation["category_name"] == class_name:
                 item_color = (
                     color
@@ -103,25 +158,72 @@ class AnnotationController(QObject):
                         annotation["category_name"], QColor(Qt.GlobalColor.white)
                     )
                 )
-                item.setForeground(item_color)
+                for c in (ANNOT_COL_ID, ANNOT_COL_CLASS, ANNOT_COL_AREA):
+                    cell = tbl.item(i, c)
+                    if cell is not None:
+                        cell.setForeground(item_color)
 
     def update_annotation_list_with_sorted(self, sorted_annotations):
-        self.mw.annotation_list.clear()
+        self.mw.annotation_list.setRowCount(0)
         for annotation in sorted_annotations:
             class_name = annotation["category_name"]
             if not class_name.startswith("Temp-"):
-                number = annotation.get("number", 0)
-                area = calculate_area(annotation)
-                item_text = f"{class_name} - {number:<3} Area: {area:.2f}"
-                item = QListWidgetItem(item_text)
-                item.setData(Qt.ItemDataRole.UserRole, annotation)
                 color = self.mw.image_label.class_colors.get(
                     class_name, QColor(Qt.GlobalColor.white)
                 )
-                item.setForeground(color)
-                self.mw.annotation_list.addItem(item)
+                self._insert_annotation_row(annotation, color)
 
         self.mw.image_label.update()
+
+    def on_detail_pct_changed(self, row, pct):
+        """A row's Detail % spinbox changed → re-simplify that annotation's
+        polygon from its raw (full-precision) copy. Reversible: 100 % restores
+        raw exactly; the raw is lazy-captured the first time a mask is thinned.
+        (issue #24)"""
+        tbl = self.mw.annotation_list
+        id_item = tbl.item(row, ANNOT_COL_ID)
+        if id_item is None:
+            return
+        captured = id_item.data(Qt.ItemDataRole.UserRole)
+        # Resolve to the live drawn object so the in-place edit is what gets
+        # rendered + saved (a list/table copy would be lost — see #40).
+        live = self.mw.image_label._live_annotation(captured)
+        if live is None or not live.get("segmentation"):
+            return
+
+        if pct >= 100:
+            raw = live.get("segmentation_raw")
+            if raw:
+                live["segmentation"] = list(raw)
+            live["detail_pct"] = 100
+        else:
+            if not live.get("segmentation_raw"):
+                live["segmentation_raw"] = list(live["segmentation"])
+            live["segmentation"] = simplify_polygon(live["segmentation_raw"], pct)
+            live["detail_pct"] = pct
+        if live.get("bbox") is not None:
+            live["bbox"] = calculate_bbox(live["segmentation"])
+
+        # Refresh this row in place (no rebuild — keeps the spinbox stable): the
+        # UserRole + Area must track the new value so repeated edits resolve and
+        # the selection bridge keeps matching.
+        id_item.setData(Qt.ItemDataRole.UserRole, dict(live))
+        area_item = tbl.item(row, ANNOT_COL_AREA)
+        if area_item is not None:
+            area_item.setText(f"{calculate_area(live):.2f}")
+
+        # Re-point the canvas selection at the mutated live object. Otherwise
+        # highlighted_annotations still holds the pre-simplify value, so the
+        # selection overlay draws stale geometry and a subsequent #40 handle
+        # drag (_live_annotation) can't re-match the row → edit lost.
+        hl = self.mw.image_label.highlighted_annotations
+        for i, a in enumerate(hl):
+            if a == captured:
+                hl[i] = live
+
+        self.mw.image_label.update()
+        self.save_current_annotations()
+        self.mw.auto_save()
 
     # --- Per-image annotation cache sync ---
 
@@ -340,7 +442,7 @@ class AnnotationController(QObject):
         self.mw.image_label.update()
 
     def update_highlighted_annotations(self):
-        selected_items = self.mw.annotation_list.selectedItems()
+        selected_items = self._selected_row_items()
         self.mw.image_label.highlighted_annotations = [
             item.data(Qt.ItemDataRole.UserRole) for item in selected_items
         ]
@@ -383,18 +485,23 @@ class AnnotationController(QObject):
 
         self.mw.image_label.highlighted_annotations = new
 
-        # Mirror onto the list widget. Block signals so the programmatic
-        # selection doesn't retrigger itemSelectionChanged →
-        # update_highlighted_annotations, which would overwrite `new` with
-        # the list items' own (all_annotations) object identities.
-        lst = self.mw.annotation_list
-        lst.blockSignals(True)
-        lst.clearSelection()
-        for i in range(lst.count()):
-            item = lst.item(i)
-            if contains(new, item.data(Qt.ItemDataRole.UserRole)):
-                item.setSelected(True)
-        lst.blockSignals(False)
+        # Mirror onto the table. Block signals so the programmatic selection
+        # doesn't retrigger itemSelectionChanged → update_highlighted_annotations,
+        # which would overwrite `new` with the table items' own (all_annotations)
+        # object identities. Match by value-equality on col 0's UserRole.
+        tbl = self.mw.annotation_list
+        tbl.blockSignals(True)
+        tbl.clearSelection()
+        last_col = tbl.columnCount() - 1
+        for i in range(tbl.rowCount()):
+            item = tbl.item(i, ANNOT_COL_ID)
+            if item is not None and contains(new, item.data(Qt.ItemDataRole.UserRole)):
+                # setRangeSelected is additive; selectRow() would *replace* the
+                # selection in ExtendedSelection mode, dropping all but the last.
+                tbl.setRangeSelected(
+                    QTableWidgetSelectionRange(i, 0, i, last_col), True
+                )
+        tbl.blockSignals(False)
 
         self._sync_selection_buttons(len(new))
         self.mw.image_label.update()
@@ -412,17 +519,19 @@ class AnnotationController(QObject):
         self.mw.auto_save()
 
     def highlight_annotation_in_list(self, annotation):
-        for i in range(self.mw.annotation_list.count()):
-            item = self.mw.annotation_list.item(i)
-            if item.data(Qt.ItemDataRole.UserRole) == annotation:
-                self.mw.annotation_list.setCurrentItem(item)
+        tbl = self.mw.annotation_list
+        for i in range(tbl.rowCount()):
+            item = tbl.item(i, ANNOT_COL_ID)
+            if item is not None and item.data(Qt.ItemDataRole.UserRole) == annotation:
+                tbl.selectRow(i)
                 break
 
     def select_annotation_in_list(self, annotation):
-        for i in range(self.mw.annotation_list.count()):
-            item = self.mw.annotation_list.item(i)
-            if item.data(Qt.ItemDataRole.UserRole) == annotation:
-                self.mw.annotation_list.setCurrentItem(item)
+        tbl = self.mw.annotation_list
+        for i in range(tbl.rowCount()):
+            item = tbl.item(i, ANNOT_COL_ID)
+            if item is not None and item.data(Qt.ItemDataRole.UserRole) == annotation:
+                tbl.selectRow(i)
                 break
 
     # --- Annotation numbering ---
@@ -439,20 +548,8 @@ class AnnotationController(QObject):
 
     # --- Delete / merge / change-class ---
 
-    def delete_annotation(self):
-        current_item = self.mw.annotation_list.currentItem()
-        if current_item:
-            annotation = current_item.data(Qt.ItemDataRole.UserRole)
-            category_name = annotation["category_name"]
-            self.mw.image_label.annotations[category_name].remove(annotation)
-            self.mw.annotation_list.takeItem(
-                self.mw.annotation_list.row(current_item)
-            )
-            self.mw.image_label.highlighted_annotations.clear()
-            self.mw.image_label.update()
-
     def delete_selected_annotations(self):
-        selected_items = self.mw.annotation_list.selectedItems()
+        selected_items = self._selected_row_items()
         if not selected_items:
             QMessageBox.warning(
                 self.mw, "No Selection", "Please select an annotation to delete."
@@ -510,7 +607,7 @@ class AnnotationController(QObject):
             )
             return
 
-        selected_items = self.mw.annotation_list.selectedItems()
+        selected_items = self._selected_row_items()
         if len(selected_items) < 2:
             QMessageBox.warning(
                 self.mw,
@@ -642,7 +739,7 @@ class AnnotationController(QObject):
         self.mw.auto_save()
 
     def change_annotation_class(self):
-        selected_items = self.mw.annotation_list.selectedItems()
+        selected_items = self._selected_row_items()
         if not selected_items:
             QMessageBox.warning(
                 self.mw,
@@ -864,13 +961,8 @@ class AnnotationController(QObject):
         annotations = self.mw.image_label.annotations.get(class_name, [])
         number = max([ann.get("number", 0) for ann in annotations] + [0]) + 1
         annotation["number"] = number
-        area = calculate_area(annotation)
-        item_text = f"{class_name} - {number:<3} Area: {area:.2f}"
 
-        item = QListWidgetItem(item_text)
-        item.setData(Qt.ItemDataRole.UserRole, annotation)
-        item.setForeground(color)
-        self.mw.annotation_list.addItem(item)
+        self._insert_annotation_row(annotation, color)
 
         self.mw.annotation_list.clearSelection()
         self.mw.image_label.highlighted_annotations.clear()

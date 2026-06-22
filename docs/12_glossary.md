@@ -74,6 +74,18 @@ polygon scales its vertices); dragging the interior moves the whole shape.
 Reshaping a polygon vertex-by-vertex is still double-click vertex edit. See
 ADR-023.
 
+### Detail % (Mask Complexity)
+A per-annotation control (1–100, **100 = raw/full precision**) in the Annotations
+table that reversibly thins a polygon's vertex count via Douglas-Peucker, for
+smaller label files. Lower keeps proportionally fewer vertices; 100 restores the
+raw polygon exactly. See ADR-025 and [[segmentation-raw]].
+
+### segmentation_raw
+The dense, full-precision polygon kept alongside a (possibly simplified)
+`segmentation` so **Detail %** simplification is reversible. Lazy-captured the
+first time a mask is thinned; absent on raw/imported annotations. Persists in
+`.iap` but is not exported (exports emit the effective `segmentation`).
+
 ### Clamp vs Clip
 Two ways to keep annotation coordinates inside the image. **Clamp** snaps each
 coordinate into `[0,w]×[0,h]` and preserves the vertex count — used for live manual
@@ -205,7 +217,7 @@ Functions under `ui/` that construct widget trees at startup. Each takes the `Im
 |-----------|-------------|
 | Tool Section | Buttons for Polygon, Rectangle, Paint Brush, Eraser, SAM tools |
 | Class List | QListWidget showing all classes with colors |
-| Annotation List | QListWidget showing all annotations for current image |
+| Annotation List | QTableWidget (ID \| Class \| Area \| Detail %) of all annotations for the current image |
 | Image Label | Central QLabel displaying image with zoom/pan |
 | Slice Slider | Navigate through multi-dimensional image slices |
 | Menu Bar | File, Edit, View, Tools, Help menus |

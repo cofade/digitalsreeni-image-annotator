@@ -147,11 +147,22 @@ def test_reshape_invalidates_simplification_baseline(window, monkeypatch):
 def test_detail_change_keeps_selection_resolvable_for_handle_drag(window, monkeypatch):
     # #24 × #40 seam: after a detail change, the canvas selection must point at
     # the mutated live object so the overlay + a later handle drag resolve it.
+    # The bug only manifests for a LIST-driven selection, where
+    # update_highlighted_annotations stores a UserRole *copy* (not the live
+    # object) — so select through the table, not via apply_canvas_selection.
     (live,) = _seed(window, [_dense(1)], monkeypatch)
-    il = _arm_canvas(window, live)
+    il = window.image_label
+    il.original_pixmap = QPixmap(100, 100)
+    il.zoom_factor = 1.0
+    il.ui_scale = 1.0
+    window.annotation_list.selectRow(0)                # → update_highlighted_annotations
+    window.annotation_controller.update_highlighted_annotations()
+    assert il.highlighted_annotations[0] is not live   # a UserRole copy, by value
+
     window.annotation_list.cellWidget(0, ANNOT_COL_DETAIL).setValue(30)
 
-    assert il.highlighted_annotations and il.highlighted_annotations[0] is live
+    # The re-point loop must now make the selection the live, mutated object.
+    assert il.highlighted_annotations[0] is live
     shape = il._single_selected_shape()
     assert il._live_annotation(shape) is live          # not a stale pre-thin copy
 

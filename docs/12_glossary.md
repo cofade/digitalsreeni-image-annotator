@@ -217,7 +217,7 @@ Functions under `ui/` that construct widget trees at startup. Each takes the `Im
 |-----------|-------------|
 | Tool Section | Buttons for Polygon, Rectangle, Paint Brush, Eraser, SAM tools |
 | Class List | QListWidget showing all classes with colors |
-| Annotation List | QListWidget showing all annotations for current image |
+| Annotation List | QTableWidget (ID \| Class \| Area \| Detail %) of all annotations for the current image |
 | Image Label | Central QLabel displaying image with zoom/pan |
 | Slice Slider | Navigate through multi-dimensional image slices |
 | Menu Bar | File, Edit, View, Tools, Help menus |

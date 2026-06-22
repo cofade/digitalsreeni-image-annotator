@@ -1031,9 +1031,6 @@ class ImageAnnotator(QMainWindow):
     def finish_polygon(self):
         return self.annotation_controller.finish_polygon()
 
-    def delete_annotation(self):
-        return self.annotation_controller.delete_annotation()
-
     def add_annotation_to_list(self, annotation):
         return self.annotation_controller.add_annotation_to_list(annotation)
 

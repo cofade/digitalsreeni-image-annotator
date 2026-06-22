@@ -212,6 +212,15 @@ class AnnotationController(QObject):
         if area_item is not None:
             area_item.setText(f"{calculate_area(live):.2f}")
 
+        # Re-point the canvas selection at the mutated live object. Otherwise
+        # highlighted_annotations still holds the pre-simplify value, so the
+        # selection overlay draws stale geometry and a subsequent #40 handle
+        # drag (_live_annotation) can't re-match the row → edit lost.
+        hl = self.mw.image_label.highlighted_annotations
+        for i, a in enumerate(hl):
+            if a == captured:
+                hl[i] = live
+
         self.mw.image_label.update()
         self.save_current_annotations()
         self.mw.auto_save()

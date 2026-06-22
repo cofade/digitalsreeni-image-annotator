@@ -169,8 +169,9 @@ def simplify_polygon(raw_segmentation, detail_pct):
     if perimeter <= 0:
         return raw
 
-    # Binary-search the approxPolyDP epsilon for the smallest polygon whose
-    # vertex count is still <= target (and >= 3). Higher epsilon -> fewer points.
+    # Binary-search the approxPolyDP epsilon for the *richest* polygon whose
+    # vertex count is still <= target (i.e. the smallest epsilon meeting the
+    # budget; >= 3 points). Higher epsilon -> fewer points.
     lo, hi = 0.0, perimeter
     best = None
     for _ in range(24):

@@ -1023,8 +1023,14 @@ re-homes the #75 canvas↔list selection bridge onto a table:
 **Consequences**:
 - Closing #24 with a small, contained change: the feature is the table UI + one
   controller handler + one pure util; the accept paths are untouched.
-- ✅ Fully reversible per annotation; raw never lost (until simplified-then-saved,
-  the raw is the segmentation itself).
+- ✅ Fully reversible per annotation: Detail %=100 restores `segmentation_raw`
+  exactly. **Exception:** reshaping a polygon with the #40 handles invalidates the
+  baseline — `_clamp_edited_shape` drops `segmentation_raw` and resets
+  `detail_pct=100`, so the *edited* geometry becomes the new raw (the old dense
+  outline no longer describes the reshaped polygon, and a later 100 % must not
+  silently revert the edit). The detail handler also re-points
+  `highlighted_annotations` at the mutated object so the overlay + a subsequent
+  handle drag stay coherent.
 - ⚠️ The spinbox `valueChanged` is connected **after** the initial `setValue`, so
   building/rebuilding the table never fires the simplification handler.
 - ⚠️ The dead `core/annotation_utils.py` still references the old QListWidget API

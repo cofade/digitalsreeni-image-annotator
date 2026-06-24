@@ -354,6 +354,35 @@ class TrainingThread(QThread):
 - Progress updates via Qt signals
 - UI remains responsive during training
 
+## MLflow Experiment Tracking (Optional)
+
+MLflow tracking (issue #74, [ADR-027](09_architecture_decisions.md#adr-027-optional-mlflow-experiment-tracking-lazy-graceful-sam-explicit--yolo-native))
+records training runs so checkpoints stay tied to their hyperparameters and loss
+curves. Two cross-cutting rules govern it:
+
+**Optional-dependency degradation.** MLflow lives in `extras_require["tracking"]`,
+never in `install_requires`. `import mlflow` happens only inside
+`training/mlflow_tracker.py` methods, gated by a cached `mlflow_available()` probe —
+the same lazy idiom used for SAM/DINO. With MLflow absent or tracking disabled,
+`MLflowTracker` is an inert no-op (`active == False`, no exceptions) and training is
+byte-for-byte unchanged. Every live MLflow call is wrapped so a tracking error logs
+a status line but never aborts a run.
+
+**Tracking-URI resolution.** `resolve_tracking_uri(main_window)` picks the store by
+precedence: a non-empty QSettings override (`tracking/mlflow_uri`) → `<project>/mlruns`
+when a project is open (`main_window.current_project_dir`) → `<cwd>/mlruns`.
+
+**Where logging lives — by trainer shape.** SAM has a custom loop, so it logs
+*explicitly* through a tracker passed into `SAMFineTuner.train(..., tracker=...)`.
+Critically, the MLflow run is started, logged to, and ended **inside `train()` on the
+worker thread** — MLflow runs are thread-bound, and the controller only constructs the
+(unstarted) tracker. The tracker's status `log` is wired to the trainer's
+thread-safe `progress_signal`, so tracker messages reach the GUI via a queued
+connection (never a direct cross-thread QTextEdit write). YOLO instead enables
+Ultralytics' built-in MLflow callback (`MLFLOW_TRACKING_URI` /
+`MLFLOW_EXPERIMENT_NAME` env + `ultralytics.settings.update({"mlflow": ...})`),
+reset every run so a stale `True` can't leak into an untracked run.
+
 ## Error Handling
 
 ### YOLO Model/Data Mismatch

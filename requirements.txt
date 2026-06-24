@@ -23,6 +23,11 @@ huggingface_hub>=0.20.0
 pyyaml>=6.0.0
 plotly>=5.0.0
 
+# Optional: MLflow experiment tracking for model training (issue #74).
+# Not required to run the app — install via the "tracking" extra:
+#   pip install "digitalsreeni-image-annotator[tracking]"
+# mlflow>=2.0.0
+
 # Testing dependencies (dev)
 pytest>=8.0.0
 pytest-qt>=4.4.0

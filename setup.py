@@ -48,6 +48,11 @@ setup(
         "transformers>=4.40.0",
         "huggingface_hub>=0.20.0"
     ],
+    extras_require={
+        # Optional MLflow experiment tracking for model training (issue #74).
+        # Install with: pip install "digitalsreeni-image-annotator[tracking]"
+        "tracking": ["mlflow>=2.0.0"],
+    },
     entry_points={
         "console_scripts": [
             "digitalsreeni-image-annotator=digitalsreeni_image_annotator.main:main",

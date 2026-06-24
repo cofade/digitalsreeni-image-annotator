@@ -268,6 +268,7 @@ class SAMFineTuner(QObject):
         freeze_image_encoder: bool = True,
         prompt_type: str = "bbox",
         out_path: str,
+        tracker=None,
     ) -> dict:
         """Fine-tune and save. Returns a small result dict; raises on failure.
 
@@ -275,9 +276,20 @@ class SAMFineTuner(QObject):
         gradient-accumulation count over **images** — all of an image's objects
         are backpropagated together (one backward per image), so the optimizer
         steps every ``batch_size`` images.
+
+        ``tracker`` is an optional :class:`~..training.mlflow_tracker.MLflowTracker`.
+        The MLflow run is opened, logged to and closed *here* (on the worker
+        thread) because MLflow runs are thread-bound. When ``tracker`` is None
+        a disabled tracker is used, so all tracking calls are safe no-ops.
         """
         import torch
         from ultralytics.utils import ops
+
+        from .mlflow_tracker import MLflowTracker
+        if tracker is None:
+            tracker = MLflowTracker(enabled=False, tracking_uri=None)
+        # Route tracker status lines through the thread-safe progress signal.
+        tracker.set_log(self.progress_signal.emit)
 
         groups = list(groups)
         if not groups:
@@ -301,6 +313,34 @@ class SAMFineTuner(QObject):
         if total_instances == 0:
             raise ValueError("No annotated instances to train on.")
 
+        tracker.start({
+            "base_model": base_model,
+            "base_file": os.path.basename(base_file),
+            "device": self._device_label(device),
+            "epochs": epochs,
+            "lr": lr,
+            "batch_size": batch_size,
+            "freeze_image_encoder": freeze_image_encoder,
+            "prompt_type": prompt_type,
+            "images": len(groups),
+            "trainable_params": n_trainable,
+            "total_instances": total_instances,
+        })
+        try:
+            result = self._run_epochs(
+                torch, ops, pred, net, optimizer, groups, epochs, batch_size,
+                prompt_type, freeze_image_encoder, device, total_instances,
+                base_file, out_path, tracker,
+            )
+        finally:
+            tracker.end()
+        return result
+
+    def _run_epochs(
+        self, torch, ops, pred, net, optimizer, groups, epochs, batch_size,
+        prompt_type, freeze_image_encoder, device, total_instances,
+        base_file, out_path, tracker,
+    ) -> dict:
         for epoch in range(1, epochs + 1):
             if self.stop_training:
                 break
@@ -367,9 +407,12 @@ class SAMFineTuner(QObject):
                 optimizer.zero_grad()
             avg = epoch_loss / max(1, seen)
             self.progress_signal.emit(f"Epoch {epoch}/{epochs}  loss={avg:.4f}")
+            tracker.log_metrics({"loss": avg}, step=epoch)
 
         result = self._save_and_verify(net, base_file, out_path)
         result.update(stopped=self.stop_training, instances=total_instances)
+        tracker.log_metrics({"stopped_early": int(self.stop_training)})
+        tracker.log_artifact(out_path)
         self.progress_signal.emit(
             f"Saved fine-tuned model: {out_path}" if not self.stop_training
             else f"Stopped early — saved current state to {out_path}"

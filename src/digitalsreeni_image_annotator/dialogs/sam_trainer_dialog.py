@@ -18,6 +18,7 @@ from PyQt6.QtWidgets import (
     QVBoxLayout,
 )
 
+from ..app_settings import load_mlflow_prefs
 from ..inference.sam_utils import MODEL_NAMES
 
 
@@ -67,6 +68,17 @@ class SAMTrainConfigDialog(QDialog):
         self.train_encoder = QCheckBox("Also fine-tune image encoder (slower, needs more VRAM/data)")
         form.addRow("", self.train_encoder)
 
+        # MLflow experiment tracking (issue #74). Defaults to the persisted
+        # enable preference; the actual tracking URI / experiment name come
+        # from Settings → Experiment Tracking.
+        self.track_mlflow = QCheckBox("Track this run with MLflow")
+        self.track_mlflow.setChecked(load_mlflow_prefs()[0])
+        self.track_mlflow.setToolTip(
+            "Log hyperparameters, per-epoch loss and the saved checkpoint to "
+            "MLflow (configure the store under Settings → Experiment Tracking)."
+        )
+        form.addRow("", self.track_mlflow)
+
         layout.addLayout(form)
 
         note = QLabel(
@@ -97,4 +109,5 @@ class SAMTrainConfigDialog(QDialog):
             "batch_size": self.batch_size.value(),
             "prompt_type": self.prompt_type.currentText(),
             "freeze_image_encoder": not self.train_encoder.isChecked(),
+            "track_mlflow": self.track_mlflow.isChecked(),
         }

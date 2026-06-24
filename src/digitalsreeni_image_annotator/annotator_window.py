@@ -689,6 +689,20 @@ class ImageAnnotator(QMainWindow):
     def show_coco_json_combiner(self):
         self.coco_json_combiner_dialog = show_coco_json_combiner(self)
 
+    def show_mlflow_settings(self):
+        from .dialogs.mlflow_settings_dialog import MLflowSettingsDialog
+
+        MLflowSettingsDialog(self).exec()
+
+    def open_mlflow_ui(self):
+        from .training.mlflow_tracker import launch_mlflow_ui, resolve_tracking_uri
+
+        ok, message = launch_mlflow_ui(resolve_tracking_uri(self))
+        if ok:
+            QMessageBox.information(self, "MLflow UI", message)
+        else:
+            QMessageBox.warning(self, "MLflow UI", message)
+
     def show_dino_merge_dialog(self):
         show_dino_merge_dialog(self)
 

@@ -1108,6 +1108,58 @@ dialog. Validation warnings stay.
 - ⚠️ Memory is a bounded deep copy per edit per image (annotations are small;
   depth-capped at 50). ⚠️ Undo clears the current selection rather than trying to
   re-resolve it by value across a list rebuild — the safe, predictable choice.
+---
+
+## ADR-027: Optional MLflow Experiment Tracking (Lazy, Graceful; SAM-explicit / YOLO-native)
+
+**Status**: Accepted (issue bnsreenu#74)
+
+**Context**: Training output (SAM fine-tuning and YOLO training) vanished after a
+session — no record linked a saved checkpoint to its hyperparameters, no run-to-run
+comparison, no persisted loss curves. The only feedback was live strings in
+`TrainingInfoDialog`. Issue #74 asked for MLflow tracking, explicitly as an
+**optional** feature with graceful degradation when MLflow is absent.
+
+**Decision**:
+
+- **Optional dependency, lazy-imported.** MLflow lives in
+  `extras_require["tracking"]` (`pip install ...[tracking]`), never in
+  `install_requires`. `import mlflow` happens only inside the methods of
+  `training/mlflow_tracker.py`, never at module top — same idiom as
+  `inference/sam_utils.py` / `dino_utils.py`. A cached `mlflow_available()` probe
+  gates every code path.
+- **One small wrapper, `MLflowTracker`.** When disabled **or** mlflow-missing, every
+  method (`start`/`log_metrics`/`log_artifact`/`end`) is an inert no-op that never
+  raises and reports `active == False`. Every live mlflow call is wrapped so a
+  tracking error logs a status line but never aborts training.
+- **Two integration styles, by trainer shape:**
+  - **SAM** has a *custom* training loop, so it logs **explicitly** through a
+    tracker passed into `SAMFineTuner.train(..., tracker=...)`. The run is
+    started/logged/ended **inside `train()` on the worker thread** because MLflow
+    runs are thread-bound. The controller builds the (unstarted) tracker; the
+    trainer wires the tracker's status `log` to its own thread-safe
+    `progress_signal` (never a direct cross-thread QTextEdit write).
+  - **YOLO** uses Ultralytics' *built-in* MLflow callback — enabled per run by
+    setting `MLFLOW_TRACKING_URI` / `MLFLOW_EXPERIMENT_NAME` and
+    `ultralytics.settings.update({"mlflow": enable})`. It logs richer metrics
+    (box/cls/dfl loss, mAP, the model) for free. The setting is always reset so a
+    stale `True` can't leak into a later untracked run.
+- **Local file store by default.** `resolve_tracking_uri()` precedence: a non-empty
+  QSettings override → `<project>/mlruns` when a project is open → `<cwd>/mlruns`.
+- **Config surface.** A per-dialog "Track this run with MLflow" checkbox (default
+  from QSettings) on both training dialogs, a dedicated **Settings → Experiment
+  Tracking** dialog (`MLflowSettingsDialog`) for URI/experiment name, and an
+  **Open MLflow UI** action that shells out to `mlflow ui` (with a clean
+  "install mlflow" message when the extra is absent).
+
+**Consequences**:
+- App startup and the no-MLflow install path are unaffected — the feature is dead
+  weight until a user opts in.
+- ⚠️ Two logging styles (explicit for SAM, native for YOLO) means runs from the two
+  trainers are organized by their respective conventions; both honor the same
+  tracking URI / experiment name, but their param/metric keys differ.
+- ⚠️ MLflow run thread-affinity is load-bearing for SAM: the run **must** open and
+  close on the worker thread that trains, not the GUI thread that builds the tracker.
 
 ---
 

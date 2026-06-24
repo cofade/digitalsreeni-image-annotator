@@ -166,6 +166,7 @@ because it is *training*, not inference.
 |--------|----------------|
 | `training/sam_trainer.py` | `SAMFineTuner` — custom decoder (optionally encoder) fine-tuning loop reusing `SAM2Predictor.get_im_features` / `prompt_inference` under autograd, focal+dice loss, AdamW, checkpoint save+reload-verify. Also geometry helpers (`polygon_to_mask`, `mask_to_xyxy`, `mask_to_point`), `make_custom_filename`, `list_custom_models`, and the `SampleGroup` lazy-rasterising dataset item. |
 | `training/sam_dataset.py` | `build_groups_from_project` (live `all_annotations`) and `build_groups_from_folder` (prepared dataset) → `list[SampleGroup]`, mirroring `export_yolo_v5plus` image resolution. |
+| `training/mlflow_tracker.py` | Optional MLflow experiment tracking (ADR-027). `MLflowTracker` — graceful no-op when disabled/uninstalled; `mlflow_available()`, `resolve_tracking_uri()` (override → `<project>/mlruns` → `<cwd>/mlruns`), `launch_mlflow_ui()`. SAM logs through it explicitly; YOLO uses Ultralytics' native MLflow callback. |
 | `io/export_formats.py::export_sam_dataset` | Writes `images/` + `manifest.json` (authoritative bbox/segmentation specs) for an inspectable, re-trainable on-disk dataset. |
 
 Fine-tuned checkpoints save as `{"model": state_dict}` and reload

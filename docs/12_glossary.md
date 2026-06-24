@@ -29,6 +29,14 @@ The mask-supervision loss used during SAM fine-tuning: a focal term (down-weight
 ### Mask Decoder
 The lightweight SAM head that turns image embeddings + prompt embeddings into mask logits. The default fine-tuning target (`sam_mask_decoder`, ~4.2M params for the tiny model) since it is small and adapts quickly.
 
+### MLflow / Experiment Tracking
+[MLflow](https://mlflow.org/) is an optional dependency (the `tracking` extra) used to record model-training runs — SAM fine-tuning and YOLO training (see [ADR-027](09_architecture_decisions.md#adr-027-optional-mlflow-experiment-tracking-lazy-graceful-sam-explicit--yolo-native)). Key terms:
+- **Run** — one training execution, holding its parameters, time-series metrics, and artifacts.
+- **Experiment** — a named group of runs (default `image-annotator-training`), used to compare attempts.
+- **Tracking URI / store** — where runs are persisted. Defaults to a local file store at `<project>/mlruns`; `resolve_tracking_uri()` honors a QSettings override first, then the open project, then the working directory.
+- **Artifact** — a file logged to a run; here the saved fine-tuned checkpoint (SAM) or the trained model (YOLO, via Ultralytics).
+When MLflow is not installed or tracking is disabled, every tracking call is an inert no-op and training proceeds unchanged.
+
 ### Multi-dimensional Image
 An image with more than 2 dimensions, typically from microscopy. Dimensions include T (time), Z (depth), C (channel), S (scene), H (height), W (width).
 

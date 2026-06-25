@@ -54,6 +54,7 @@ class ImageLabel(QLabel):
     annotationSelected = pyqtSignal(object)             # double-click selection
     canvasSelectionChanged = pyqtSignal(object, str)    # (list[annotation], mode); mode: replace|add|toggle
     bboxEditCommitted = pyqtSignal()                    # bbox resize/move finished (issue #40)
+    editBaselineRequested = pyqtSignal()                # capture undo baseline at gesture start (ADR-026)
     deleteSelectionRequested = pyqtSignal()
     finishPolygonRequested = pyqtSignal()
     finishRectangleRequested = pyqtSignal()
@@ -71,6 +72,7 @@ class ImageLabel(QLabel):
     enableToolsRequested = pyqtSignal()
     disableToolsRequested = pyqtSignal()
     resetToolButtonsRequested = pyqtSignal()
+    selectModeRequested = pyqtSignal()                  # Esc → deactivate tool, return to selection mode
     toolSizeChanged = pyqtSignal(str, int)              # ("paint" | "eraser", new_size)
 
     # Navigation / info
@@ -366,6 +368,9 @@ class ImageLabel(QLabel):
         painter.restore()
 
     def accept_temp_annotations(self):
+        # Capture the pre-accept state for undo before the batch append; the
+        # commit pushes it on annotationsBatchSaved (ADR-026).
+        self.editBaselineRequested.emit()
         for annotation in self.temp_annotations:
             class_name = annotation["category_name"]
 
@@ -923,6 +928,9 @@ class ImageLabel(QLabel):
                 # Clamp the edited polygon back into the image before exit so a
                 # vertex dragged past the edge can't poison the saved coords
                 # (upstream #32). Persists via the save-by-reference path.
+                # NOTE: vertex edits are NOT yet on the undo stack (ADR-026) —
+                # this commit doesn't call save_current_annotations, so it
+                # would need that save-discipline fix first. Follow-up.
                 if self.original_pixmap is not None:
                     self.editing_polygon["segmentation"] = clamp_segmentation(
                         self.editing_polygon["segmentation"],
@@ -939,12 +947,16 @@ class ImageLabel(QLabel):
                 if handler is not None:
                     handler.on_enter()
         elif event.key() == Qt.Key.Key_Escape:
+            # Esc cancels any in-progress state AND returns the canvas to
+            # selection mode (the default), deactivating the active tool via
+            # selectModeRequested → window.activate_tool(None). (issue: Esc
+            # used to leave the tool selected.)
             if self.sam_points_active:
                 self.samPointsCleared.emit()
                 self.sam_positive_points = []
                 self.sam_negative_points = []
                 self.clear_temp_sam_prediction()
-                self.update()
+                self.selectModeRequested.emit()
             # DINO temp_annotations are rejected via the application-wide
             # DINOReviewEventFilter (see ADR-015). Branch below catches
             # non-DINO temp state only.
@@ -953,6 +965,7 @@ class ImageLabel(QLabel):
             elif self.sam_box_active:
                 self.sam_bbox = None
                 self.clear_temp_sam_prediction()
+                self.selectModeRequested.emit()
             elif self.editing_polygon:
                 self.editing_polygon = None
                 self.editing_point_index = None
@@ -960,6 +973,7 @@ class ImageLabel(QLabel):
                 self.enableToolsRequested.emit()
             elif self.bbox_edit is not None:
                 # Cancel an in-progress bbox resize/move, restoring the box.
+                # (Already in selection mode — no tool to deactivate.)
                 self._cancel_bbox_drag()
             elif self._is_select_mode() and (
                 self.selecting or self.selection_origin is not None
@@ -972,6 +986,11 @@ class ImageLabel(QLabel):
                 handler = self.active_tool_handler
                 if handler is not None:
                     handler.on_escape()
+                if self.current_tool is not None:
+                    # A drawing tool (polygon/rectangle/paint/eraser) stays
+                    # active after cancelling its in-progress shape; deactivate
+                    # it so Esc always lands in selection mode.
+                    self.selectModeRequested.emit()
         elif event.key() == Qt.Key.Key_Delete:
             if self.editing_polygon:
                 self.deleteSelectionRequested.emit()
@@ -1241,6 +1260,10 @@ class ImageLabel(QLabel):
         used as the resize reference for both."""
         bb = self._annotation_bbox(live)
         kind = "seg" if live.get("segmentation") else "bbox"
+        # Capture the pre-gesture state for undo now: the drag mutates the
+        # annotation in place, so the controller can't snapshot a clean
+        # "before" at commit time (ADR-026).
+        self.editBaselineRequested.emit()
         self.bbox_edit = {
             "annotation": live,
             "mode": mode,

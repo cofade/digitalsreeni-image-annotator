@@ -152,6 +152,7 @@ class SAMController(QObject):
 
     def accept_sam_prediction(self):
         if self.mw.image_label.temp_sam_prediction:
+            self.mw.annotation_controller.record_history()
             new_annotation = self.mw.image_label.temp_sam_prediction
             self.mw.image_label.annotations.setdefault(
                 new_annotation["category_name"], []
@@ -166,35 +167,18 @@ class SAMController(QObject):
             print("SAM prediction accepted, points cleared, and added to annotations.")
 
     def toggle_sam_box(self):
+        # Route through the unified tool choke-point so SAM-box is mutually
+        # exclusive with the manual tools and with SAM-points (F).
         if self.mw.sam_box_button.isChecked():
-            self.mw.sam_points_button.setChecked(False)
-            self.mw.image_label.current_tool = "sam_box"
-            self.mw.image_label.sam_box_active = True
-            self.mw.image_label.sam_points_active = False
-            self.mw.image_label.setCursor(Qt.CursorShape.CrossCursor)
+            self.mw.activate_tool("sam_box")
         else:
-            self.mw.image_label.current_tool = None
-            self.mw.image_label.sam_box_active = False
-            self.mw.image_label.setCursor(Qt.CursorShape.ArrowCursor)
-        self.mw.update_ui_for_current_tool()
+            self.mw.activate_tool(None)
 
     def toggle_sam_points(self):
         if self.mw.sam_points_button.isChecked():
-            self.mw.sam_box_button.setChecked(False)
-            self.mw.image_label.current_tool = "sam_points"
-            self.mw.image_label.sam_points_active = True
-            self.mw.image_label.sam_box_active = False
-            self.mw.image_label.setCursor(Qt.CursorShape.CrossCursor)
-            self.mw.image_label.sam_positive_points = []
-            self.mw.image_label.sam_negative_points = []
+            self.mw.activate_tool("sam_points")
         else:
-            self.mw.sam_inference_timer.stop()
-            self.mw.image_label.current_tool = None
-            self.mw.image_label.sam_points_active = False
-            self.mw.image_label.setCursor(Qt.CursorShape.ArrowCursor)
-            self.mw.image_label.sam_positive_points = []
-            self.mw.image_label.sam_negative_points = []
-        self.mw.update_ui_for_current_tool()
+            self.mw.activate_tool(None)
 
     def change_sam_model(self, model_name):
         try:

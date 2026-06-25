@@ -179,6 +179,8 @@ See [Runtime View](docs/06_runtime_view.md#multi-dimensional-image-loading) for 
 | Shape editing (#40) | Direct manipulation on the selection handles for **any** single selected shape (`_single_selected_shape()` — most shapes are `"segmentation"`, not `"bbox"`; gating on a bbox key made it unreachable). `_begin_shape_edit` records `kind`: a `"seg"` polygon **scales** its vertices (`_scale_segmentation`) / translates them; a `"bbox"` edits `[x,y,w,h]`. `_draw_selection_overlay` + `_bbox_handle_at` share `_bbox_handle_points` (visual == grab); resize anchors the opposite side (`_resize_bbox`); interior drag moves, **drag-gated**. `_sync_bbox_key` keeps an imported bbox consistent. Clamp + `bboxEditCommitted` → `commit_bbox_edit` on release; Esc reverts | Handles drawn since #75 were visual-only; dispatch sits before the rubber-band branch but stays gated on `_is_select_mode()`. Names keep the `bbox_edit` prefix = "edit via the bounding-box handles". See [ADR-023](docs/09_architecture_decisions.md). |
 | Bounds enforcement (#32/#36) | No commit may persist coords outside the image. **Clamp** manual edits (`clamp_segmentation`/`clamp_bbox`, per-coordinate, count-preserving) at edit commit; **clip** augmented polygons (`clip_polygon_to_bounds`, shapely intersection, may drop → `None`, augmenter must `continue`). Drawn shapes already clip in `finish_polygon`/`finish_rectangle` | Clamp keeps vertex correspondence mid-edit; clip is geometrically correct for batch augmentation. See [ADR-024](docs/09_architecture_decisions.md). |
 | Annotations table + Detail % (#24) | The Annotations panel is a **`QTableWidget`** (ID \| Class \| Area \| Detail %), not a list — col 0's UserRole holds the annotation (the #75 value-equality marker). Selection-mirror uses **`setRangeSelected`** (additive); `selectRow()` replaces in `ExtendedSelection`. Per-row Detail % spinbox → `on_detail_pct_changed` resolves the live obj (`_live_annotation`), simplifies from a lazy-captured `segmentation_raw` (`simplify_polygon`, 100=raw), refreshes Area+UserRole in place, saves. Connect `valueChanged` **after** the initial `setValue` so building the table doesn't fire it | Re-homing the selection bridge onto a table is the risk; reversibility needs the raw preserved. See [ADR-025](docs/09_architecture_decisions.md). |
+| Undo/redo (ADR-026) | **Snapshot** the whole per-image annotation dict, don't replay commands — restoring a deep copy sidesteps value-equality/renumber/`segmentation_raw`. `AnnotationController.record_history()` is the choke-point, called **before** each synchronous mutation (finish poly/rect, delete, merge, change-class, eraser, SAM/DINO accept); **don't** hook `save_current_annotations` (also fires on navigation, runs after mutation). Deferred gestures (bbox drag, paint) capture the baseline at **start** via `editBaselineRequested` and push at commit (`commit_edit_baseline`); a deep-equal dedup in `AnnotationHistory.record` drops aborted ones. Detail-% drags coalesce to one entry. Ctrl+Z/Y are `ApplicationShortcut`s; `_undo_blocked` no-ops during load/modal/text-focus/in-flight gesture | Delete/merge confirmation+success dialogs were **removed** (undo is the net); merge always deletes originals. See [ADR-026](docs/09_architecture_decisions.md#adr-026-snapshot-based-undoredo-for-annotation-edits). |
+| Tool activation + Esc | **All six tools (manual + SAM) funnel through `ImageAnnotator.activate_tool(name)`** — the only place `current_tool`, `sam_*_active`, and button checks change, so they can't drift and a SAM tool can't be active with a manual one. Keep `tool_group` non-exclusive (need click-to-toggle-off); `activate_tool` unchecks the others (block-signals around `setChecked`). Esc cancels the in-progress shape **and** emits `selectModeRequested` → `activate_tool(None)`, so Esc always returns to selection mode | SAM toggles used to write state ad-hoc; the group was non-exclusive. See [Tool Activation](docs/08_crosscutting_concepts.md#tool-activation--one-choke-point-mutually-exclusive). |
 
 ## Development Workflow
 
@@ -247,6 +249,7 @@ See [Risks and Technical Debt](docs/11_risks_and_technical_debt.md) for full lis
 | Global | Action |
 |--------|--------|
 | Ctrl+N/O/S | New/Open/Save Project |
+| Ctrl+Z / Ctrl+Y (or Ctrl+Shift+Z) | Undo / redo annotation edit (ADR-026) |
 | Ctrl+Shift+= / Ctrl+Shift+- | UI font bigger/smaller (8-24pt, persisted via QSettings) |
 | Ctrl+Shift+0 | Reset UI font size |
 | F1 | Help |
@@ -259,9 +262,9 @@ See [Risks and Technical Debt](docs/11_risks_and_technical_debt.md) for full lis
 | Drag / Shift+Drag (no tool) | Rubber-band select / add |
 | Drag handle / inside (one shape selected) | Resize (scale) / move the shape |
 | Double-click | Vertex-edit mode |
-| Delete | Delete selected mask(s) |
+| Delete | Delete selected mask(s) — instant, undoable (no confirm dialog) |
 | Enter | Finish/Accept |
-| Esc | Cancel |
+| Esc | Cancel in-progress shape **and** return to selection mode (deactivates the tool) |
 | Up/Down | Navigate slices |
 | -/= | Brush size |
 

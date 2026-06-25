@@ -91,11 +91,18 @@ User clicks / drags on image (no tool active)
 User presses Delete (canvas focused)
     │
     ├─> ImageLabel.keyPressEvent → deleteSelectionRequested
-    └─> AnnotationController.delete_selected_annotations()  (confirm → remove → re-sort → autosave)
+    └─> AnnotationController.delete_selected_annotations()  (record_history → remove → re-sort → autosave)
 ```
 
 The canvas and the list share one selection (matched by dict value-equality), so
 Delete/Merge/Change-Class behave the same from either surface. See ADR-022.
+
+**Delete and merge are now frictionless and reversible.** Delete removes the
+selection immediately — no "Are you sure?" confirmation and no "N deleted" success
+dialog. Merge always replaces the originals with their union (no keep/delete prompt)
+and shows no success dialog. Both snapshot the pre-edit state first, so **Ctrl+Z**
+restores it; the removed confirmations are unnecessary now that undo is the net.
+See [ADR-026](09_architecture_decisions.md#adr-026-snapshot-based-undoredo-for-annotation-edits).
 
 ## Shape Editing on the Canvas (issue #40)
 

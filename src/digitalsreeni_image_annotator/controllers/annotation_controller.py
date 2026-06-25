@@ -217,7 +217,7 @@ class AnnotationController(QObject):
         if not file_name:
             return
 
-        with open(file_name, "r") as f:
+        with open(file_name, "r", encoding='utf-8') as f:
             self.mw.loaded_json = json.load(f)
 
         self.mw.class_list.clear()
@@ -259,9 +259,11 @@ class AnnotationController(QObject):
 
         for img in json_images.values():
             updated_all_images.append(img)
-            self.mw.image_list.addItem(img["file_name"])
 
         self.mw.all_images = updated_all_images
+        # Rebuild the list in sorted order (issue #60). The reconciliation
+        # loop above already consumed the pre-sort row/index alignment.
+        self.mw.update_image_list()
 
         self.mw.all_annotations.clear()
         for annotation in self.mw.loaded_json["annotations"]:
@@ -538,7 +540,7 @@ class AnnotationController(QObject):
         msg_box.setText("Do you want to keep the original annotations?")
         msg_box.setIcon(QMessageBox.Icon.Question)
 
-        keep_button = msg_box.addButton("Keep", QMessageBox.ButtonRole.YesRole)
+        msg_box.addButton("Keep", QMessageBox.ButtonRole.YesRole)
         delete_button = msg_box.addButton("Delete", QMessageBox.ButtonRole.NoRole)
         cancel_button = msg_box.addButton("Cancel", QMessageBox.ButtonRole.RejectRole)
 

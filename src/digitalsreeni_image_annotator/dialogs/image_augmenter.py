@@ -169,7 +169,7 @@ class ImageAugmenterDialog(QDialog):
         self.coco_file, _ = QFileDialog.getOpenFileName(self, "Select COCO JSON File", "", "JSON Files (*.json)")
         if self.coco_file:
             self.coco_label.setText(f"COCO JSON File: {os.path.basename(self.coco_file)}")
-            with open(self.coco_file, 'r') as f:
+            with open(self.coco_file, 'r', encoding='utf-8') as f:
                 self.coco_data = json.load(f)
             self.coco_check.setChecked(True)  # Automatically check the box when a file is loaded
                 
@@ -270,7 +270,7 @@ class ImageAugmenterDialog(QDialog):
     
         if self.coco_check.isChecked():
             output_coco_path = os.path.join(self.output_dir, "augmented_annotations.json")
-            with open(output_coco_path, 'w') as f:
+            with open(output_coco_path, 'w', encoding='utf-8') as f:
                 json.dump(augmented_coco_data, f, indent=2)
     
         QMessageBox.information(self, "Augmentation Complete", "Image and annotation augmentation has been completed successfully.")

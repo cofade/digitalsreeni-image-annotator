@@ -19,7 +19,7 @@ def convert_to_coco(all_annotations, class_mapping, image_paths, slices, image_s
     with tempfile.TemporaryDirectory() as temp_dir:
         json_file_path, images_dir = export_coco_json(all_annotations, class_mapping, image_paths, slices, image_slices, temp_dir)
         
-        with open(json_file_path, 'r') as f:
+        with open(json_file_path, 'r', encoding='utf-8') as f:
             coco_data = json.load(f)
         
     return coco_data, images_dir
@@ -118,7 +118,7 @@ def export_coco_json(all_annotations, class_mapping, image_paths, slices, image_
 
     # Save COCO JSON file
     json_file_path = os.path.join(output_dir, json_filename)
-    with open(json_file_path, 'w') as f:
+    with open(json_file_path, 'w', encoding='utf-8') as f:
         json.dump(coco_format, f, indent=2)
 
     return json_file_path, images_dir
@@ -205,7 +205,7 @@ def export_yolo_v4(all_annotations, class_mapping, image_paths, slices, image_sl
 
         # Write YOLO format annotation
         label_file = os.path.splitext(file_name_img)[0] + '.txt'
-        with open(os.path.join(labels_dir, label_file), 'w') as f:
+        with open(os.path.join(labels_dir, label_file), 'w', encoding='utf-8') as f:
             for class_name, class_annotations in annotations.items():
                 if class_name not in class_to_index:
                     print(f"[YOLO v4] warning: class {class_name!r} not in class_mapping, skipped")
@@ -236,7 +236,7 @@ def export_yolo_v4(all_annotations, class_mapping, image_paths, slices, image_sl
 
     # Save YAML file in the output directory
     yaml_path = os.path.join(output_dir, 'data.yaml')
-    with open(yaml_path, 'w') as f:
+    with open(yaml_path, 'w', encoding='utf-8') as f:
         yaml.dump(yaml_data, f, default_flow_style=False)
 
     return train_dir, yaml_path
@@ -280,7 +280,7 @@ def export_yolo_v5plus(all_annotations, class_mapping, image_paths, slices, imag
         print(f"[YOLO v5+]   image={image_name!r} annotation-classes={list(annotations.keys()) if annotations else '(none)'}")
         # Skip if there are no annotations for this image/slice
         if not annotations:
-            print(f"[YOLO v5+]     skipping: no annotations")
+            print("[YOLO v5+]     skipping: no annotations")
             continue
 
         # For simplicity, we'll put all data in the train directory
@@ -334,7 +334,7 @@ def export_yolo_v5plus(all_annotations, class_mapping, image_paths, slices, imag
         label_file = os.path.splitext(file_name_img)[0] + '.txt'
         label_path = os.path.join(labels_dir, label_file)
         ann_lines = 0
-        with open(label_path, 'w') as f:
+        with open(label_path, 'w', encoding='utf-8') as f:
             for class_name, class_annotations in annotations.items():
                 if class_name not in class_to_index:
                     print(f"[YOLO v5+]     warning: class {class_name!r} not in class_mapping, skipped")
@@ -372,7 +372,7 @@ def export_yolo_v5plus(all_annotations, class_mapping, image_paths, slices, imag
 
     # Save YAML file in the output directory
     yaml_path = os.path.join(output_dir, 'data.yaml')
-    with open(yaml_path, 'w') as f:
+    with open(yaml_path, 'w', encoding='utf-8') as f:
         yaml.dump(yaml_data, f, default_flow_style=False)
 
     return output_dir, yaml_path
@@ -477,7 +477,7 @@ def export_labeled_images(all_annotations, class_mapping, image_paths, slices, i
 
     # Create summary text file
     summary_path = os.path.join(labeled_images_dir, 'class_summary.txt')
-    with open(summary_path, 'w') as f:
+    with open(summary_path, 'w', encoding='utf-8') as f:
         f.write("Classes (folder names):\n")
         for class_name, files in class_summary.items():
             if files:  # Only include classes that have annotations
@@ -575,7 +575,7 @@ def export_semantic_labels(all_annotations, class_mapping, image_paths, slices, 
 
     # Create class mapping text file
     mapping_path = os.path.join(segmented_images_dir, 'class_pixel_mapping.txt')
-    with open(mapping_path, 'w') as f:
+    with open(mapping_path, 'w', encoding='utf-8') as f:
         f.write("Pixel Value : Class Name\n")
         for class_name, pixel_value in class_to_pixel.items():
             f.write(f"{pixel_value} : {class_name}\n")
@@ -680,7 +680,7 @@ def export_pascal_voc_bbox(all_annotations, class_mapping, image_paths, slices, 
         # Save the XML file
         xml_str = minidom.parseString(ET.tostring(root)).toprettyxml(indent="    ")
         xml_filename = os.path.splitext(file_name_img)[0] + '.xml'
-        with open(os.path.join(annotations_dir, xml_filename), 'w') as f:
+        with open(os.path.join(annotations_dir, xml_filename), 'w', encoding='utf-8') as f:
             f.write(xml_str)
     
     return output_dir         
@@ -798,7 +798,7 @@ def export_pascal_voc_both(all_annotations, class_mapping, image_paths, slices, 
         # Save the XML file
         xml_str = minidom.parseString(ET.tostring(root)).toprettyxml(indent="    ")
         xml_filename = os.path.splitext(file_name_img)[0] + '.xml'
-        with open(os.path.join(annotations_dir, xml_filename), 'w') as f:
+        with open(os.path.join(annotations_dir, xml_filename), 'w', encoding='utf-8') as f:
             f.write(xml_str)
 
     return output_dir

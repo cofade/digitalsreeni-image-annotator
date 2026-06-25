@@ -160,7 +160,7 @@ class DatasetSplitterTool(QDialog):
         QMessageBox.information(self, "Success", "Dataset split successfully!")
 
     def split_images_and_annotations(self):
-        with open(self.json_file, 'r') as f:
+        with open(self.json_file, 'r', encoding='utf-8') as f:
             coco_data = json.load(f)
 
         image_files = [img['file_name'] for img in coco_data['images']]
@@ -246,7 +246,7 @@ class DatasetSplitterTool(QDialog):
         subset_dir = os.path.join(self.output_directory, subset)
         os.makedirs(subset_dir, exist_ok=True)
         output_file = os.path.join(subset_dir, f"{subset}_annotations.json")
-        with open(output_file, 'w') as f:
+        with open(output_file, 'w', encoding='utf-8') as f:
             json.dump(data, f, indent=2)
 
     def split_yolo_format(self, coco_data, train_images, val_images, test_images):
@@ -289,7 +289,7 @@ class DatasetSplitterTool(QDialog):
                 
                 # Create YOLO format labels
                 label_file = os.path.join(labels_dir, os.path.splitext(image_file)[0] + ".txt")
-                with open(label_file, "w") as f:
+                with open(label_file, "w", encoding='utf-8') as f:
                     for ann in annotations:
                         # Convert COCO class id to YOLO class id
                         yolo_class = categories[ann["category_id"]]
@@ -310,7 +310,7 @@ class DatasetSplitterTool(QDialog):
         }
         yaml_data.update(yaml_paths)  # Add only paths for non-empty splits
 
-        with open(os.path.join(self.output_directory, 'data.yaml'), 'w') as f:
+        with open(os.path.join(self.output_directory, 'data.yaml'), 'w', encoding='utf-8') as f:
             yaml.dump(yaml_data, f, default_flow_style=False)
 
         QMessageBox.information(self, "Success", "Dataset and YOLO annotations split successfully!")

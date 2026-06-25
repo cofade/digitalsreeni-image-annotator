@@ -29,6 +29,7 @@ from PyQt6.QtGui import (
 from PyQt6.QtWidgets import QLabel, QMessageBox
 
 from .tools import EraserTool, PaintBrushTool, PolygonTool, RectangleTool
+from ..utils import calculate_area
 
 warnings.filterwarnings("ignore", category=UserWarning)
 
@@ -848,6 +849,12 @@ class ImageLabel(QLabel):
         self.update()
 
     def start_polygon_edit(self, pos):
+        # Among all polygons containing the click, edit the smallest by
+        # area so an annotation fully nested inside another is reachable
+        # (upstream issue #33) instead of always grabbing the first/outer
+        # match.
+        best = None
+        best_area = None
         for class_name, annotations in self.annotations.items():
             for annotation in annotations:
                 if "segmentation" in annotation:
@@ -859,11 +866,16 @@ class ImageLabel(QLabel):
                         )
                     ]
                     if self.point_in_polygon(pos, points):
-                        self.editing_polygon = annotation
-                        self.current_tool = None
-                        self.disableToolsRequested.emit()
-                        self.resetToolButtonsRequested.emit()
-                        return annotation
+                        area = calculate_area(annotation)
+                        if best is None or area < best_area:
+                            best = annotation
+                            best_area = area
+        if best is not None:
+            self.editing_polygon = best
+            self.current_tool = None
+            self.disableToolsRequested.emit()
+            self.resetToolButtonsRequested.emit()
+            return best
         return None
 
     def handle_editing_click(self, pos, event):

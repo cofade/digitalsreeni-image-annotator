@@ -1,7 +1,7 @@
 import os
 from PyQt6.QtWidgets import QFileDialog, QMessageBox
 from PyQt6.QtWidgets import (QDialog, QVBoxLayout, QHBoxLayout, QPushButton,
-                             QLineEdit, QLabel, QFileDialog, QDialogButtonBox)
+                             QLineEdit, QLabel, QDialogButtonBox)
 import yaml
 import numpy as np
 from pathlib import Path
@@ -11,8 +11,8 @@ from ..io.export_formats import export_yolo_v5plus
 from collections import deque
 
 
-from PyQt6.QtWidgets import QDialog, QVBoxLayout, QTextEdit, QPushButton
-from PyQt6.QtCore import Qt, pyqtSignal, QObject
+from PyQt6.QtWidgets import QTextEdit
+from PyQt6.QtCore import pyqtSignal, QObject
 
 class TrainingInfoDialog(QDialog):
     stop_signal = pyqtSignal()
@@ -140,7 +140,7 @@ class YOLOTrainer(QObject):
         )
         
         yaml_path = Path(yaml_path)
-        with yaml_path.open('r') as f:
+        with yaml_path.open('r', encoding='utf-8') as f:
             yaml_content = yaml.safe_load(f)
         
         # Update paths for new YOLO v5+ structure
@@ -148,7 +148,7 @@ class YOLOTrainer(QObject):
         yaml_content['val'] = 'images/val'      # Changed from train/images
         yaml_content['test'] = '../test/images'
         
-        with yaml_path.open('w') as f:
+        with yaml_path.open('w', encoding='utf-8') as f:
             yaml.dump(yaml_content, f, default_flow_style=False)
         
         self.yaml_path = str(yaml_path)
@@ -158,7 +158,7 @@ class YOLOTrainer(QObject):
         if yaml_path is None:
             yaml_path, _ = QFileDialog.getOpenFileName(self.main_window, "Select YOLO Dataset YAML", "", "YAML Files (*.yaml *.yml)")
         if yaml_path and os.path.exists(yaml_path):
-            with open(yaml_path, 'r') as f:
+            with open(yaml_path, 'r', encoding='utf-8') as f:
                 try:
                     yaml_data = yaml.safe_load(f)
                     print(f"Loaded YAML contents: {yaml_data}")
@@ -175,7 +175,7 @@ class YOLOTrainer(QObject):
                     self.yaml_path = yaml_path
     
                     # Write the updated YAML back to the file
-                    with open(yaml_path, 'w') as f:
+                    with open(yaml_path, 'w', encoding='utf-8') as f:
                         yaml.dump(yaml_data, f, default_flow_style=False)
     
                     return True
@@ -218,7 +218,7 @@ class YOLOTrainer(QObject):
             print(f"Training with YAML: {yaml_path}")
             print(f"YAML directory: {yaml_dir}")
             
-            with yaml_path.open('r') as f:
+            with yaml_path.open('r', encoding='utf-8') as f:
                 yaml_content = yaml.safe_load(f)
             print(f"YAML content: {yaml_content}")
             
@@ -237,7 +237,7 @@ class YOLOTrainer(QObject):
             
             # Write updated YAML with adjusted paths
             temp_yaml_path = yaml_dir / 'temp_train.yaml'
-            with temp_yaml_path.open('w') as f:
+            with temp_yaml_path.open('w', encoding='utf-8') as f:
                 yaml.dump(yaml_content, f, default_flow_style=False)
             
             print(f"Training with updated YAML: {temp_yaml_path}")
@@ -258,7 +258,7 @@ class YOLOTrainer(QObject):
         yaml_path = Path(self.yaml_path)
         yaml_dir = yaml_path.parent
         
-        with yaml_path.open('r') as f:
+        with yaml_path.open('r', encoding='utf-8') as f:
             yaml_content = yaml.safe_load(f)
         
         # Use paths from YAML content
@@ -279,9 +279,9 @@ class YOLOTrainer(QObject):
             missing_dirs.append(f"Validation labels directory: {val_labels_dir}")
         
         if missing_dirs:
-            raise FileNotFoundError(f"The following directories were not found:\n" + "\n".join(missing_dirs))
+            raise FileNotFoundError("The following directories were not found:\n" + "\n".join(missing_dirs))
         
-        print(f"Dataset structure verified:")
+        print("Dataset structure verified:")
         print(f"Train images: {train_images_dir}")
         print(f"Train labels: {train_labels_dir}")
         print(f"Val images: {val_images_dir}")
@@ -290,7 +290,7 @@ class YOLOTrainer(QObject):
     def check_ultralytics_settings(self):
         settings_path = Path.home() / ".config" / "Ultralytics" / "settings.yaml"
         if settings_path.exists():
-            with settings_path.open('r') as f:
+            with settings_path.open('r', encoding='utf-8') as f:
                 settings = yaml.safe_load(f)
             print(f"Ultralytics settings: {settings}")
         else:
@@ -332,7 +332,7 @@ class YOLOTrainer(QObject):
         info = f"Epoch {epoch}/{total_epochs}, Loss: {loss:.4f}"
         self.epoch_info.append(info)
         
-        display_text = f"Current Progress:\n" + "\n".join(self.epoch_info)
+        display_text = "Current Progress:\n" + "\n".join(self.epoch_info)
         if self.progress_callback:
             self.progress_callback(display_text)
 
@@ -342,7 +342,7 @@ class YOLOTrainer(QObject):
             raise ValueError("No model to save. Please train a model first.")
         save_path, _ = QFileDialog.getSaveFileName(self.main_window, "Save YOLO Model", "", "YOLO Model (*.pt)")
         if save_path:
-            self.model.export(save_path)
+            self.model.save(save_path)
             return True
         return False
 
@@ -351,7 +351,7 @@ class YOLOTrainer(QObject):
 
         try:
             self.model = YOLO(model_path)
-            with open(yaml_path, 'r') as f:
+            with open(yaml_path, 'r', encoding='utf-8') as f:
                 self.prediction_yaml = yaml.safe_load(f)
             
             if 'names' not in self.prediction_yaml:

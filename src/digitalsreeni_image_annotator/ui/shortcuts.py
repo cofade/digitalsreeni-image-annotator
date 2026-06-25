@@ -13,15 +13,29 @@ from ..controllers.dino_controller import DINOReviewEventFilter
 
 
 def install_shortcuts(window):
-    """Register global keyboard shortcuts. Currently just F2 → Snake
-    game. Registered as a QShortcut with ApplicationShortcut context
-    so it fires regardless of which widget has focus — putting it in
-    keyPressEvent didn't work because QTableWidget (DINO threshold
-    table) and other focusable children consume F2 before it bubbles
-    up to the main window."""
+    """Register global keyboard shortcuts. Registered as QShortcuts with
+    ApplicationShortcut context so they fire regardless of which widget has
+    focus — putting them in keyPressEvent didn't work because QTableWidget
+    (the annotation list / DINO threshold table) and other focusable children
+    consume the keys before they bubble up to the main window."""
     window._snake_shortcut = QShortcut(QKeySequence("F2"), window)
     window._snake_shortcut.setContext(Qt.ShortcutContext.ApplicationShortcut)
     window._snake_shortcut.activated.connect(window.launch_snake_game)
+
+    # Undo / redo of annotation edits (ADR-026). Ctrl+Z, plus Ctrl+Y and
+    # Ctrl+Shift+Z as cross-platform redo aliases.
+    ac = window.annotation_controller
+    window._undo_shortcut = QShortcut(QKeySequence.StandardKey.Undo, window)
+    window._undo_shortcut.setContext(Qt.ShortcutContext.ApplicationShortcut)
+    window._undo_shortcut.activated.connect(ac.undo)
+
+    window._redo_shortcut = QShortcut(QKeySequence.StandardKey.Redo, window)
+    window._redo_shortcut.setContext(Qt.ShortcutContext.ApplicationShortcut)
+    window._redo_shortcut.activated.connect(ac.redo)
+
+    window._redo_shortcut_alt = QShortcut(QKeySequence("Ctrl+Shift+Z"), window)
+    window._redo_shortcut_alt.setContext(Qt.ShortcutContext.ApplicationShortcut)
+    window._redo_shortcut_alt.activated.connect(ac.redo)
 
 
 def install_event_filters(window):

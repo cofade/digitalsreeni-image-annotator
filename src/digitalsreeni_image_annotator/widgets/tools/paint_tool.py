@@ -105,6 +105,10 @@ class PaintBrushTool(ToolHandler):
 
     def _start(self, pos):
         if self.label.temp_paint_mask is None:
+            # Fresh stroke: capture the pre-paint state for undo before any
+            # mask exists. The commit pushes it on annotationsBatchSaved
+            # (ADR-026).
+            self.label.editBaselineRequested.emit()
             self.label.temp_paint_mask = np.zeros(
                 (
                     self.label.original_pixmap.height(),

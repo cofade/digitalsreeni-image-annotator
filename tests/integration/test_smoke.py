@@ -36,6 +36,8 @@ INTERNAL_MODULES = [
     # entry point and is validated by the CLI smoke tests instead.
     "digitalsreeni_image_annotator.annotator_window",
     "digitalsreeni_image_annotator.utils",
+    # Controllers
+    "digitalsreeni_image_annotator.controllers.annotation_history",
     # Widgets
     "digitalsreeni_image_annotator.widgets.image_label",
     # Inference

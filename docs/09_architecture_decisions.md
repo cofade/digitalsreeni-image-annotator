@@ -1038,6 +1038,73 @@ re-homes the #75 canvas↔list selection bridge onto a table:
 
 ---
 
+## ADR-026: Snapshot-Based Undo/Redo for Annotation Edits
+
+**Status**: Accepted
+
+**Context**: Annotation edits (create, delete, merge, move/scale, change class,
+detail %, paint, eraser, SAM/DINO accept) were all irreversible. The only safety
+net was a confirmation dialog on delete and a keep/delete prompt on merge — both
+of which broke flow (delete also popped a success dialog). The justification for
+those dialogs was "you can't undo," so removing them required a real undo/redo.
+
+The mutation surface is wide and subtle: every operation writes both
+`image_label.annotations` (the live working copy) and `all_annotations[key]`, and
+the two share inner list objects via the shallow-copy save. Annotations are
+matched by **value-equality**, not identity (ADR-022/025), numbers are reassigned
+on most edits (`renumber_annotations`), and Detail % carries a lazily-captured
+`segmentation_raw` (ADR-025). A fine-grained command-per-operation design would
+have to reproduce every one of these invariants in its undo path.
+
+**Decision**: **Snapshot the whole per-image annotation dict** before each edit;
+undo restores a snapshot wholesale. Restoring the entire dict sidesteps all the
+value-equality / renumbering / selection-rehoming / `segmentation_raw`
+subtleties — there is nothing to reconcile, only a deep copy to install.
+
+- `controllers/annotation_history.AnnotationHistory` holds **per-image-key**
+  undo/redo stacks (key = `current_slice or image_file_name`), so Ctrl+Z acts on
+  the image on screen and never reaches an image you can't see. Stacks are
+  retained across navigation and cleared on clear-all / new-project / project
+  open. Depth is capped (50) and the symmetric model needs no separate baseline:
+  `record(before)` pushes the pre-edit state, `undo(current)` swaps current onto
+  redo and returns the popped before-state, `redo(current)` is the mirror.
+- **One choke-point**, `AnnotationController.record_history()`, called *before*
+  each synchronous mutation (finish polygon/rectangle, delete, merge, change
+  class, eraser replace, SAM accept, DINO accept). It is **not** hooked onto
+  `save_current_annotations()` — that also fires on navigation and runs *after*
+  mutation, so it can neither be filtered to real edits nor capture a clean
+  "before."
+- **Two deferred gestures** (bbox move/scale, paint stroke) notify the controller
+  only *after* mutating in place. They capture the baseline at gesture **start**
+  via a new `ImageLabel.editBaselineRequested` signal → `capture_edit_baseline`,
+  and push it at commit (`commit_edit_baseline`, called from `commit_bbox_edit`
+  and the `annotationsBatchSaved` handler). A **deep-equality dedup** in
+  `record()` drops aborted gestures (Esc'd drag, empty stroke) so they leave no
+  entry.
+- **Detail-% coalescing.** The spinbox fires `valueChanged` per step; a whole
+  drag on one annotation records once (token = key + number + class), so one
+  Ctrl+Z reverts the entire drag including `detail_pct` and `segmentation_raw`.
+- **Shortcuts** are `QShortcut`s with `ApplicationShortcut` context (Ctrl+Z; Ctrl+Y
+  and Ctrl+Shift+Z for redo) — the annotation-list `QTableWidget` would otherwise
+  consume Ctrl+Z. Undo/redo are no-ops during project load, while a modal is open,
+  while a text field has focus, or while a draw/edit gesture is in flight
+  (`_undo_blocked`). Undo persists via `auto_save` — the net must survive reopen.
+
+**Delete and merge dialogs removed.** With undo as the net, `delete_selected_annotations`
+drops both the confirmation and the success dialog; `merge_annotations` drops the
+keep/delete prompt (originals are always replaced by the union) and the success
+dialog. Validation warnings stay.
+
+**Consequences**:
+- ✅ Every annotation edit is reversible; destructive ops are instant and flow-friendly.
+- ✅ Robust against the value-equality/renumber/raw subtleties because it restores
+  whole dicts rather than replaying operations.
+- ⚠️ Memory is a bounded deep copy per edit per image (annotations are small;
+  depth-capped at 50). ⚠️ Undo clears the current selection rather than trying to
+  re-resolve it by value across a list rebuild — the safe, predictable choice.
+
+---
+
 ## Decisions Under Consideration
 
 ### Consider pytest-qt for Utility Testing

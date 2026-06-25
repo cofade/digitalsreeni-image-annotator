@@ -193,6 +193,7 @@ class ImageAnnotator(QMainWindow):
         il.annotationSelected.connect(ac.select_annotation_in_list)
         il.canvasSelectionChanged.connect(ac.apply_canvas_selection)
         il.bboxEditCommitted.connect(ac.commit_bbox_edit)
+        il.editBaselineRequested.connect(ac.capture_edit_baseline)
         il.deleteSelectionRequested.connect(ac.delete_selected_annotations)
         il.finishPolygonRequested.connect(ac.finish_polygon)
         il.finishRectangleRequested.connect(ac.finish_rectangle)
@@ -211,6 +212,7 @@ class ImageAnnotator(QMainWindow):
         il.disableToolsRequested.connect(self.disable_tools)
         il.resetToolButtonsRequested.connect(self.reset_tool_buttons)
         il.toolSizeChanged.connect(self._on_tool_size_changed)
+        il.selectModeRequested.connect(self._on_select_mode_requested)
 
         # Navigation / info
         il.zoomInRequested.connect(self.zoom_in)
@@ -224,8 +226,15 @@ class ImageAnnotator(QMainWindow):
             self.eraser_size = size
 
     def _on_annotations_batch_saved(self) -> None:
+        # Push the pre-gesture undo baseline captured at paint-stroke /
+        # temp-accept start (no-op if none pending). ADR-026.
+        self.annotation_controller.commit_edit_baseline()
         self.annotation_controller.save_current_annotations()
         self.class_controller.update_slice_list_colors()
+
+    def _on_select_mode_requested(self) -> None:
+        """Esc on the canvas: deactivate any tool, return to selection mode."""
+        self.activate_tool(None)
 
     def setup_ui(self):
         # Initialize the main layout. tool_group is created inside
@@ -748,6 +757,7 @@ class ImageAnnotator(QMainWindow):
         self.annotation_list.setRowCount(0)
         self.image_label.annotations.clear()
         self.image_label.highlighted_annotations.clear()
+        self.annotation_controller.clear_history()  # drop undo/redo stacks
 
         # Clear current class
         self.current_class = None
@@ -916,6 +926,58 @@ class ImageAnnotator(QMainWindow):
     def change_annotation_class(self):
         return self.annotation_controller.change_annotation_class()
 
+    def _tool_buttons(self):
+        """Map every canvas tool name to its toolbar button. SAM tools share
+        the same exclusive set as the manual tools (only one is ever active)."""
+        return {
+            "polygon": self.polygon_button,
+            "rectangle": self.rectangle_button,
+            "paint_brush": self.paint_brush_button,
+            "eraser": self.eraser_button,
+            "sam_box": self.sam_box_button,
+            "sam_points": self.sam_points_button,
+        }
+
+    def activate_tool(self, tool_name):
+        """Single choke-point for canvas-tool activation.
+
+        Makes all six tools (manual + SAM) mutually exclusive and keeps
+        ``current_tool``, the SAM flags, and the toolbar button checks in
+        sync. ``tool_name=None`` returns to selection mode (the canvas
+        default). This is why a SAM tool can no longer be active alongside a
+        drawing tool, and why Esc can drop back to selection mode.
+        """
+        il = self.image_label
+        is_sam = tool_name in ("sam_box", "sam_points")
+
+        # 1) Exclusive button sync. Block signals so setChecked doesn't
+        #    re-enter toggle_tool / toggle_sam_*.
+        for name, btn in self._tool_buttons().items():
+            btn.blockSignals(True)
+            btn.setChecked(name == tool_name)
+            btn.blockSignals(False)
+
+        # 2) SAM transient state: clear unless we're entering that SAM tool.
+        il.sam_box_active = tool_name == "sam_box"
+        il.sam_points_active = tool_name == "sam_points"
+        il.sam_bbox = None
+        il.sam_positive_points = []
+        il.sam_negative_points = []
+        if not is_sam:
+            self.sam_inference_timer.stop()
+            il.drawing_sam_bbox = False
+            il.clear_temp_sam_prediction()
+
+        # 3) Switch the active handler (deactivates the previous one). SAM has
+        #    no ToolHandler, so this just records current_tool for it.
+        il.set_active_tool(tool_name)
+
+        # 4) Cursor + button enable/check refresh.
+        il.setCursor(
+            Qt.CursorShape.CrossCursor if is_sam else Qt.CursorShape.ArrowCursor
+        )
+        self.update_ui_for_current_tool()
+
     def toggle_tool(self):
         if not self.image_label.check_unsaved_changes():
             return
@@ -942,29 +1004,19 @@ class ImageAnnotator(QMainWindow):
             sender.setChecked(False)
             return
 
-        other_buttons = [btn for btn in self.tool_group.buttons() if btn != sender]
+        tool_for_button = {
+            self.polygon_button: "polygon",
+            self.rectangle_button: "rectangle",
+            self.paint_brush_button: "paint_brush",
+            self.eraser_button: "eraser",
+        }
 
         if sender.isChecked():
-            # Uncheck all other buttons
-            for btn in other_buttons:
-                btn.setChecked(False)
-
-            # Set the current tool based on the checked button
-            if sender == self.polygon_button:
-                self.image_label.set_active_tool("polygon")
-            elif sender == self.rectangle_button:
-                self.image_label.set_active_tool("rectangle")
-            elif sender == self.paint_brush_button:
-                self.image_label.set_active_tool("paint_brush")
-                self.image_label.setFocus()  # Set focus on the image label
-            elif sender == self.eraser_button:
-                self.image_label.set_active_tool("eraser")
-                self.image_label.setFocus()  # Set focus on the image label
+            self.activate_tool(tool_for_button.get(sender))
+            if sender in (self.paint_brush_button, self.eraser_button):
+                self.image_label.setFocus()  # paint/eraser need key focus
         else:
-            self.image_label.set_active_tool(None)
-
-        # Update UI based on the current tool
-        self.update_ui_for_current_tool()
+            self.activate_tool(None)
 
     def wheelEvent(self, event):
         if event.modifiers() == Qt.KeyboardModifier.ControlModifier:

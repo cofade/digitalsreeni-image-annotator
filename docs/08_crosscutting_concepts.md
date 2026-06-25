@@ -740,3 +740,38 @@ This never collides with any class colour. Relatedly, the default class palette
 (`core/constants.py`) was reordered so red is last and the fill opacity lowered
 to keep the image legible — see the No Hardcoded Colors Rule for the broader
 "don't fight the theme/colours" theme.
+
+## Tool Activation — One Choke-Point, Mutually Exclusive
+
+All six canvas tools (Polygon, Rectangle, Paint, Eraser, SAM-box, SAM-points)
+go through a **single** activation method, `ImageAnnotator.activate_tool(name)`
+(`name=None` = selection mode). It is the only place `current_tool`, the SAM
+flags (`sam_box_active` / `sam_points_active`), and the toolbar button checks
+change, so they can never drift apart. `activate_tool`:
+
+1. checks exactly one tool button (block-signals around `setChecked`, so the
+   programmatic check doesn't re-enter `toggle_tool` / `toggle_sam_*`),
+2. clears SAM transient state unless entering that SAM tool (sets the flag if it is),
+3. calls `image_label.set_active_tool(name)` (deactivates the previous handler),
+4. updates cursor + `update_ui_for_current_tool`.
+
+`toggle_tool` (manual buttons) and `toggle_sam_box` / `toggle_sam_points` (SAM,
+in `SAMController`) all delegate here. Before this, the `QButtonGroup` was
+non-exclusive and the SAM toggles had their own ad-hoc state writes, so a SAM
+tool could be active **at the same time** as a manual tool (both buttons checked,
+both overlays live). The group stays `setExclusive(False)` because we need
+click-to-toggle-off; exclusivity is enforced by `activate_tool` unchecking the
+others. `_is_select_mode()` keys off `current_tool is None` + cleared SAM flags,
+so it is correct once those are always in sync.
+
+## Esc Returns to Selection Mode
+
+Selection mode (no tool, click-to-select masks) is the canvas default. Pressing
+**Esc** now both cancels any in-progress state **and** deactivates the active
+tool, so a single Esc always lands you back in selection mode (previously the
+tool stayed selected and you had to click its button off). `ImageLabel`'s Escape
+handler clears the gesture (SAM points/box, in-progress polygon/paint/eraser) and
+then emits `selectModeRequested` when a tool is active; the window's
+`_on_select_mode_requested` calls `activate_tool(None)`. Exceptions that stay put:
+polygon vertex-edit exit (already selection mode, uses `enableToolsRequested`),
+DINO temp-review reject, and cancelling a rubber-band drag.

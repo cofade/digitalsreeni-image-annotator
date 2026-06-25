@@ -47,12 +47,22 @@ from ..core.constants import (
     default_class_color,
 )
 from ..utils import calculate_area, calculate_bbox, simplify_polygon
+from .annotation_history import AnnotationHistory
 
 
 class AnnotationController(QObject):
     def __init__(self, main_window):
         super().__init__(main_window)
         self.mw = main_window
+        # Snapshot-based undo/redo of annotation edits (ADR-026). Per-image
+        # stacks keyed by current_slice or image_file_name.
+        self.history = AnnotationHistory()
+        # Detail-% drags fire valueChanged per step; coalesce a run on one
+        # annotation into a single history entry (token = id of that ann).
+        self._detail_coalesce_key = None
+        # Baseline captured at the *start* of a deferred gesture (bbox drag,
+        # paint stroke) whose commit notifies us only after mutating in place.
+        self._pending_baseline = None
 
     # --- COCO conversion helper ---
 
@@ -191,6 +201,14 @@ class AnnotationController(QObject):
         if live is None or not live.get("segmentation"):
             return
 
+        # Coalesce a whole spinbox drag on one annotation into a single undo
+        # entry: record the pre-drag state once, then suppress until the run
+        # moves to a different annotation (or any other edit clears the token).
+        token = (self._history_key(), live.get("number"), live.get("category_name"))
+        if token != self._detail_coalesce_key:
+            self.record_history()  # resets _detail_coalesce_key to None
+            self._detail_coalesce_key = token
+
         if pct >= 100:
             raw = live.get("segmentation_raw")
             if raw:
@@ -260,10 +278,157 @@ class AnnotationController(QObject):
         Used by the eraser path which has already cut polygons in
         ImageLabel.annotations. Triggers list refresh, save, and slice
         colour update atomically."""
+        # Eraser already mutated ImageLabel.annotations in place, so the
+        # pre-cut state lives in all_annotations until this overwrite. Record
+        # it for undo before replacing.
+        self.record_history(image_key)
         self.mw.all_annotations[image_key] = annotations
         self.update_annotation_list()
         self.save_current_annotations()
         self.mw.class_controller.update_slice_list_colors()
+
+    # --- Undo / redo (ADR-026) ---
+
+    def _history_key(self):
+        return self.mw.current_slice or self.mw.image_file_name
+
+    def record_history(self, key=None):
+        """Snapshot the pre-mutation state of one image for undo.
+
+        Call *before* a synchronous mutation. ``key`` defaults to the current
+        image; pass an explicit key for off-screen writes (e.g. DINO batch
+        commits to an image other than the one on screen). Skipped during
+        project load so restoring a project never seeds bogus history.
+        """
+        if self.mw.is_loading_project:
+            return
+        key = key or self._history_key()
+        if not key:
+            return
+        snapshot = copy.deepcopy(self.mw.all_annotations.get(key, {}))
+        self.history.record(key, snapshot)
+        # Any explicit edit ends a Detail-% coalescing run and drops any stale
+        # deferred-gesture baseline (e.g. a discarded paint stroke).
+        self._detail_coalesce_key = None
+        self._pending_baseline = None
+
+    def capture_edit_baseline(self):
+        """Remember the pre-gesture state at the *start* of a bbox drag or
+        paint stroke. The commit notification arrives only after ImageLabel
+        has mutated in place, so we cannot snapshot the 'before' there."""
+        if self.mw.is_loading_project:
+            return
+        key = self._history_key()
+        if not key:
+            return
+        self._pending_baseline = (key, copy.deepcopy(self.mw.all_annotations.get(key, {})))
+
+    def commit_edit_baseline(self):
+        """Push the baseline captured by capture_edit_baseline onto the undo
+        stack. Called when a deferred gesture actually commits. The history
+        dedup drops it if nothing changed (aborted drag / empty stroke)."""
+        if self._pending_baseline is None:
+            return
+        key, snapshot = self._pending_baseline
+        self._pending_baseline = None
+        if self.mw.is_loading_project:
+            return
+        # Only commit a baseline for the image still on screen; a stale baseline
+        # from a different image (e.g. after a switch) must not be pushed.
+        if key != self._history_key():
+            return
+        self.history.record(key, snapshot)
+        self._detail_coalesce_key = None
+
+    def reset_coalesce(self):
+        """Drop any in-progress Detail-% coalescing token (on image switch)."""
+        self._detail_coalesce_key = None
+
+    def clear_history(self):
+        self.history.clear()
+        self._detail_coalesce_key = None
+        self._pending_baseline = None
+
+    def _undo_blocked(self):
+        """Undo/redo are no-ops while a project loads, a modal is open, a text
+        field has focus, or an edit/draw gesture is in flight."""
+        if self.mw.is_loading_project:
+            return True
+        from PyQt6.QtWidgets import QApplication, QLineEdit, QTextEdit
+
+        if QApplication.activeModalWidget() is not None:
+            return True
+        focus = QApplication.focusWidget()
+        if isinstance(focus, (QLineEdit, QTextEdit)):
+            return True
+        il = self.mw.image_label
+        # Any in-flight draw/edit gesture blocks undo/redo. Paint/eraser are
+        # included because a mid-stroke undo would otherwise restore a snapshot
+        # while a deferred baseline is still pending, corrupting the next push.
+        if (
+            il.editing_polygon
+            or getattr(il, "drawing_polygon", False)
+            or getattr(il, "current_annotation", None)
+            or getattr(il, "current_rectangle", None)
+            or getattr(il, "temp_sam_prediction", None)
+            or getattr(il, "temp_annotations", None)
+            or getattr(il, "bbox_edit", None) is not None
+            or getattr(il, "temp_paint_mask", None) is not None
+            or getattr(il, "is_painting", False)
+            or getattr(il, "temp_eraser_mask", None) is not None
+            or getattr(il, "is_erasing", False)
+            or getattr(il, "drawing_sam_bbox", False)
+        ):
+            return True
+        return False
+
+    def undo(self):
+        if self._undo_blocked():
+            return
+        key = self._history_key()
+        if not key or not self.history.can_undo(key):
+            return
+        current = copy.deepcopy(self.mw.all_annotations.get(key, {}))
+        snapshot = self.history.undo(key, current)
+        if snapshot is not None:
+            self._restore_snapshot(key, snapshot)
+
+    def redo(self):
+        if self._undo_blocked():
+            return
+        key = self._history_key()
+        if not key or not self.history.can_redo(key):
+            return
+        current = copy.deepcopy(self.mw.all_annotations.get(key, {}))
+        snapshot = self.history.redo(key, current)
+        if snapshot is not None:
+            self._restore_snapshot(key, snapshot)
+
+    def _restore_snapshot(self, key, snapshot):
+        """Apply a whole-image snapshot back onto the live model and refresh
+        the canvas + list. Independent deep copies break the shallow-copy
+        aliasing between all_annotations and image_label.annotations.
+
+        The snapshot is restored verbatim — no renumbering. It already holds a
+        previously-consistent numbering, and renumbering only one of the two
+        copies would skew the table's UserRole numbers against the persisted
+        model (breaking value-equality selection matching). See ADR-026.
+        """
+        self.mw.all_annotations[key] = copy.deepcopy(snapshot)
+        self.mw.image_label.annotations = copy.deepcopy(snapshot)
+        self.mw.image_label.highlighted_annotations.clear()
+        self._sync_selection_buttons(0)
+        self._detail_coalesce_key = None
+        # Drop any deferred-gesture baseline so a mid-gesture undo can't leak a
+        # stale "before" into the next commit.
+        self._pending_baseline = None
+        self.update_annotation_list()  # rebuild table from the restored dict
+        self.mw.image_label.update()
+        # save_current_annotations reconciles all_annotations (deleting the key
+        # if the restored state is empty) and refreshes slice colours.
+        self.save_current_annotations()
+        self.mw.update_slice_list_colors()
+        self.mw.auto_save()
 
     # --- Sorting ---
 
@@ -513,9 +678,25 @@ class AnnotationController(QObject):
         so the displayed area refreshes, then re-mirror the selection so the
         edited box stays selected and list/canvas stay in sync."""
         selected = list(self.mw.image_label.highlighted_annotations)
+        # The drag mutated ImageLabel.annotations in place; push the baseline
+        # captured at gesture start so the move/resize is undoable (ADR-026).
+        self.commit_edit_baseline()
         self.save_current_annotations()
         self.update_annotation_list()
         self.apply_canvas_selection(selected, "replace")
+        self.mw.auto_save()
+
+    def commit_polygon_edit(self):
+        """Persist a committed vertex edit (double-click polygon edit, Enter).
+
+        The edit mutated ImageLabel.annotations in place but — unlike every
+        other edit path — its commit historically did NOT sync all_annotations.
+        We sync here so the edit persists reliably, then push the baseline
+        captured at edit-mode entry so Ctrl+Z reverts it (ADR-026)."""
+        self.commit_edit_baseline()
+        self.save_current_annotations()
+        self.update_annotation_list()
+        self.mw.update_slice_list_colors()
         self.mw.auto_save()
 
     def highlight_annotation_in_list(self, annotation):
@@ -556,47 +737,35 @@ class AnnotationController(QObject):
             )
             return
 
-        reply = QMessageBox.question(
-            self.mw,
-            "Delete Annotations",
-            f"Are you sure you want to delete {len(selected_items)} annotation(s)?",
-            QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
-            QMessageBox.StandardButton.No,
-        )
-        if reply == QMessageBox.StandardButton.Yes:
-            annotations_to_remove = []
-            for item in selected_items:
-                annotation = item.data(Qt.ItemDataRole.UserRole)
-                annotations_to_remove.append((annotation["category_name"], annotation))
+        # No confirmation / success dialogs — delete is instant and reversible
+        # via Ctrl+Z (ADR-026). Snapshot the pre-delete state first.
+        self.record_history()
 
-            for category_name, annotation in annotations_to_remove:
-                if category_name in self.mw.image_label.annotations:
-                    if annotation in self.mw.image_label.annotations[category_name]:
-                        self.mw.image_label.annotations[category_name].remove(
-                            annotation
-                        )
+        annotations_to_remove = []
+        for item in selected_items:
+            annotation = item.data(Qt.ItemDataRole.UserRole)
+            annotations_to_remove.append((annotation["category_name"], annotation))
 
-            current_name = self.mw.current_slice or self.mw.image_file_name
-            self.mw.all_annotations[current_name] = self.mw.image_label.annotations
+        for category_name, annotation in annotations_to_remove:
+            if category_name in self.mw.image_label.annotations:
+                if annotation in self.mw.image_label.annotations[category_name]:
+                    self.mw.image_label.annotations[category_name].remove(annotation)
 
-            if self.mw.current_sort_method == "area":
-                self.sort_annotations_by_area()
-            else:
-                self.sort_annotations_by_class()
+        current_name = self.mw.current_slice or self.mw.image_file_name
+        self.mw.all_annotations[current_name] = self.mw.image_label.annotations
 
-            self.mw.image_label.highlighted_annotations.clear()
-            # Selection is now empty — Merge/Change Class must follow.
-            self._sync_selection_buttons(0)
-            self.mw.image_label.update()
+        if self.mw.current_sort_method == "area":
+            self.sort_annotations_by_area()
+        else:
+            self.sort_annotations_by_class()
 
-            self.mw.update_slice_list_colors()
+        self.mw.image_label.highlighted_annotations.clear()
+        # Selection is now empty — Merge/Change Class must follow.
+        self._sync_selection_buttons(0)
+        self.mw.image_label.update()
 
-            QMessageBox.information(
-                self.mw,
-                "Annotations Deleted",
-                f"{len(selected_items)} annotation(s) have been deleted.",
-            )
-            self.mw.auto_save()
+        self.mw.update_slice_list_colors()
+        self.mw.auto_save()
 
     def merge_annotations(self):
         if self.mw.image_label.editing_polygon is not None:
@@ -700,27 +869,14 @@ class AnnotationController(QObject):
                 coord for point in largest_polygon.exterior.coords for coord in point
             ]
 
-        msg_box = QMessageBox(self.mw)
-        msg_box.setWindowTitle("Merge Annotations")
-        msg_box.setText("Do you want to keep the original annotations?")
-        msg_box.setIcon(QMessageBox.Icon.Question)
+        # No keep/delete prompt and no success dialog — merging always
+        # replaces the originals with the union, instant and reversible via
+        # Ctrl+Z (ADR-026). Snapshot the pre-merge state first.
+        self.record_history()
 
-        msg_box.addButton("Keep", QMessageBox.ButtonRole.YesRole)
-        delete_button = msg_box.addButton("Delete", QMessageBox.ButtonRole.NoRole)
-        cancel_button = msg_box.addButton("Cancel", QMessageBox.ButtonRole.RejectRole)
-
-        msg_box.setDefaultButton(cancel_button)
-        msg_box.setEscapeButton(cancel_button)
-
-        msg_box.exec()
-
-        if msg_box.clickedButton() == cancel_button:
-            return
-
-        if msg_box.clickedButton() == delete_button:
-            for annotation in original_annotations:
-                if annotation in self.mw.image_label.annotations[class_name]:
-                    self.mw.image_label.annotations[class_name].remove(annotation)
+        for annotation in original_annotations:
+            if annotation in self.mw.image_label.annotations[class_name]:
+                self.mw.image_label.annotations[class_name].remove(annotation)
 
         self.mw.image_label.annotations.setdefault(class_name, []).append(new_annotation)
 
@@ -732,10 +888,6 @@ class AnnotationController(QObject):
         self.save_current_annotations()
         self.mw.update_slice_list_colors()
         self.mw.image_label.update()
-
-        QMessageBox.information(
-            self.mw, "Merge Complete", "Annotations have been merged successfully."
-        )
         self.mw.auto_save()
 
     def change_annotation_class(self):
@@ -767,6 +919,8 @@ class AnnotationController(QObject):
         if class_dialog.exec() == QDialog.DialogCode.Accepted:
             new_class = class_combo.currentText()
             current_name = self.mw.current_slice or self.mw.image_file_name
+
+            self.record_history()
 
             max_number = max(
                 [
@@ -867,6 +1021,7 @@ class AnnotationController(QObject):
                 )
                 return
 
+            self.record_history()
             new_annotation = {
                 "segmentation": segmentation,
                 "category_id": self.mw.class_mapping[self.mw.current_class],
@@ -934,6 +1089,7 @@ class AnnotationController(QObject):
                 )
                 return
 
+            self.record_history()
             new_annotation = {
                 "segmentation": segmentation,
                 "category_id": self.mw.class_mapping[self.mw.current_class],

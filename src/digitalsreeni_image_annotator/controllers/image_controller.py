@@ -326,6 +326,10 @@ class ImageController(QObject):
 
         self.mw.save_current_annotations()
         self.mw.image_label.clear_temp_sam_prediction()
+        # Exit vertex-edit mode (as switch_image does) so editing_polygon /
+        # _editing_polygon_orig don't linger onto the next slice (ADR-026).
+        self.mw.image_label.exit_editing_mode()
+        self.mw.annotation_controller.reset_coalesce()
 
         slice_name = item.text()
         for name, qimage in self.mw.slices:
@@ -363,6 +367,7 @@ class ImageController(QObject):
         self.mw.save_current_annotations()
         self.mw.image_label.clear_temp_sam_prediction()
         self.mw.image_label.exit_editing_mode()
+        self.mw.annotation_controller.reset_coalesce()
 
         file_name = item.text()
         print(f"\nSwitching to image: {file_name}")

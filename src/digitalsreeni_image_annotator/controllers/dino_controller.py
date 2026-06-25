@@ -503,6 +503,10 @@ class DINOController(QObject):
         current_image = self.mw.current_slice or self.mw.image_file_name
         is_current = image_name == current_image
 
+        # Snapshot under this image's own key (may differ from the on-screen
+        # image for batch commits) so the additions are undoable (ADR-026).
+        self.mw.annotation_controller.record_history(image_name)
+
         if is_current:
             target = self.mw.image_label.annotations
         else:
@@ -636,6 +640,8 @@ class DINOController(QObject):
         if not self.mw.image_label.temp_annotations:
             return
         image_name = self.mw.current_slice or self.mw.image_file_name
+
+        self.mw.annotation_controller.record_history(image_name)
 
         for ann in self.mw.image_label.temp_annotations:
             class_name = ann["category_name"]

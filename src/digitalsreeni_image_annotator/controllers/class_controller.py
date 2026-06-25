@@ -96,6 +96,13 @@ class ClassController(QObject):
 
         self.mw.slice_list.repaint()
 
+        # Re-apply hook for the image-list annotation filter. Contract:
+        # every annotation-mutation site either calls this method directly
+        # or emits annotationsBatchSaved, whose handler
+        # (_on_annotations_batch_saved) calls it. New mutation paths must
+        # keep one of those two routes.
+        self.mw.image_controller.apply_image_filter()
+
     def add_class(self, class_name=None, color=None):
         if not self.mw.image_label.check_unsaved_changes():
             return

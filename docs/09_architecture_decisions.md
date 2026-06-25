@@ -1074,13 +1074,19 @@ subtleties — there is nothing to reconcile, only a deep copy to install.
   `save_current_annotations()` — that also fires on navigation and runs *after*
   mutation, so it can neither be filtered to real edits nor capture a clean
   "before."
-- **Two deferred gestures** (bbox move/scale, paint stroke) notify the controller
-  only *after* mutating in place. They capture the baseline at gesture **start**
-  via a new `ImageLabel.editBaselineRequested` signal → `capture_edit_baseline`,
-  and push it at commit (`commit_edit_baseline`, called from `commit_bbox_edit`
-  and the `annotationsBatchSaved` handler). A **deep-equality dedup** in
-  `record()` drops aborted gestures (Esc'd drag, empty stroke) so they leave no
-  entry.
+- **Deferred gestures** (bbox move/scale, paint stroke, polygon vertex edit)
+  notify the controller only *after* mutating in place. They capture the baseline
+  at gesture **start** via a new `ImageLabel.editBaselineRequested` signal →
+  `capture_edit_baseline`, and push it at commit (`commit_edit_baseline`, called
+  from `commit_bbox_edit`, `commit_polygon_edit`, and the `annotationsBatchSaved`
+  handler). A **deep-equality dedup** in `record()` drops aborted gestures (Esc'd
+  drag, empty stroke) so they leave no entry.
+  - *Vertex edit also got a save-discipline fix.* Its Enter-commit historically
+    only refreshed the list and relied on a later save to persist (and **Esc did
+    not revert** the in-place drags). `commit_polygon_edit` now calls
+    `save_current_annotations`, and Esc restores the segmentation from a snapshot
+    taken at edit-mode entry — so the commit is both persisted and undoable, and
+    Esc truly cancels.
 - **Detail-% coalescing.** The spinbox fires `valueChanged` per step; a whole
   drag on one annotation records once (token = key + number + class), so one
   Ctrl+Z reverts the entire drag including `detail_pct` and `segmentation_raw`.

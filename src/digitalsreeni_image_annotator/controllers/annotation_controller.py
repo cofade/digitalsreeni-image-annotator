@@ -686,6 +686,19 @@ class AnnotationController(QObject):
         self.apply_canvas_selection(selected, "replace")
         self.mw.auto_save()
 
+    def commit_polygon_edit(self):
+        """Persist a committed vertex edit (double-click polygon edit, Enter).
+
+        The edit mutated ImageLabel.annotations in place but — unlike every
+        other edit path — its commit historically did NOT sync all_annotations.
+        We sync here so the edit persists reliably, then push the baseline
+        captured at edit-mode entry so Ctrl+Z reverts it (ADR-026)."""
+        self.commit_edit_baseline()
+        self.save_current_annotations()
+        self.update_annotation_list()
+        self.mw.update_slice_list_colors()
+        self.mw.auto_save()
+
     def highlight_annotation_in_list(self, annotation):
         tbl = self.mw.annotation_list
         for i in range(tbl.rowCount()):

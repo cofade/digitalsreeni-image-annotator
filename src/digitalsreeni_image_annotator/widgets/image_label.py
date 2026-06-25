@@ -54,6 +54,7 @@ class ImageLabel(QLabel):
     annotationSelected = pyqtSignal(object)             # double-click selection
     canvasSelectionChanged = pyqtSignal(object, str)    # (list[annotation], mode); mode: replace|add|toggle
     bboxEditCommitted = pyqtSignal()                    # bbox resize/move finished (issue #40)
+    polygonEditCommitted = pyqtSignal()                 # vertex edit committed (Enter) — save + undo push (ADR-026)
     editBaselineRequested = pyqtSignal()                # capture undo baseline at gesture start (ADR-026)
     deleteSelectionRequested = pyqtSignal()
     finishPolygonRequested = pyqtSignal()
@@ -133,6 +134,9 @@ class ImageLabel(QLabel):
         self.offset_y = 0
         self.drawing_polygon = False
         self.editing_polygon = None
+        # Original segmentation captured when vertex-edit mode is entered, so
+        # Esc can revert the in-place drags (ADR-026).
+        self._editing_polygon_orig = None
         self.editing_point_index = None
         self.hover_point_index = None
         self.fill_opacity = DEFAULT_FILL_OPACITY
@@ -522,6 +526,7 @@ class ImageLabel(QLabel):
         self.original_pixmap = None
         self.scaled_pixmap = None
         self.editing_polygon = None
+        self._editing_polygon_orig = None
         self.editing_point_index = None
         self.hover_point_index = None
         self.current_rectangle = None
@@ -927,21 +932,29 @@ class ImageLabel(QLabel):
             elif self.editing_polygon:
                 # Clamp the edited polygon back into the image before exit so a
                 # vertex dragged past the edge can't poison the saved coords
-                # (upstream #32). Persists via the save-by-reference path.
-                # NOTE: vertex edits are NOT yet on the undo stack (ADR-026) —
-                # this commit doesn't call save_current_annotations, so it
-                # would need that save-discipline fix first. Follow-up.
+                # (upstream #32).
                 if self.original_pixmap is not None:
                     self.editing_polygon["segmentation"] = clamp_segmentation(
                         self.editing_polygon["segmentation"],
                         self.original_pixmap.width(),
                         self.original_pixmap.height(),
                     )
+                changed = (
+                    self.editing_polygon.get("segmentation")
+                    != self._editing_polygon_orig
+                )
                 self.editing_polygon = None
+                self._editing_polygon_orig = None
                 self.editing_point_index = None
                 self.hover_point_index = None
                 self.enableToolsRequested.emit()
-                self.annotationListUpdateRequested.emit()
+                if changed:
+                    # polygonEditCommitted syncs all_annotations + pushes the
+                    # undo baseline + refreshes the list (ADR-026).
+                    self.polygonEditCommitted.emit()
+                else:
+                    # Nothing moved — just refresh, no history entry.
+                    self.annotationListUpdateRequested.emit()
             else:
                 handler = self.active_tool_handler
                 if handler is not None:
@@ -967,7 +980,15 @@ class ImageLabel(QLabel):
                 self.clear_temp_sam_prediction()
                 self.selectModeRequested.emit()
             elif self.editing_polygon:
+                # Revert the in-place vertex drags so Esc truly cancels the
+                # edit (it used to silently keep them). No commit → no undo
+                # entry; the pending baseline is dropped on the next gesture.
+                if self._editing_polygon_orig is not None:
+                    self.editing_polygon["segmentation"] = list(
+                        self._editing_polygon_orig
+                    )
                 self.editing_polygon = None
+                self._editing_polygon_orig = None
                 self.editing_point_index = None
                 self.hover_point_index = None
                 self.enableToolsRequested.emit()
@@ -995,6 +1016,7 @@ class ImageLabel(QLabel):
             if self.editing_polygon:
                 self.deleteSelectionRequested.emit()
                 self.editing_polygon = None
+                self._editing_polygon_orig = None
                 self.editing_point_index = None
                 self.hover_point_index = None
                 self.enableToolsRequested.emit()
@@ -1423,6 +1445,10 @@ class ImageLabel(QLabel):
                             best_area = area
         if best is not None:
             self.editing_polygon = best
+            # Snapshot for undo (pushed on Enter) and for Esc revert — vertex
+            # drags mutate the segmentation in place (ADR-026).
+            self._editing_polygon_orig = list(best.get("segmentation", []))
+            self.editBaselineRequested.emit()
             self.current_tool = None
             self.disableToolsRequested.emit()
             self.resetToolButtonsRequested.emit()
@@ -1479,6 +1505,7 @@ class ImageLabel(QLabel):
 
     def exit_editing_mode(self):
         self.editing_polygon = None
+        self._editing_polygon_orig = None
         self.editing_point_index = None
         self.hover_point_index = None
         self.update()

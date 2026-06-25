@@ -294,6 +294,66 @@ def test_undo_restores_snapshot_numbers_verbatim(window, monkeypatch):
     assert table_nums == model_nums == [1, 3]   # parity + verbatim restore
 
 
+def _poly():
+    return {"segmentation": [10, 10, 90, 10, 90, 90, 10, 90],
+            "category_name": "cell", "category_id": 1, "number": 1}
+
+
+def _arm_edit_canvas(window):
+    il = window.image_label
+    il.original_pixmap = QPixmap(100, 100)
+    il.zoom_factor = 1.0
+    il.ui_scale = 1.0
+    return il
+
+
+def test_vertex_edit_commit_then_undo(window, monkeypatch):
+    from PyQt6.QtCore import QEvent, Qt
+    from PyQt6.QtGui import QKeyEvent
+
+    _seed(window, [_poly()], monkeypatch)
+    il = _arm_edit_canvas(window)
+    ac = window.annotation_controller
+    before = list(_cell(window)[0]["segmentation"])
+
+    assert il.start_polygon_edit((50, 50)) is not None   # double-click enters edit
+    il.editing_point_index = 0
+    il.handle_editing_move((20, 20))                      # drag first vertex
+    assert il.editing_polygon["segmentation"][0:2] == [20, 20]
+
+    il.keyPressEvent(
+        QKeyEvent(QEvent.Type.KeyPress, Qt.Key.Key_Return, Qt.KeyboardModifier.NoModifier)
+    )
+    assert il.editing_polygon is None
+    assert _cell(window)[0]["segmentation"][0:2] == [20, 20]   # committed + saved
+    assert ac.history.can_undo("img.png")
+
+    ac.undo()
+    assert _cell(window)[0]["segmentation"] == before          # reverted
+
+
+def test_vertex_edit_escape_reverts_without_history(window, monkeypatch):
+    from PyQt6.QtCore import QEvent, Qt
+    from PyQt6.QtGui import QKeyEvent
+
+    _seed(window, [_poly()], monkeypatch)
+    il = _arm_edit_canvas(window)
+    ac = window.annotation_controller
+    before = list(il.annotations["cell"][0]["segmentation"])
+
+    il.start_polygon_edit((50, 50))
+    il.editing_point_index = 0
+    il.handle_editing_move((25, 25))
+    assert il.editing_polygon["segmentation"][0:2] == [25, 25]
+
+    il.keyPressEvent(
+        QKeyEvent(QEvent.Type.KeyPress, Qt.Key.Key_Escape, Qt.KeyboardModifier.NoModifier)
+    )
+    assert il.editing_polygon is None
+    assert list(il.annotations["cell"][0]["segmentation"]) == before  # Esc reverts
+    assert not ac.history.can_undo("img.png")                         # no entry
+
+
 def test_clear_history_drops_stacks(window, monkeypatch):
     a1, a2 = _square(0, 0, 10, 1), _square(50, 0, 10, 2)
     _seed(window, [a1, a2], monkeypatch)

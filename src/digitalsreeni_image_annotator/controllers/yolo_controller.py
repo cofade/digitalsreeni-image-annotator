@@ -140,12 +140,9 @@ class YOLOController(QObject):
 
         # YOLO training needs a non-empty validation set; hold some images out
         # by default (0 keeps everything in train, but val/ will then be empty).
-        val_split, ok = QInputDialog.getInt(
-            self.mw,
-            "Validation Split",
-            "Percent of images for the validation set (0 = all in train):",
-            20, 0, 100, 5,
-        )
+        from .io_controller import prompt_validation_split
+
+        val_split, ok = prompt_validation_split(self.mw)
         if not ok:
             return
 

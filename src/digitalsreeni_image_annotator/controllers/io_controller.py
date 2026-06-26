@@ -28,6 +28,21 @@ from ..io.export_formats import (
 from ..io.import_formats import import_coco_json, process_import_format
 
 
+def prompt_validation_split(parent):
+    """Ask what fraction of images to hold out for validation.
+
+    Returns ``(val_split, ok)`` from a single shared QInputDialog so the YOLO
+    menu export and the in-app YOLO trainer can't drift apart. ``0`` keeps the
+    historical all-in-train layout.
+    """
+    return QInputDialog.getInt(
+        parent,
+        "Validation Split",
+        "Percent of images for the validation set (0 = all in train):",
+        20, 0, 100, 5,
+    )
+
+
 def import_annotations(mw):
     if not mw.image_label.check_unsaved_changes():
         return
@@ -228,12 +243,7 @@ def export_annotations(mw):
     # much of the data to hold out (0 keeps the historical all-in-train layout).
     val_split = 0
     if export_format in ("YOLO (v4 and earlier)", "YOLO (v5+)"):
-        val_split, ok = QInputDialog.getInt(
-            mw,
-            "Validation Split",
-            "Percent of images for the validation set (0 = all in train):",
-            20, 0, 100, 5,
-        )
+        val_split, ok = prompt_validation_split(mw)
         if not ok:
             return
 

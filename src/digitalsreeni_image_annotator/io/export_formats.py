@@ -252,11 +252,11 @@ def export_yolo_v4(all_annotations, class_mapping, image_paths, slices, image_sl
                         h = h / img_height
                         f.write(f"{class_index} {x_center:.6f} {y_center:.6f} {w:.6f} {h:.6f}\n")
 
-    # Create YAML file. When a split is requested, point val at the populated
-    # valid/ dir; with no split (val_split == 0) fall back to the train images
-    # so the path stays non-empty (the original behaviour).
+    # Create YAML file. Point val at the populated valid/ dir only when images
+    # were actually routed there; otherwise fall back to the train images so
+    # the path stays non-empty (single-image projects, or val_split == 0).
     names = list(class_mapping.keys())
-    val_images_dir = valid_dir if val_split > 0 else train_dir
+    val_images_dir = valid_dir if val_names else train_dir
     yaml_data = {
         'train': os.path.abspath(os.path.join(train_dir, 'images')),
         'val': os.path.abspath(os.path.join(val_images_dir, 'images')),
@@ -398,12 +398,15 @@ def export_yolo_v5plus(all_annotations, class_mapping, image_paths, slices, imag
 
     print(f"[YOLO v5+] export complete: {label_files_written} label file(s) written")
 
-    # Create YAML file
+    # Create YAML file. Point val at the val split only when images were
+    # actually routed there; otherwise fall back to train so `yolo train`
+    # never reads an empty val dir (single-image projects, or val_split == 0).
     names = list(class_mapping.keys())
+    val_rel = os.path.join('images', 'val' if val_names else 'train')
     yaml_data = {
         'path': os.path.abspath(output_dir),  # Root directory
         'train': os.path.join('images', 'train'),  # Relative to path
-        'val': os.path.join('images', 'val'),  # Relative to path
+        'val': val_rel,  # Relative to path
         'nc': len(names),
         'names': names
     }

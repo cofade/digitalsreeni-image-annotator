@@ -144,10 +144,10 @@ class YOLOTrainer(QObject):
         with yaml_path.open('r', encoding='utf-8') as f:
             yaml_content = yaml.safe_load(f)
 
-        # Update paths for new YOLO v5+ structure
-        yaml_content['train'] = 'images/train'  # Changed from train/images
-        yaml_content['val'] = 'images/val'      # Changed from train/images
-        yaml_content['test'] = '../test/images'
+        # export_yolo_v5plus already writes the correct relative train/val
+        # pointers (val falls back to train when no val images were routed),
+        # so don't clobber them here — just add the test placeholder.
+        yaml_content.setdefault('test', '../test/images')
         
         with yaml_path.open('w', encoding='utf-8') as f:
             yaml.dump(yaml_content, f, default_flow_style=False)

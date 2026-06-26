@@ -323,16 +323,24 @@ class YOLOController(QObject):
         Experiment Tracking dialog).
         """
         from ..app_settings import load_mlflow_prefs
-        from ..training.mlflow_tracker import mlflow_available, resolve_tracking_uri
+        from ..training.mlflow_tracker import (
+            mlflow_available,
+            resolve_tracking_uri,
+            to_mlflow_uri,
+        )
 
         _, _, experiment = load_mlflow_prefs()
         enable = bool(track_mlflow) and mlflow_available()
         if enable:
-            os.environ["MLFLOW_TRACKING_URI"] = resolve_tracking_uri(self.mw)
+            store = resolve_tracking_uri(self.mw)
+            # Ultralytics' callback feeds this straight to mlflow.set_tracking_uri,
+            # which rejects a bare Windows path — hand it a proper file:// URI.
+            os.environ["MLFLOW_TRACKING_URI"] = to_mlflow_uri(store)
+            # mlflow 3.x raises on the local file store unless this is set.
+            os.environ.setdefault("MLFLOW_ALLOW_FILE_STORE", "true")
             os.environ["MLFLOW_EXPERIMENT_NAME"] = experiment
             self.mw.training_dialog.update_info(
-                f"MLflow tracking → {os.environ['MLFLOW_TRACKING_URI']} "
-                f"(experiment '{experiment}')."
+                f"MLflow tracking → {store} (experiment '{experiment}')."
             )
         else:
             # Leave no armed env behind so "disabled" is truly inert.
@@ -345,6 +353,13 @@ class YOLOController(QObject):
         try:
             from ultralytics import settings as ultra_settings
 
+            # NOTE: this persists to the *global* Ultralytics settings file on
+            # disk (~/.config/Ultralytics/settings.json), not just process
+            # state. We rewrite it on every run (True when tracking, False
+            # otherwise) so within this app it can't drift. The only residual
+            # leak is a hard crash *mid-run*, which would leave it True for an
+            # external `yolo` invocation until the next run here resets it —
+            # an accepted, documented limitation (see ADR-027).
             ultra_settings.update({"mlflow": enable})
         except Exception as exc:
             print(f"Could not toggle Ultralytics MLflow setting: {exc}")

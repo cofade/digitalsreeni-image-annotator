@@ -17,10 +17,32 @@ Storage defaults to a local file store under ``<project>/mlruns`` (see
 
 import os
 import subprocess
+import sys
 import webbrowser
+from pathlib import Path
+from urllib.parse import urlparse
 
 _DEFAULT_EXPERIMENT = "image-annotator-training"
 _MLRUNS_DIRNAME = "mlruns"
+
+
+def to_mlflow_uri(path_or_uri) -> str:
+    """Return a value MLflow accepts as a tracking URI.
+
+    MLflow validates the URI *scheme*, so a bare Windows path such as
+    ``C:\\Users\\me\\mlruns`` is read as scheme ``c`` and **rejected**
+    ("unsupported URI ... for model registry data storage") — i.e. local-file
+    tracking silently degrades to untracked on Windows. Local filesystem paths
+    must therefore be expressed as ``file://`` URIs. Genuine URIs (``file``,
+    ``http(s)``, ``sqlite``, ``databricks`` …) are returned unchanged.
+    """
+    text = str(path_or_uri)
+    scheme = urlparse(text).scheme
+    # Empty scheme = POSIX/relative path; a single-letter scheme is a Windows
+    # drive (``C:``), not a real URI scheme — both are local paths.
+    if len(scheme) > 1:
+        return text
+    return Path(text).resolve().as_uri()
 
 # Cache the import probe — mlflow's import is non-trivial and the answer
 # never changes within a process.
@@ -124,7 +146,12 @@ class MLflowTracker:
         try:
             import mlflow
 
-            mlflow.set_tracking_uri(self._uri)
+            # mlflow 3.x put the local file store ("./mlruns") into maintenance
+            # mode and *raises* on it unless this opt-out is set — which would
+            # silently degrade our documented file-store default to untracked.
+            # setdefault so an explicit user choice is never overridden.
+            os.environ.setdefault("MLFLOW_ALLOW_FILE_STORE", "true")
+            mlflow.set_tracking_uri(to_mlflow_uri(self._uri))
             mlflow.set_experiment(self._experiment)
             # Self-heal: a prior run stranded active (e.g. killed before end())
             # would make start_run raise "Run already active" and silently
@@ -192,8 +219,15 @@ def launch_mlflow_ui(tracking_uri, port=5000, log=None):
             "or:  pip install mlflow",
         )
     try:
+        # Invoke via `<this-interpreter> -m mlflow` rather than the bare
+        # `mlflow` console script. The import probe above proves the package
+        # is importable in *this* interpreter, but the `mlflow` CLI may not be
+        # on PATH (venv/conda launch quirks, frozen bundles) — so a bare
+        # `mlflow` could raise FileNotFoundError even though the probe passed.
+        # Going through sys.executable keeps the two in lockstep.
         subprocess.Popen(
-            ["mlflow", "ui", "--backend-store-uri", str(tracking_uri),
+            [sys.executable, "-m", "mlflow", "ui",
+             "--backend-store-uri", to_mlflow_uri(tracking_uri),
              "--port", str(port)],
             stdout=subprocess.DEVNULL,
             stderr=subprocess.DEVNULL,
@@ -207,4 +241,10 @@ def launch_mlflow_ui(tracking_uri, port=5000, log=None):
             log(msg)
         return True, msg
     except Exception as exc:
-        return False, f"Could not start MLflow UI: {exc}"
+        return (
+            False,
+            f"Could not start MLflow UI: {exc}\n\n"
+            "MLflow is installed but its server failed to launch — the "
+            "'mlflow' command may be missing from PATH for this Python "
+            "environment.",
+        )

@@ -103,7 +103,7 @@ class TestLiveLogging:
         t.end()
         assert t.active is False
 
-        mlflow.set_tracking_uri(store)
+        mlflow.set_tracking_uri(mlflow_tracker.to_mlflow_uri(store))
         exp = mlflow.get_experiment_by_name("ut-exp")
         assert exp is not None
         runs = mlflow.search_runs([exp.experiment_id])
@@ -114,3 +114,48 @@ class TestLiveLogging:
             "params.skip"
         ) is None
         assert runs.iloc[0]["metrics.loss"] == 0.4
+
+    def test_artifact_is_logged(self, tmp_path, monkeypatch):
+        monkeypatch.setattr(mlflow_tracker, "_AVAILABLE", None)
+        if not mlflow_tracker.mlflow_available():
+            pytest.skip("mlflow not installed")
+        import mlflow
+
+        # Stand-in for a saved checkpoint.
+        ckpt = tmp_path / "model.pt"
+        ckpt.write_bytes(b"fake-weights")
+
+        store = str(tmp_path / "mlruns")
+        t = MLflowTracker(
+            enabled=True, tracking_uri=store, experiment_name="ut-art",
+            run_name="ut-run",
+        )
+        assert t.start({"epochs": 1}) is True
+        run_id = mlflow.active_run().info.run_id
+        t.log_artifact(str(ckpt))
+        # A non-existent path is a safe no-op (must not raise or abort).
+        t.log_artifact(str(tmp_path / "missing.pt"))
+        t.end()
+
+        mlflow.set_tracking_uri(mlflow_tracker.to_mlflow_uri(store))
+        artifacts = [a.path for a in mlflow.MlflowClient().list_artifacts(run_id)]
+        assert "model.pt" in artifacts
+
+    def test_double_start_self_heals_stranded_run(self, tmp_path, monkeypatch):
+        """A run left active (killed before end()) must not poison the next
+        start() — the tracker closes the stranded run instead of degrading to
+        untracked. See start()'s self-heal branch."""
+        monkeypatch.setattr(mlflow_tracker, "_AVAILABLE", None)
+        if not mlflow_tracker.mlflow_available():
+            pytest.skip("mlflow not installed")
+
+        store = str(tmp_path / "mlruns")
+        t = MLflowTracker(
+            enabled=True, tracking_uri=store, experiment_name="ut-heal",
+            run_name="ut-run",
+        )
+        assert t.start({"epochs": 1}) is True   # opens run A, never ended
+        # Second start() with a run still active must still come up live.
+        assert t.start({"epochs": 2}) is True
+        assert t.active is True
+        t.end()

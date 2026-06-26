@@ -1146,6 +1146,19 @@ comparison, no persisted loss curves. The only feedback was live strings in
     stale `True` can't leak into a later untracked run.
 - **Local file store by default.** `resolve_tracking_uri()` precedence: a non-empty
   QSettings override → `<project>/mlruns` when a project is open → `<cwd>/mlruns`.
+  Two cross-version/cross-platform hazards are handled at the mlflow boundary
+  (`to_mlflow_uri()` + an env flag), not in the resolver (which keeps returning a
+  plain path for display and directory use):
+  - **Windows path → `file://` URI.** mlflow validates the URI *scheme*, so a bare
+    `C:\…\mlruns` is read as scheme `c` and rejected — local tracking would silently
+    degrade to untracked. `to_mlflow_uri()` converts local paths to `file://` URIs
+    (genuine `http`/`sqlite`/`databricks` URIs pass through) at every mlflow call
+    site: `MLflowTracker.start()`, the YOLO `MLFLOW_TRACKING_URI` env var, and the
+    `mlflow ui` launch.
+  - **mlflow 3.x file-store opt-out.** mlflow ≥3 raises on the local file store
+    unless `MLFLOW_ALLOW_FILE_STORE=true`; we `setdefault` it before touching mlflow
+    so the documented file-store default keeps working on both 2.x and 3.x without
+    overriding an explicit user setting.
 - **Config surface.** A per-dialog "Track this run with MLflow" checkbox (default
   from QSettings) on both training dialogs, a dedicated **Settings → Experiment
   Tracking** dialog (`MLflowSettingsDialog`) for URI/experiment name, and an

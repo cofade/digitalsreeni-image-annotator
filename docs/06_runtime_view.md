@@ -424,21 +424,27 @@ User clicks "Export" > "YOLO v8/v11"
     │
     ├─> Select output directory
     │
-    ├─> export_yolo_v5plus(all_annotations, class_mapping, ...)
+    ├─> Prompt for validation split % (QInputDialog, default 20, 0 = all train)
+    │       assign_train_val() deterministically partitions the annotated
+    │       images via a stable filename hash; the val count is exact so a
+    │       requested split is never silently empty (issue #83)
+    │
+    ├─> export_yolo_v5plus(all_annotations, class_mapping, ..., val_split)
     │   │
     │   ├─> Create directory structure:
     │   │   output_dir/
     │   │   ├── data.yaml
-    │   │   ├── train/
-    │   │   │   ├── images/
-    │   │   │   └── labels/
-    │   │   └── valid/
-    │   │       ├── images/
-    │   │       └── labels/
+    │   │   ├── images/
+    │   │   │   ├── train/
+    │   │   │   └── val/
+    │   │   └── labels/
+    │   │       ├── train/
+    │   │       └── val/
     │   │
     │   ├─> For each annotated image:
     │   │   │
-    │   │   ├─> Copy image to train/images/ or valid/images/
+    │   │   ├─> Copy image to the train or val split it was assigned to
+    │   │   │   (val_split == 0 → everything in train, the original behaviour)
     │   │   │
     │   │   ├─> Convert annotations to YOLO format:
     │   │   │   │
@@ -451,8 +457,8 @@ User clicks "Export" > "YOLO v8/v11"
     │   │   └─> Next image
     │   │
     │   ├─> Write data.yaml:
-    │   │   train: train/images
-    │   │   val: valid/images
+    │   │   train: images/train
+    │   │   val: images/val
     │   │   nc: num_classes
     │   │   names: [class1, class2, ...]
     │   │

@@ -12,7 +12,7 @@ inside `annotator_window.py` delegate trivially.
 import os
 
 from PyQt6.QtGui import QColor
-from PyQt6.QtWidgets import QFileDialog, QMessageBox
+from PyQt6.QtWidgets import QFileDialog, QInputDialog, QMessageBox
 
 from ..core.constants import default_class_color
 
@@ -224,6 +224,19 @@ def export_annotations(mw):
     if not file_name:
         return
 
+    # YOLO training needs a non-empty validation set; let the user choose how
+    # much of the data to hold out (0 keeps the historical all-in-train layout).
+    val_split = 0
+    if export_format in ("YOLO (v4 and earlier)", "YOLO (v5+)"):
+        val_split, ok = QInputDialog.getInt(
+            mw,
+            "Validation Split",
+            "Percent of images for the validation set (0 = all in train):",
+            20, 0, 100, 5,
+        )
+        if not ok:
+            return
+
     mw.save_current_annotations()
 
     if export_format == "COCO JSON":
@@ -249,9 +262,10 @@ def export_annotations(mw):
             mw.slices,
             mw.image_slices,
             file_name,
+            val_split,
         )
         message = "Annotations have been exported successfully in YOLO (v4 and earlier) format.\n"
-        message += f"Labels: {labels_dir}\nYAML: {yaml_path}"
+        message += f"Labels: {labels_dir}\nYAML: {yaml_path}\nValidation split: {val_split}%"
 
     elif export_format == "YOLO (v5+)":
         output_dir, yaml_path = export_yolo_v5plus(
@@ -261,9 +275,10 @@ def export_annotations(mw):
             mw.slices,
             mw.image_slices,
             file_name,
+            val_split,
         )
         message = "Annotations have been exported successfully in YOLO (v5+) format.\n"
-        message += f"Output directory: {output_dir}\nYAML: {yaml_path}"
+        message += f"Output directory: {output_dir}\nYAML: {yaml_path}\nValidation split: {val_split}%"
 
     elif export_format == "Labeled Images":
         labeled_images_dir = export_labeled_images(

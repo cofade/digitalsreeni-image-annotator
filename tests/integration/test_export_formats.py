@@ -381,6 +381,110 @@ class TestYOLOExport:
         assert yaml_data['nc'] == len(sample_class_mapping)
         assert isinstance(yaml_data['names'], list)
 
+    def _multi_image_dataset(self, temp_output_dir, sample_image, count=5):
+        """Build `count` annotated images with real files on disk.
+
+        Returns (annotations, image_paths, src_dir) — src_dir is a separate
+        directory so the export output never collides with the sources.
+        """
+        src_dir = os.path.join(temp_output_dir, "src")
+        os.makedirs(src_dir, exist_ok=True)
+        annotations = {}
+        image_paths = {}
+        for i in range(count):
+            name = f"img_{i:03d}.png"
+            path = os.path.join(src_dir, name)
+            sample_image.save(path)
+            image_paths[name] = path
+            annotations[name] = {
+                "cell": [
+                    {"segmentation": [10, 10, 40, 10, 40, 40, 10, 40], "category": "cell"}
+                ]
+            }
+        return annotations, image_paths
+
+    def test_export_yolo_splits_train_and_val(
+        self, temp_output_dir, sample_class_mapping, sample_image
+    ):
+        """A non-zero split populates both images/train and images/val, and
+        each label .txt sits beside its image in the same split (issue #83)."""
+        out_dir = os.path.join(temp_output_dir, "out")
+        annotations, image_paths = self._multi_image_dataset(
+            temp_output_dir, sample_image, count=5
+        )
+
+        export_yolo_v5plus(
+            annotations, sample_class_mapping, image_paths,
+            slices=[], image_slices={}, output_dir=out_dir, val_split=40,
+        )
+
+        train_imgs = os.listdir(os.path.join(out_dir, 'images', 'train'))
+        val_imgs = os.listdir(os.path.join(out_dir, 'images', 'val'))
+        assert len(train_imgs) > 0 and len(val_imgs) > 0
+        assert len(train_imgs) + len(val_imgs) == 5
+        assert len(val_imgs) == 2  # 40% of 5
+
+        # Every image has its label beside it in the matching split.
+        for split, imgs in (('train', train_imgs), ('val', val_imgs)):
+            label_dir = os.path.join(out_dir, 'labels', split)
+            for img in imgs:
+                stem = os.path.splitext(img)[0]
+                assert os.path.exists(os.path.join(label_dir, stem + '.txt'))
+
+    def test_export_yolo_zero_split_leaves_val_empty(
+        self, temp_output_dir, sample_class_mapping, sample_image
+    ):
+        """val_split=0 preserves the historical all-in-train behaviour."""
+        out_dir = os.path.join(temp_output_dir, "out0")
+        annotations, image_paths = self._multi_image_dataset(
+            temp_output_dir, sample_image, count=4
+        )
+
+        export_yolo_v5plus(
+            annotations, sample_class_mapping, image_paths,
+            slices=[], image_slices={}, output_dir=out_dir, val_split=0,
+        )
+
+        train_imgs = os.listdir(os.path.join(out_dir, 'images', 'train'))
+        val_imgs = os.listdir(os.path.join(out_dir, 'images', 'val'))
+        assert len(train_imgs) == 4
+        assert len(val_imgs) == 0
+
+    def test_export_yolo_splits_multidim_slices(
+        self, temp_output_dir, sample_class_mapping, sample_image
+    ):
+        """Multi-dim slices (no file path, carried as QImage in `slices`) must
+        also route across the train/val split, not all land in train."""
+        out_dir = os.path.join(temp_output_dir, "out_slices")
+        slices = []
+        annotations = {}
+        for i in range(5):
+            slice_name = f"stack.tif_T0_Z{i}_C0"
+            slices.append((slice_name, sample_image))
+            annotations[slice_name] = {
+                "cell": [
+                    {"segmentation": [10, 10, 40, 10, 40, 40, 10, 40], "category": "cell"}
+                ]
+            }
+
+        export_yolo_v5plus(
+            annotations, sample_class_mapping, image_paths={},
+            slices=slices, image_slices={}, output_dir=out_dir, val_split=40,
+        )
+
+        train_imgs = os.listdir(os.path.join(out_dir, 'images', 'train'))
+        val_imgs = os.listdir(os.path.join(out_dir, 'images', 'val'))
+        assert len(train_imgs) > 0 and len(val_imgs) > 0
+        assert len(train_imgs) + len(val_imgs) == 5
+        assert len(val_imgs) == 2  # 40% of 5
+
+        # Each slice's label sits in the same split as its image.
+        for split, imgs in (('train', train_imgs), ('val', val_imgs)):
+            label_dir = os.path.join(out_dir, 'labels', split)
+            for img in imgs:
+                stem = os.path.splitext(img)[0]
+                assert os.path.exists(os.path.join(label_dir, stem + '.txt'))
+
 
 class TestPascalVOCExport:
     """Tests for Pascal VOC export format."""

@@ -48,7 +48,6 @@ Issue numbers refer to https://github.com/bnsreenu/digitalsreeni-image-annotator
 
 | Issue | Size | Task |
 |-------|------|------|
-| #74 | large | MLflow experiment tracking for model training (SAM fine-tuning / YOLO) |
 | #35 | large | Keypoint annotation tool |
 
 ## Project Structure

@@ -46,7 +46,10 @@ setup(
         "torch>=2.2.0",
         "torchvision>=0.17.0",
         "transformers>=4.40.0",
-        "huggingface_hub>=0.20.0"
+        "huggingface_hub>=0.20.0",
+        # MLflow experiment tracking for model training (issue #74). A core
+        # dependency, not optional: every SAM/YOLO training run is tracked.
+        "mlflow>=2.0.0",
     ],
     entry_points={
         "console_scripts": [

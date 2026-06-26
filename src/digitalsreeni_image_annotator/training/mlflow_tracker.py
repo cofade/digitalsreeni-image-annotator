@@ -27,6 +27,15 @@ from urllib.parse import urlparse
 _DEFAULT_EXPERIMENT = "image-annotator-training"
 _MLRUNS_DIRNAME = "mlruns"
 
+# Port the bundled `mlflow ui` server listens on; the deep-link URLs built for
+# the progress dialog must use the same port.
+MLFLOW_UI_PORT = 5000
+
+
+def run_ui_url(experiment_id, run_id, port=MLFLOW_UI_PORT) -> str:
+    """Deep link to a specific run in the MLflow web UI."""
+    return f"http://localhost:{port}/#/experiments/{experiment_id}/runs/{run_id}"
+
 
 def to_mlflow_uri(path_or_uri) -> str:
     """Return a value MLflow accepts as a tracking URI.
@@ -118,6 +127,9 @@ class MLflowTracker:
         self._run_name = run_name
         self._log = log
         self._active = False  # True only between a successful start() and end()
+        self._on_run_url = None  # called with the run's UI deep link on start()
+        self.run_id = None
+        self.experiment_id = None
 
     # -- internal helpers ---------------------------------------------------
 
@@ -129,6 +141,15 @@ class MLflowTracker:
         directly.
         """
         self._log = log
+
+    def set_run_url_callback(self, callback):
+        """Set a callback invoked with the run's MLflow-UI deep link once the
+        run opens in :meth:`start`. Like ``set_log``, callers pass a thread-safe
+        sink (a Qt signal's ``emit``) so the GUI work — showing the clickable
+        link, launching the UI server, opening the browser — happens on the GUI
+        thread, not the worker thread that runs training.
+        """
+        self._on_run_url = callback
 
     def _emit(self, msg):
         if self._log is not None:
@@ -166,12 +187,20 @@ class MLflowTracker:
             # degrade this run to untracked. Close it first.
             if mlflow.active_run() is not None:
                 mlflow.end_run()
-            mlflow.start_run(run_name=self._run_name)
+            run = mlflow.start_run(run_name=self._run_name)
             if params:
                 mlflow.log_params({k: v for k, v in params.items() if v is not None})
             self._active = True
+            self.run_id = run.info.run_id
+            self.experiment_id = run.info.experiment_id
             self._emit(f"MLflow tracking → {self._uri} (experiment "
                        f"'{self._experiment}').")
+            # Hand the run's UI deep link to the GUI (clickable link + auto-open).
+            if self._on_run_url is not None:
+                try:
+                    self._on_run_url(run_ui_url(self.experiment_id, self.run_id))
+                except Exception:
+                    pass
         except Exception as exc:  # never let tracking abort training
             self._active = False
             self._emit(f"MLflow tracking unavailable ({exc}); continuing untracked.")
@@ -221,8 +250,13 @@ class _NullTracker:
     """
 
     active = False
+    run_id = None
+    experiment_id = None
 
     def set_log(self, log):
+        pass
+
+    def set_run_url_callback(self, callback):
         pass
 
     def start(self, params=None):
@@ -238,12 +272,13 @@ class _NullTracker:
         pass
 
 
-def launch_mlflow_ui(tracking_uri, port=5000, log=None):
-    """Launch the local ``mlflow ui`` server and open it in a browser.
+def start_mlflow_ui_server(tracking_uri, port=MLFLOW_UI_PORT, log=None):
+    """Start the local ``mlflow ui`` server (no browser). Returns ``(ok, message)``.
 
-    Returns ``(ok, message)``. ``ok`` is False (with a user-facing message)
-    when MLflow is not installed, so the caller can show a dialog instead of
-    crashing.
+    Idempotent enough for repeated calls: if the port is already serving (e.g. a
+    server from an earlier run), the new process simply fails to bind and exits —
+    the existing server keeps serving — so callers may guard with a flag to avoid
+    the noise but a double-call is harmless.
     """
     if not mlflow_available():
         # MLflow is a core dependency, so this should never happen — but if the
@@ -267,8 +302,7 @@ def launch_mlflow_ui(tracking_uri, port=5000, log=None):
             stdout=subprocess.DEVNULL,
             stderr=subprocess.DEVNULL,
         )
-        webbrowser.open(f"http://localhost:{port}")
-        msg = (f"Launching MLflow UI at http://localhost:{port}\n"
+        msg = (f"MLflow UI server at http://localhost:{port}\n"
                f"Tracking store: {tracking_uri}\n\n"
                f"If the page doesn't load, port {port} may already be in use "
                f"by another MLflow server — check that tab.")
@@ -283,3 +317,15 @@ def launch_mlflow_ui(tracking_uri, port=5000, log=None):
             "'mlflow' command may be missing from PATH for this Python "
             "environment.",
         )
+
+
+def launch_mlflow_ui(tracking_uri, port=MLFLOW_UI_PORT, open_url=None, log=None):
+    """Start the ``mlflow ui`` server and open it in a browser.
+
+    ``open_url`` overrides the page opened (defaults to the UI home) so callers
+    can deep-link straight to a specific run. Returns ``(ok, message)``.
+    """
+    ok, msg = start_mlflow_ui_server(tracking_uri, port=port, log=log)
+    if ok:
+        webbrowser.open(open_url or f"http://localhost:{port}")
+    return ok, msg

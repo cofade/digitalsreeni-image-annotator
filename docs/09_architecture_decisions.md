@@ -1167,6 +1167,15 @@ invites "why is there no run?" confusion.
   URI and experiment name (the only knobs), and an **Open MLflow UI** action shells
   out to `<python> -m mlflow ui`. The training dialogs have **no** "track this run"
   checkbox — every run is tracked.
+- **Live run link + auto-open.** When a SAM run opens, `MLflowTracker.start()`
+  captures `run_id`/`experiment_id` and fires a `set_run_url_callback` with the UI
+  deep link (`run_ui_url()` → `http://localhost:5000/#/experiments/<id>/runs/<id>`).
+  The trainer relays it via its `mlflow_run_url` signal (worker → GUI thread); the
+  controller posts a **clickable link** into the Fine-Tuning Progress dialog (now a
+  `QTextBrowser` with `setOpenExternalLinks`), starts the `mlflow ui` server **once**
+  (`start_mlflow_ui_server`, split out of `launch_mlflow_ui`), and **opens the run
+  in the browser** (deferred ~2.5 s via `QTimer` on first launch so the cold server
+  is ready). All of this is best-effort and never disturbs the run.
 
 **Amendment (always-on)**: The feature originally shipped as an opt-in extra with a
 per-dialog checkbox and an `enabled` QSettings flag (matching issue #74's "optional"

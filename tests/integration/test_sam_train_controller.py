@@ -122,3 +122,37 @@ def test_launch_always_wires_a_real_mlflow_tracker(window, monkeypatch):
     tracker = captured["cfg"]["tracker"]
     assert isinstance(tracker, MLflowTracker)  # real tracker, never None/_NullTracker
     assert tracker._run_name == "t"  # wired with the run name from the dialog
+
+
+def test_mlflow_run_url_shows_link_and_opens_browser(window, monkeypatch):
+    """When a run opens, the progress dialog shows a clickable deep link, the
+    MLflow UI server is started once, and the browser opens for each run."""
+    import webbrowser
+
+    from PyQt6.QtCore import QTimer
+
+    import digitalsreeni_image_annotator.training.mlflow_tracker as mt
+    from digitalsreeni_image_annotator.dialogs.yolo_trainer import (
+        TrainingInfoDialog,
+    )
+
+    c = window.sam_train_controller
+    window.sam_training_dialog = TrainingInfoDialog(window)
+
+    started = []
+    monkeypatch.setattr(
+        mt, "start_mlflow_ui_server",
+        lambda uri, log=None: (started.append(uri), (True, "ok"))[1],
+    )
+    opened = []
+    monkeypatch.setattr(webbrowser, "open", lambda u: opened.append(u))
+    # Fire the deferred browser-open immediately instead of after the delay.
+    monkeypatch.setattr(QTimer, "singleShot", staticmethod(lambda ms, fn: fn()))
+
+    url = "http://localhost:5000/#/experiments/1/runs/abc"
+    c._on_mlflow_run_url(url)
+    c._on_mlflow_run_url(url)  # a second run must NOT restart the server
+
+    assert url in window.sam_training_dialog.info_text.toHtml()  # clickable link
+    assert len(started) == 1  # server launched once (guarded)
+    assert opened == [url, url]  # browser opened for each run

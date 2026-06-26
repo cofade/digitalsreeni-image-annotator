@@ -60,6 +60,7 @@ class SAMTrainController(QObject):
     def __init__(self, main_window):
         super().__init__(main_window)
         self.mw = main_window
+        self._mlflow_ui_started = False  # launch the UI server at most once
 
     # -- menu ----------------------------------------------------------------
 
@@ -204,6 +205,7 @@ class SAMTrainController(QObject):
             self.mw.sam_training_dialog.show()
 
             self.mw.sam_finetuner.progress_signal.connect(self.mw.sam_training_dialog.update_info)
+            self.mw.sam_finetuner.mlflow_run_url.connect(self._on_mlflow_run_url)
             self.mw.sam_training_dialog.stop_signal.connect(self.mw.sam_finetuner.stop_training_signal)
 
             self.mw.sam_training_thread = SAMTrainingThread(
@@ -214,6 +216,41 @@ class SAMTrainController(QObject):
         except Exception as e:
             self._set_sam_ui_locked(False)
             QMessageBox.critical(self.mw, "Could Not Start Training", str(e))
+
+    def _on_mlflow_run_url(self, url):
+        """The fine-tuning run has opened in MLflow (signalled from the worker
+        thread; this runs on the GUI thread). Show a clickable link in the
+        progress dialog, start the MLflow UI server once, and open the run in
+        the browser. Tracking display must never disturb the run, so this is
+        best-effort and swallows its own errors."""
+        import webbrowser
+
+        from PyQt6.QtCore import QTimer
+
+        from ..training.mlflow_tracker import (
+            resolve_tracking_uri,
+            start_mlflow_ui_server,
+        )
+
+        dlg = getattr(self.mw, "sam_training_dialog", None)
+        if dlg is not None:
+            dlg.update_info_link("🔗 Open this run in MLflow", url)
+        try:
+            if not self._mlflow_ui_started:
+                ok, _ = start_mlflow_ui_server(
+                    resolve_tracking_uri(self.mw),
+                    log=dlg.update_info if dlg is not None else None,
+                )
+                # Only latch the guard on success, so a failed launch retries
+                # on the next run rather than disabling the UI for the session.
+                self._mlflow_ui_started = ok
+                # Give a cold-started server a moment before opening the tab so
+                # the browser doesn't land on a connection error. (Non-blocking.)
+                QTimer.singleShot(2500 if ok else 0, lambda: webbrowser.open(url))
+            else:
+                webbrowser.open(url)
+        except Exception as exc:
+            print(f"Could not open MLflow UI for the run: {exc}")
 
     def _gpu_gate(self) -> bool:
         """Warn (and let the user back out) when no usable GPU is present."""
@@ -253,6 +290,7 @@ class SAMTrainController(QObject):
         dlg.stop_button.setText("Stop Training")
         try:
             self.mw.sam_finetuner.progress_signal.disconnect(dlg.update_info)
+            self.mw.sam_finetuner.mlflow_run_url.disconnect(self._on_mlflow_run_url)
             dlg.stop_signal.disconnect(self.mw.sam_finetuner.stop_training_signal)
         except TypeError:
             pass  # already disconnected

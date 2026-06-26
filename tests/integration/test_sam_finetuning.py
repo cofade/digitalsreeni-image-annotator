@@ -39,6 +39,9 @@ class _SpyTracker:
     def set_log(self, log):
         self.calls.append("set_log")
 
+    def set_run_url_callback(self, callback):
+        pass  # not part of the lifecycle assertion
+
     def start(self, params=None):
         self.calls.append("start")
         return True

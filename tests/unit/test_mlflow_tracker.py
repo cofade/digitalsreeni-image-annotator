@@ -26,12 +26,20 @@ class TestNullTracker:
         # Stand-in used when a trainer gets no tracker (direct calls, tests).
         t = _NullTracker()
         t.set_log(lambda m: None)
+        t.set_run_url_callback(lambda url: None)
         assert t.start({"a": 1}) is False
         assert t.active is False
         # None of these raise, even though no run is open.
         t.log_metrics({"loss": 0.5}, step=1)
         t.log_artifact("/nonexistent/path")
         t.end()
+
+
+class TestRunUiUrl:
+    def test_url_format(self):
+        assert mlflow_tracker.run_ui_url("123", "abc", port=5000) == (
+            "http://localhost:5000/#/experiments/123/runs/abc"
+        )
 
 
 class TestCrashSafety:
@@ -167,3 +175,24 @@ class TestLiveLogging:
         assert t.start({"epochs": 2}) is True
         assert t.active is True
         t.end()
+
+    def test_run_url_callback_fires_with_deep_link(self, tmp_path, monkeypatch):
+        """On start(), the tracker captures run/experiment ids and hands the
+        GUI a deep link to that run (clickable link + auto-open)."""
+        monkeypatch.setattr(mlflow_tracker, "_AVAILABLE", None)
+        if not mlflow_tracker.mlflow_available():
+            pytest.skip("mlflow not installed")
+
+        store = str(tmp_path / "mlruns")
+        seen = []
+        t = MLflowTracker(
+            tracking_uri=store, experiment_name="ut-url", run_name="ut-run",
+        )
+        t.set_run_url_callback(seen.append)
+        assert t.start({"epochs": 1}) is True
+        t.end()
+
+        assert len(seen) == 1
+        assert t.run_id and t.experiment_id
+        assert seen[0] == mlflow_tracker.run_ui_url(t.experiment_id, t.run_id)
+        assert t.run_id in seen[0] and t.experiment_id in seen[0]

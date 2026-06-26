@@ -188,6 +188,9 @@ class SAMFineTuner(QObject):
     controller and progress dialog wiring is identical."""
 
     progress_signal = pyqtSignal(str)
+    # Emitted (from the worker thread) with the MLflow-UI deep link once the run
+    # opens, so the controller can show a clickable link + auto-open the browser.
+    mlflow_run_url = pyqtSignal(str)
 
     def __init__(self):
         super().__init__()
@@ -291,6 +294,8 @@ class SAMFineTuner(QObject):
             tracker = _NullTracker()
         # Route tracker status lines through the thread-safe progress signal.
         tracker.set_log(self.progress_signal.emit)
+        # And the run's UI deep link through its own signal (GUI handles it).
+        tracker.set_run_url_callback(self.mlflow_run_url.emit)
 
         groups = list(groups)
         if not groups:

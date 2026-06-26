@@ -156,3 +156,23 @@ def test_mlflow_run_url_shows_link_and_opens_browser(window, monkeypatch):
     assert url in window.sam_training_dialog.info_text.toHtml()  # clickable link
     assert len(started) == 1  # server launched once (guarded)
     assert opened == [url, url]  # browser opened for each run
+
+
+def test_link_format_does_not_bleed_into_later_lines(qt_application):
+    """A clickable run link must not turn the plain progress lines appended
+    after it into links too (regression: epoch rows rendered as anchors)."""
+    from digitalsreeni_image_annotator.dialogs.yolo_trainer import (
+        TrainingInfoDialog,
+    )
+
+    dlg = TrainingInfoDialog()
+    url = "http://localhost:5000/#/experiments/1/runs/abc"
+    dlg.update_info("Epoch 1/10 loss=0.02")
+    dlg.update_info_link("Open this run in MLflow", url)
+    dlg.update_info("Epoch 2/10 loss=0.01")  # used to inherit the anchor format
+    dlg.update_info("Epoch 3/10 loss=0.01")
+
+    html = dlg.info_text.toHtml()
+    assert url in html  # the link is present and clickable
+    assert html.count("href=") == 1  # exactly one anchor — only the link line
+    dlg.deleteLater()

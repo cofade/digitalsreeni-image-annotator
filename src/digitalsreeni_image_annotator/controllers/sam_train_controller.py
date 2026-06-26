@@ -202,6 +202,7 @@ class SAMTrainController(QObject):
             self.mw.sam_training_dialog.info_text.clear()
             self.mw.sam_training_dialog.stop_button.setEnabled(True)
             self.mw.sam_training_dialog.stop_button.setText("Stop Training")
+            self.mw.sam_training_dialog.stop_button.show()
             self.mw.sam_training_dialog.show()
 
             self.mw.sam_finetuner.progress_signal.connect(self.mw.sam_training_dialog.update_info)
@@ -283,10 +284,9 @@ class SAMTrainController(QObject):
     def training_finished(self, result):
         self._set_sam_ui_locked(False)
         dlg = self.mw.sam_training_dialog
-        # Training is over — DISABLE Stop so a post-completion click can't strand
-        # the button on "Stopping…" forever (it only un-sticks when a run
-        # finishes, and none is running). _launch re-enables it for the next run.
-        dlg.stop_button.setEnabled(False)
+        # Training is over — HIDE Stop entirely (only Close remains). _launch
+        # re-shows and re-enables it for the next run.
+        dlg.stop_button.hide()
         dlg.stop_button.setText("Stop Training")
         try:
             self.mw.sam_finetuner.progress_signal.disconnect(dlg.update_info)

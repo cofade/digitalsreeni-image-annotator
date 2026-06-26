@@ -346,6 +346,10 @@ class YOLOController(QObject):
         if not hasattr(self.mw, "training_dialog"):
             self.mw.training_dialog = TrainingInfoDialog(self.mw)
         self.mw.training_dialog.show()
+        # Re-show/enable Stop for this run (training_finished hides it).
+        self.mw.training_dialog.stop_button.setEnabled(True)
+        self.mw.training_dialog.stop_button.setText("Stop Training")
+        self.mw.training_dialog.stop_button.show()
 
         self._configure_mlflow()
 
@@ -362,7 +366,9 @@ class YOLOController(QObject):
         self.mw.training_thread.start()
 
     def training_finished(self, results):
-        self.mw.training_dialog.stop_button.setEnabled(True)
+        # Training is over — hide Stop entirely (only Close remains); the next
+        # run re-shows it in start_training.
+        self.mw.training_dialog.stop_button.hide()
         self.mw.training_dialog.stop_button.setText("Stop Training")
         self.mw.yolo_trainer.progress_signal.disconnect(
             self.mw.training_dialog.update_info

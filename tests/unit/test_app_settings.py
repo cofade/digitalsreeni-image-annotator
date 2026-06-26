@@ -65,22 +65,19 @@ class TestUiPrefsRoundtrip:
 
 
 class TestMlflowPrefsRoundtrip:
+    # Tracking is always on; only the destination (URI/experiment) is stored.
     def test_defaults_from_empty_settings(self, ini_settings):
-        assert load_mlflow_prefs(ini_settings) == (
-            False, "", MLFLOW_EXPERIMENT_DEFAULT
-        )
+        assert load_mlflow_prefs(ini_settings) == ("", MLFLOW_EXPERIMENT_DEFAULT)
 
     def test_roundtrip(self, ini_settings):
-        save_mlflow_prefs(True, "/tmp/mlruns", "my-exp", ini_settings)
+        save_mlflow_prefs("/tmp/mlruns", "my-exp", ini_settings)
         ini_settings.sync()
-        assert load_mlflow_prefs(ini_settings) == (True, "/tmp/mlruns", "my-exp")
+        assert load_mlflow_prefs(ini_settings) == ("/tmp/mlruns", "my-exp")
 
     def test_blank_experiment_falls_back_to_default(self, ini_settings):
-        save_mlflow_prefs(True, "", "   ", ini_settings)
-        assert load_mlflow_prefs(ini_settings) == (
-            True, "", MLFLOW_EXPERIMENT_DEFAULT
-        )
+        save_mlflow_prefs("", "   ", ini_settings)
+        assert load_mlflow_prefs(ini_settings) == ("", MLFLOW_EXPERIMENT_DEFAULT)
 
     def test_uri_is_stripped(self, ini_settings):
-        save_mlflow_prefs(False, "  /data/runs  ", "exp", ini_settings)
-        assert load_mlflow_prefs(ini_settings)[1] == "/data/runs"
+        save_mlflow_prefs("  /data/runs  ", "exp", ini_settings)
+        assert load_mlflow_prefs(ini_settings)[0] == "/data/runs"

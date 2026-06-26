@@ -1,15 +1,15 @@
 """Settings dialog for MLflow experiment tracking (issue #74).
 
-Edits the persisted tracking preferences (enable-by-default, tracking-store
-URI/path, experiment name). Storage defaults to ``<project>/mlruns`` when the
-URI is left blank — see ``training/mlflow_tracker.resolve_tracking_uri``.
+Edits the persisted tracking *destination* (tracking-store URI/path, experiment
+name). Tracking itself is always on — there is no enable/disable here. Storage
+defaults to ``<project>/mlruns`` when the URI is left blank — see
+``training/mlflow_tracker.resolve_tracking_uri``.
 
 No inline colours (No Hardcoded Colors Rule, docs/08_crosscutting_concepts.md);
 the global stylesheet themes the widgets.
 """
 
 from PyQt6.QtWidgets import (
-    QCheckBox,
     QDialog,
     QDialogButtonBox,
     QFileDialog,
@@ -26,11 +26,10 @@ from ..app_settings import (
     load_mlflow_prefs,
     save_mlflow_prefs,
 )
-from ..training.mlflow_tracker import mlflow_available
 
 
 class MLflowSettingsDialog(QDialog):
-    """Modal editor for the MLflow tracking preferences."""
+    """Modal editor for the MLflow tracking destination."""
 
     def __init__(self, parent=None):
         super().__init__(parent)
@@ -38,11 +37,7 @@ class MLflowSettingsDialog(QDialog):
         layout = QVBoxLayout(self)
         form = QFormLayout()
 
-        enabled, uri, experiment = load_mlflow_prefs()
-
-        self.enabled = QCheckBox("Enable MLflow tracking by default for new runs")
-        self.enabled.setChecked(enabled)
-        form.addRow("", self.enabled)
+        uri, experiment = load_mlflow_prefs()
 
         self.uri = QLineEdit(uri)
         self.uri.setPlaceholderText("(blank = <project>/mlruns)")
@@ -58,18 +53,11 @@ class MLflowSettingsDialog(QDialog):
 
         layout.addLayout(form)
 
-        if not mlflow_available():
-            warn = QLabel(
-                "MLflow is not installed — runs will not be tracked until you "
-                "install it:  pip install 'digitalsreeni-image-annotator[tracking]'"
-            )
-            warn.setWordWrap(True)
-            layout.addWidget(warn)
-
         note = QLabel(
-            "Leave the tracking store blank to default to a local 'mlruns' "
-            "folder next to the current project. View runs with Settings → "
-            "Experiment Tracking → Open MLflow UI, or run 'mlflow ui' yourself."
+            "Every training run is tracked with MLflow. Leave the tracking "
+            "store blank to default to a local 'mlruns' folder next to the "
+            "current project. View runs with Settings → Experiment Tracking → "
+            "Open MLflow UI, or run 'mlflow ui' yourself."
         )
         note.setWordWrap(True)
         layout.addWidget(note)
@@ -90,7 +78,6 @@ class MLflowSettingsDialog(QDialog):
 
     def accept(self):
         save_mlflow_prefs(
-            self.enabled.isChecked(),
             self.uri.text().strip(),
             self.experiment.text().strip() or MLFLOW_EXPERIMENT_DEFAULT,
         )

@@ -1,15 +1,17 @@
-"""Optional MLflow experiment tracking for model training (issue #74).
+"""Always-on MLflow experiment tracking for model training (issue #74).
 
-Wraps the optional ``mlflow`` dependency so the rest of the app can log
-training runs without ever caring whether MLflow is installed or enabled.
-When MLflow is missing **or** tracking is disabled, every method on
-:class:`MLflowTracker` is a no-op and training behaves exactly as before
-(graceful degradation).
+Wraps the ``mlflow`` dependency so the rest of the app can log training runs
+without sprinkling mlflow calls everywhere. MLflow is a **core dependency** and
+tracking is **mandatory** — there is no enable/disable. The only no-op is
+:class:`_NullTracker`, used when a trainer is invoked without a tracker
+(direct/programmatic calls, tests).
 
-``mlflow`` is imported lazily inside the methods that need it — never at
-module top — mirroring the lazy-import idiom used for the other heavy,
-optional libraries (``inference/sam_utils.py``, ``inference/dino_utils.py``)
-so app startup stays fast and works without the extra installed.
+``mlflow`` is imported lazily inside the methods that need it — never at module
+top — mirroring the lazy-import idiom used for the other heavy libraries
+(``inference/sam_utils.py``, ``inference/dino_utils.py``) so app startup stays
+fast and a *broken* mlflow install can't stop the GUI from launching. Every live
+mlflow call is wrapped so a tracking error degrades that run to untracked but
+never aborts training.
 
 Storage defaults to a local file store under ``<project>/mlruns`` (see
 :func:`resolve_tracking_uri`), matching the issue's default.
@@ -50,7 +52,11 @@ _AVAILABLE = None
 
 
 def mlflow_available() -> bool:
-    """Return True if the optional ``mlflow`` package can be imported."""
+    """Return True if the ``mlflow`` package can be imported.
+
+    MLflow is a core dependency, so this is expected to be True; it exists only
+    to give :func:`launch_mlflow_ui` a clean message for a broken install.
+    """
     global _AVAILABLE
     if _AVAILABLE is None:
         try:
@@ -74,7 +80,7 @@ def resolve_tracking_uri(main_window=None) -> str:
     """
     from ..app_settings import load_mlflow_prefs
 
-    _, uri, _ = load_mlflow_prefs()
+    uri, _ = load_mlflow_prefs()
     if uri:
         return uri
     project_dir = getattr(main_window, "current_project_dir", None)
@@ -83,7 +89,7 @@ def resolve_tracking_uri(main_window=None) -> str:
 
 
 class MLflowTracker:
-    """A graceful, optional MLflow run wrapper.
+    """An always-on MLflow run wrapper.
 
     Construct it (cheaply) on any thread, then call :meth:`start`,
     :meth:`log_metrics`, :meth:`log_artifact` and :meth:`end` **on the
@@ -91,20 +97,22 @@ class MLflowTracker:
     SAM fine-tuning the run is started and ended inside the worker thread's
     ``train()`` call.
 
-    If ``enabled`` is False or MLflow is not installed, every method is a
-    no-op. Any error raised by MLflow during logging is caught and reported
-    via ``log`` but never propagated — tracking must never abort training.
+    Tracking is mandatory (MLflow is a core dependency), so there is no
+    "disabled" mode. The only robustness concession is that any error raised
+    by MLflow — including an unexpectedly broken install — is caught and
+    reported via ``log`` but never propagated: a tracking failure must never
+    abort a training run. When no tracker is supplied to a trainer at all
+    (direct/programmatic calls, tests) a :class:`_NullTracker` no-op stands
+    in — that is an internal default, not a user-facing off switch.
     """
 
     def __init__(
         self,
-        enabled,
         tracking_uri,
         experiment_name=_DEFAULT_EXPERIMENT,
         run_name=None,
         log=None,
     ):
-        self._want = bool(enabled)
         self._uri = tracking_uri
         self._experiment = experiment_name or _DEFAULT_EXPERIMENT
         self._run_name = run_name
@@ -136,13 +144,13 @@ class MLflowTracker:
     # -- public API ---------------------------------------------------------
 
     def start(self, params=None):
-        """Open the run and log ``params``. Returns True if tracking is live."""
-        if not self._want:
-            return False
-        if not mlflow_available():
-            self._emit("MLflow not installed — skipping experiment tracking "
-                       "(pip install 'digitalsreeni-image-annotator[tracking]').")
-            return False
+        """Open the run and log ``params``. Returns True if tracking is live.
+
+        Tracking is always attempted. The broad ``except`` is pure
+        crash-safety — a broken MLflow install or a transient backend error
+        degrades this one run to untracked rather than killing the training
+        job; it is not an opt-out path.
+        """
         try:
             import mlflow
 
@@ -204,6 +212,32 @@ class MLflowTracker:
             self._active = False
 
 
+class _NullTracker:
+    """No-op stand-in used when a trainer is invoked without a tracker
+    (direct/programmatic calls, tests). Matches :class:`MLflowTracker`'s
+    surface so trainers need no ``None`` checks. This is an internal default,
+    not a user-facing way to disable tracking — the GUI always supplies a
+    real :class:`MLflowTracker`.
+    """
+
+    active = False
+
+    def set_log(self, log):
+        pass
+
+    def start(self, params=None):
+        return False
+
+    def log_metrics(self, metrics, step=None):
+        pass
+
+    def log_artifact(self, path):
+        pass
+
+    def end(self):
+        pass
+
+
 def launch_mlflow_ui(tracking_uri, port=5000, log=None):
     """Launch the local ``mlflow ui`` server and open it in a browser.
 
@@ -212,11 +246,12 @@ def launch_mlflow_ui(tracking_uri, port=5000, log=None):
     crashing.
     """
     if not mlflow_available():
+        # MLflow is a core dependency, so this should never happen — but if the
+        # install is broken, fail with a clear message instead of crashing.
         return (
             False,
-            "MLflow is not installed. Install it with:\n\n"
-            "    pip install 'digitalsreeni-image-annotator[tracking]'\n\n"
-            "or:  pip install mlflow",
+            "MLflow could not be imported (the install may be broken). "
+            "Reinstall it with:  pip install mlflow",
         )
     try:
         # Invoke via `<this-interpreter> -m mlflow` rather than the bare

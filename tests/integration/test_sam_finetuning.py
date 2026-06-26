@@ -10,12 +10,14 @@ import json
 import os
 import shutil
 import tempfile
+from types import SimpleNamespace
 
 import numpy as np
 import pytest
 from PyQt6.QtGui import QImage
 
 from src.digitalsreeni_image_annotator.training.sam_trainer import (
+    SAMFineTuner,
     SampleGroup,
     bbox_to_mask,
     list_custom_models,
@@ -24,6 +26,95 @@ from src.digitalsreeni_image_annotator.training.sam_trainer import (
     mask_to_xyxy,
     polygon_to_mask,
 )
+
+
+class _SpyTracker:
+    """Records the lifecycle calls a trainer makes, in order."""
+
+    active = True
+
+    def __init__(self):
+        self.calls = []
+
+    def set_log(self, log):
+        self.calls.append("set_log")
+
+    def start(self, params=None):
+        self.calls.append("start")
+        return True
+
+    def log_metrics(self, metrics, step=None):
+        self.calls.append("log_metrics")
+
+    def log_artifact(self, path):
+        self.calls.append("log_artifact")
+
+    def end(self):
+        self.calls.append("end")
+
+
+def _stub_trainer_internals(monkeypatch, finetuner, run_epochs):
+    """Replace the heavy model-building steps of ``train()`` so its tracker
+    orchestration can be exercised without weights/GPU. ``run_epochs`` is the
+    body to run between ``tracker.start()`` and ``tracker.end()``."""
+    import torch
+
+    net = torch.nn.Linear(1, 1)  # a real param so AdamW + device probing work
+
+    class _FakePred:
+        def __init__(self, model):
+            self.model = model
+
+    monkeypatch.setattr(
+        finetuner, "_build_predictor",
+        lambda base: (object(), _FakePred(net), "base.pt"),
+    )
+    monkeypatch.setattr(
+        finetuner, "_apply_freeze",
+        lambda net, freeze: (list(net.parameters()), 1),
+    )
+    monkeypatch.setattr(finetuner, "_run_epochs", run_epochs)
+
+
+class TestMlflowOrchestration:
+    """The trainer must drive the tracker lifecycle (ADR-027, always-on)."""
+
+    def _train(self, finetuner, tracker, out_path):
+        finetuner.train(
+            "SAM 2 tiny", [SimpleNamespace(n_instances=1)],
+            epochs=1, lr=1e-4, batch_size=1, freeze_image_encoder=True,
+            prompt_type="bbox", out_path=out_path, tracker=tracker,
+        )
+
+    def test_train_drives_tracker_lifecycle(self, monkeypatch, temp_dir):
+        ft = SAMFineTuner()
+        spy = _SpyTracker()
+
+        def run_epochs(*a, **k):
+            tracker = a[-1]  # last positional arg is the tracker
+            tracker.log_metrics({"loss": 0.1}, step=1)
+            return {"checkpoint": a[-2]}
+
+        _stub_trainer_internals(monkeypatch, ft, run_epochs)
+        self._train(ft, spy, os.path.join(temp_dir, "out.pt"))
+
+        # set_log wires the progress sink, then the run opens, logs, and closes.
+        assert spy.calls == ["set_log", "start", "log_metrics", "end"]
+
+    def test_train_ends_tracker_even_when_epochs_raise(self, monkeypatch, temp_dir):
+        ft = SAMFineTuner()
+        spy = _SpyTracker()
+
+        def boom(*a, **k):
+            raise RuntimeError("epoch blew up")
+
+        _stub_trainer_internals(monkeypatch, ft, boom)
+        with pytest.raises(RuntimeError):
+            self._train(ft, spy, os.path.join(temp_dir, "out.pt"))
+
+        # The run must still be closed (the finally: tracker.end() contract).
+        assert spy.calls[-1] == "end"
+        assert spy.calls == ["set_log", "start", "end"]
 
 
 @pytest.fixture

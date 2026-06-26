@@ -1,44 +1,52 @@
-"""Unit tests for the optional MLflow tracker (issue #74).
+"""Unit tests for the always-on MLflow tracker (issue #74).
 
-The point of these tests is the graceful-degradation contract: with tracking
-disabled, or with mlflow not installed, the tracker is an inert no-op that
-never raises and never pretends to be active. The live-logging path is
-exercised only when mlflow is actually importable (skipped otherwise).
+Tracking is mandatory (MLflow is a core dependency), so there is no "disabled"
+mode. These tests pin two contracts: (1) the ``_NullTracker`` no-op used when a
+trainer is invoked without a tracker is inert, and (2) crash-safety — if MLflow
+is unexpectedly broken at run time, ``start()`` degrades to untracked without
+raising, so a training job is never killed by a tracking failure. The
+live-logging path runs only when mlflow is importable (skipped otherwise).
 """
 
 import os
+import sys
 
 import pytest
 
 from digitalsreeni_image_annotator.training import mlflow_tracker
 from digitalsreeni_image_annotator.training.mlflow_tracker import (
     MLflowTracker,
+    _NullTracker,
     resolve_tracking_uri,
 )
 
 
-class TestDisabledTracker:
+class TestNullTracker:
     def test_all_methods_are_noops_and_inactive(self):
-        msgs = []
-        t = MLflowTracker(enabled=False, tracking_uri="ignored", log=msgs.append)
+        # Stand-in used when a trainer gets no tracker (direct calls, tests).
+        t = _NullTracker()
+        t.set_log(lambda m: None)
         assert t.start({"a": 1}) is False
         assert t.active is False
         # None of these raise, even though no run is open.
         t.log_metrics({"loss": 0.5}, step=1)
         t.log_artifact("/nonexistent/path")
         t.end()
-        assert msgs == []  # disabled stays silent
 
-    def test_enabled_but_mlflow_missing_degrades(self, monkeypatch):
-        # Force the "not installed" branch regardless of the real environment.
-        monkeypatch.setattr(mlflow_tracker, "_AVAILABLE", False)
+
+class TestCrashSafety:
+    def test_broken_mlflow_degrades_without_raising(self, monkeypatch):
+        # Simulate mlflow being unimportable at start() time: a None entry in
+        # sys.modules makes `import mlflow` raise ImportError.
+        monkeypatch.setitem(sys.modules, "mlflow", None)
         msgs = []
-        t = MLflowTracker(enabled=True, tracking_uri="x", log=msgs.append)
-        assert t.start({"a": 1}) is False
+        t = MLflowTracker(tracking_uri="x", log=msgs.append)
+        assert t.start({"a": 1}) is False   # never raises
         assert t.active is False
-        t.log_metrics({"loss": 1.0})  # safe no-op
+        t.log_metrics({"loss": 1.0})        # safe no-op
+        t.log_artifact("/nope")
         t.end()
-        assert any("MLflow not installed" in m for m in msgs)
+        assert any("unavailable" in m for m in msgs)
 
 
 class TestMlflowAvailable:
@@ -60,7 +68,7 @@ class TestResolveTrackingUri:
         # load_mlflow_prefs is imported inside the function, so patch the source.
         monkeypatch.setattr(
             "digitalsreeni_image_annotator.app_settings.load_mlflow_prefs",
-            lambda settings=None: (True, str(tmp_path / "override"), "exp"),
+            lambda settings=None: (str(tmp_path / "override"), "exp"),
         )
         assert resolve_tracking_uri(_FakeMW(project_dir="/proj")) == str(
             tmp_path / "override"
@@ -69,7 +77,7 @@ class TestResolveTrackingUri:
     def test_project_dir_used_when_no_override(self, monkeypatch):
         monkeypatch.setattr(
             "digitalsreeni_image_annotator.app_settings.load_mlflow_prefs",
-            lambda settings=None: (True, "", "exp"),
+            lambda settings=None: ("", "exp"),
         )
         uri = resolve_tracking_uri(_FakeMW(project_dir="/proj"))
         assert uri == os.path.join("/proj", "mlruns")
@@ -77,7 +85,7 @@ class TestResolveTrackingUri:
     def test_cwd_fallback(self, monkeypatch):
         monkeypatch.setattr(
             "digitalsreeni_image_annotator.app_settings.load_mlflow_prefs",
-            lambda settings=None: (True, "", "exp"),
+            lambda settings=None: ("", "exp"),
         )
         uri = resolve_tracking_uri(_FakeMW(project_dir=None))
         assert uri == os.path.join(os.getcwd(), "mlruns")
@@ -94,7 +102,7 @@ class TestLiveLogging:
 
         store = str(tmp_path / "mlruns")
         t = MLflowTracker(
-            enabled=True, tracking_uri=store, experiment_name="ut-exp",
+            tracking_uri=store, experiment_name="ut-exp",
             run_name="ut-run",
         )
         assert t.start({"epochs": 3, "lr": 1e-4, "skip": None}) is True
@@ -127,7 +135,7 @@ class TestLiveLogging:
 
         store = str(tmp_path / "mlruns")
         t = MLflowTracker(
-            enabled=True, tracking_uri=store, experiment_name="ut-art",
+            tracking_uri=store, experiment_name="ut-art",
             run_name="ut-run",
         )
         assert t.start({"epochs": 1}) is True
@@ -151,7 +159,7 @@ class TestLiveLogging:
 
         store = str(tmp_path / "mlruns")
         t = MLflowTracker(
-            enabled=True, tracking_uri=store, experiment_name="ut-heal",
+            tracking_uri=store, experiment_name="ut-heal",
             run_name="ut-run",
         )
         assert t.start({"epochs": 1}) is True   # opens run A, never ended

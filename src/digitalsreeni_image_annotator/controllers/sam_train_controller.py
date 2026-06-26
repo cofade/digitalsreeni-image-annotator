@@ -162,19 +162,17 @@ class SAMTrainController(QObject):
         out_name = cfg.pop("out_name")
         cfg["out_path"] = make_custom_filename(base_model, out_name)
 
-        # MLflow tracking (issue #74). Build a tracker now but start the run
-        # inside train() on the worker thread (MLflow runs are thread-bound).
-        # The per-run toggle is a one-off override — the persisted default is
-        # owned by Settings → Experiment Tracking, so we don't rewrite it here.
-        track_mlflow = cfg.pop("track_mlflow", False)
+        # MLflow tracking (issue #74) — always on. Build a tracker now but
+        # start the run inside train() on the worker thread (MLflow runs are
+        # thread-bound). Only the destination (URI/experiment) is configurable,
+        # via Settings → Experiment Tracking.
         from ..app_settings import load_mlflow_prefs
         from ..training.mlflow_tracker import MLflowTracker, resolve_tracking_uri
-        _, _, experiment = load_mlflow_prefs()
+        _, experiment = load_mlflow_prefs()
         # No log callback here: the trainer wires the tracker's log to its own
         # thread-safe ``progress_signal`` so tracker messages reach the GUI
         # via a queued connection (never a direct cross-thread QTextEdit write).
         cfg["tracker"] = MLflowTracker(
-            enabled=track_mlflow,
             tracking_uri=resolve_tracking_uri(self.mw),
             experiment_name=experiment,
             run_name=out_name,

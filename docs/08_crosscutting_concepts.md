@@ -354,23 +354,28 @@ class TrainingThread(QThread):
 - Progress updates via Qt signals
 - UI remains responsive during training
 
-## MLflow Experiment Tracking (Optional)
+## MLflow Experiment Tracking (Always On)
 
-MLflow tracking (issue #74, [ADR-027](09_architecture_decisions.md#adr-027-optional-mlflow-experiment-tracking-lazy-graceful-sam-explicit--yolo-native))
-records training runs so checkpoints stay tied to their hyperparameters and loss
-curves. Two cross-cutting rules govern it:
+MLflow tracking (issue #74, [ADR-027](09_architecture_decisions.md#adr-027-mandatory-mlflow-experiment-tracking-sam-explicit--yolo-native))
+records *every* training run so checkpoints stay tied to their hyperparameters and
+loss curves. Tracking is mandatory — there is no enable/disable. Several
+cross-cutting rules govern it:
 
-**Optional-dependency degradation.** MLflow lives in `extras_require["tracking"]`,
-never in `install_requires`. `import mlflow` happens only inside
-`training/mlflow_tracker.py` methods, gated by a cached `mlflow_available()` probe —
-the same lazy idiom used for SAM/DINO. With MLflow absent or tracking disabled,
-`MLflowTracker` is an inert no-op (`active == False`, no exceptions) and training is
-byte-for-byte unchanged. Every live MLflow call is wrapped so a tracking error logs
-a status line but never aborts a run.
+**Core dependency, lazy import, crash-safe.** MLflow is in `install_requires` (a
+fresh install always has it). `import mlflow` still happens only inside
+`training/mlflow_tracker.py` methods (the same lazy idiom as SAM/DINO), so startup
+stays fast and a *broken* install can't stop the GUI launching. There is no
+"disabled" tracker; the only no-op is `_NullTracker`, used when a trainer is called
+without a tracker (direct/programmatic calls, tests). Every live MLflow call is
+wrapped so a tracking error logs a status line but **never aborts a run** — pure
+crash-safety, not an opt-out.
 
 **Tracking-URI resolution.** `resolve_tracking_uri(main_window)` picks the store by
 precedence: a non-empty QSettings override (`tracking/mlflow_uri`) → `<project>/mlruns`
 when a project is open (`main_window.current_project_dir`) → `<cwd>/mlruns`.
+`to_mlflow_uri()` then converts a local path to a `file://` URI at the MLflow
+boundary (a bare Windows `C:\…` path is otherwise read as scheme `c` and rejected),
+and `MLFLOW_ALLOW_FILE_STORE=true` is set so mlflow 3.x accepts the local file store.
 
 **Where logging lives — by trainer shape.** SAM has a custom loop, so it logs
 *explicitly* through a tracker passed into `SAMFineTuner.train(..., tracker=...)`.
@@ -378,10 +383,10 @@ Critically, the MLflow run is started, logged to, and ended **inside `train()` o
 worker thread** — MLflow runs are thread-bound, and the controller only constructs the
 (unstarted) tracker. The tracker's status `log` is wired to the trainer's
 thread-safe `progress_signal`, so tracker messages reach the GUI via a queued
-connection (never a direct cross-thread QTextEdit write). YOLO instead enables
+connection (never a direct cross-thread QTextEdit write). YOLO instead arms
 Ultralytics' built-in MLflow callback (`MLFLOW_TRACKING_URI` /
-`MLFLOW_EXPERIMENT_NAME` env + `ultralytics.settings.update({"mlflow": ...})`),
-reset every run so a stale `True` can't leak into an untracked run.
+`MLFLOW_EXPERIMENT_NAME` env + `ultralytics.settings.update({"mlflow": True})`)
+on every run.
 
 ## Error Handling
 

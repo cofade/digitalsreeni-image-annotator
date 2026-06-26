@@ -24,7 +24,6 @@ import numpy as np
 from PyQt6.QtCore import QObject, QThread, pyqtSignal
 from PyQt6.QtGui import QAction
 from PyQt6.QtWidgets import (
-    QCheckBox,
     QDialog,
     QDialogButtonBox,
     QDoubleSpinBox,
@@ -285,18 +284,6 @@ class YOLOController(QObject):
         layout.addWidget(imgsz_label)
         layout.addWidget(imgsz_input)
 
-        # MLflow tracking (issue #74) — uses Ultralytics' built-in MLflow
-        # callback, which logs box/cls/dfl loss, mAP and the model artifact.
-        from ..app_settings import load_mlflow_prefs
-
-        track_mlflow_cb = QCheckBox("Track this run with MLflow")
-        track_mlflow_cb.setChecked(load_mlflow_prefs()[0])
-        track_mlflow_cb.setToolTip(
-            "Log metrics and the trained model to MLflow (configure the store "
-            "under Settings → Experiment Tracking)."
-        )
-        layout.addWidget(track_mlflow_cb)
-
         button_box = QDialogButtonBox(
             QDialogButtonBox.StandardButton.Ok | QDialogButtonBox.StandardButton.Cancel
         )
@@ -309,29 +296,28 @@ class YOLOController(QObject):
         if dialog.exec() == QDialog.DialogCode.Accepted:
             epochs = int(epochs_input.text())
             imgsz = int(imgsz_input.text())
-            self.start_training(epochs, imgsz, track_mlflow=track_mlflow_cb.isChecked())
+            self.start_training(epochs, imgsz)
 
-    def _configure_mlflow(self, track_mlflow):
-        """Enable/disable Ultralytics' built-in MLflow callback for the next run.
+    def _configure_mlflow(self):
+        """Arm Ultralytics' built-in MLflow callback for the next run.
 
-        Sets the env vars its callback reads and toggles the ``mlflow`` setting.
-        Guarded on the optional dependency so a missing mlflow can never break
-        training. Both the setting **and** the env vars are reset on the disable
-        path, so a stale ``True`` / stale store from a prior run can never leak
-        into a later untracked run. The per-run toggle is a one-off override and
-        does NOT rewrite the persisted default (that's owned by the Settings →
-        Experiment Tracking dialog).
+        Tracking is always on, so this unconditionally sets the env vars the
+        callback reads and enables the ``mlflow`` Ultralytics setting. Only the
+        destination (URI/experiment) is configurable, via Settings → Experiment
+        Tracking.
         """
-        from ..app_settings import load_mlflow_prefs
-        from ..training.mlflow_tracker import (
-            mlflow_available,
-            resolve_tracking_uri,
-            to_mlflow_uri,
-        )
+        # Whole body is wrapped: configuring tracking must never abort a run
+        # (mirrors MLflowTracker.start()'s blanket crash-safety on the SAM path).
+        # A pathological override URI or an Ultralytics import hiccup degrades
+        # this run to untracked rather than killing it before it starts.
+        try:
+            from ..app_settings import load_mlflow_prefs
+            from ..training.mlflow_tracker import (
+                resolve_tracking_uri,
+                to_mlflow_uri,
+            )
 
-        _, _, experiment = load_mlflow_prefs()
-        enable = bool(track_mlflow) and mlflow_available()
-        if enable:
+            _, experiment = load_mlflow_prefs()
             store = resolve_tracking_uri(self.mw)
             # Ultralytics' callback feeds this straight to mlflow.set_tracking_uri,
             # which rejects a bare Windows path — hand it a proper file:// URI.
@@ -339,37 +325,29 @@ class YOLOController(QObject):
             # mlflow 3.x raises on the local file store unless this is set.
             os.environ.setdefault("MLFLOW_ALLOW_FILE_STORE", "true")
             os.environ["MLFLOW_EXPERIMENT_NAME"] = experiment
+            # NOTE: this persists to the *global* Ultralytics settings file on
+            # disk (~/.config/Ultralytics/settings.json), not just process
+            # state. Harmless here since we always want it True, but a manual
+            # `yolo` run elsewhere will also have mlflow enabled.
+            from ultralytics import settings as ultra_settings
+
+            ultra_settings.update({"mlflow": True})
             self.mw.training_dialog.update_info(
                 f"MLflow tracking → {store} (experiment '{experiment}')."
             )
-        else:
-            # Leave no armed env behind so "disabled" is truly inert.
-            os.environ.pop("MLFLOW_TRACKING_URI", None)
-            os.environ.pop("MLFLOW_EXPERIMENT_NAME", None)
-            if track_mlflow:
-                self.mw.training_dialog.update_info(
-                    "MLflow not installed — training without experiment tracking."
-                )
-        try:
-            from ultralytics import settings as ultra_settings
-
-            # NOTE: this persists to the *global* Ultralytics settings file on
-            # disk (~/.config/Ultralytics/settings.json), not just process
-            # state. We rewrite it on every run (True when tracking, False
-            # otherwise) so within this app it can't drift. The only residual
-            # leak is a hard crash *mid-run*, which would leave it True for an
-            # external `yolo` invocation until the next run here resets it —
-            # an accepted, documented limitation (see ADR-027).
-            ultra_settings.update({"mlflow": enable})
         except Exception as exc:
-            print(f"Could not toggle Ultralytics MLflow setting: {exc}")
+            print(f"Could not configure MLflow tracking: {exc}")
+            self.mw.training_dialog.update_info(
+                f"MLflow tracking could not be configured ({exc}); "
+                "training continues untracked."
+            )
 
-    def start_training(self, epochs, imgsz, track_mlflow=False):
+    def start_training(self, epochs, imgsz):
         if not hasattr(self.mw, "training_dialog"):
             self.mw.training_dialog = TrainingInfoDialog(self.mw)
         self.mw.training_dialog.show()
 
-        self._configure_mlflow(track_mlflow)
+        self._configure_mlflow()
 
         self.mw.yolo_trainer.progress_signal.connect(
             self.mw.training_dialog.update_info

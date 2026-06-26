@@ -19,9 +19,9 @@ FONT_PT_DEFAULT = 10
 _KEY_FONT_PT = "ui/font_pt"
 _KEY_DARK_MODE = "ui/dark_mode"
 
-# MLflow experiment tracking (issue #74). Optional, off by default — an
-# empty URI means "let the tracker resolve a default under <project>/mlruns".
-_KEY_MLFLOW_ENABLED = "tracking/mlflow_enabled"
+# MLflow experiment tracking (issue #74). Tracking is always on; only the
+# *destination* is configurable. An empty URI means "let the tracker resolve a
+# default under <project>/mlruns".
 _KEY_MLFLOW_URI = "tracking/mlflow_uri"
 _KEY_MLFLOW_EXPERIMENT = "tracking/experiment_name"
 MLFLOW_EXPERIMENT_DEFAULT = "image-annotator-training"
@@ -61,27 +61,26 @@ def save_ui_prefs(font_pt, dark_mode, settings=None) -> None:
     settings.setValue(_KEY_DARK_MODE, bool(dark_mode))
 
 
-def load_mlflow_prefs(settings=None) -> tuple[bool, str, str]:
-    """Return (enabled, tracking_uri, experiment_name).
+def load_mlflow_prefs(settings=None) -> tuple[str, str]:
+    """Return (tracking_uri, experiment_name).
 
-    Defaults: disabled, empty URI (the tracker resolves <project>/mlruns),
-    and the shared default experiment name.
+    Tracking itself is not optional — only its destination is. Defaults:
+    empty URI (the tracker resolves <project>/mlruns) and the shared default
+    experiment name.
     """
     if settings is None:
         settings = _settings()
-    enabled = settings.value(_KEY_MLFLOW_ENABLED, False, type=bool)
     uri = settings.value(_KEY_MLFLOW_URI, "", type=str) or ""
     experiment = (
         settings.value(_KEY_MLFLOW_EXPERIMENT, MLFLOW_EXPERIMENT_DEFAULT, type=str)
         or MLFLOW_EXPERIMENT_DEFAULT
     )
-    return enabled, uri, experiment
+    return uri, experiment
 
 
-def save_mlflow_prefs(enabled, uri, experiment, settings=None) -> None:
+def save_mlflow_prefs(uri, experiment, settings=None) -> None:
     if settings is None:
         settings = _settings()
-    settings.setValue(_KEY_MLFLOW_ENABLED, bool(enabled))
     settings.setValue(_KEY_MLFLOW_URI, (uri or "").strip())
     settings.setValue(
         _KEY_MLFLOW_EXPERIMENT, (experiment or "").strip() or MLFLOW_EXPERIMENT_DEFAULT

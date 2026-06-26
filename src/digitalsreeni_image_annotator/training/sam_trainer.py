@@ -277,17 +277,18 @@ class SAMFineTuner(QObject):
         are backpropagated together (one backward per image), so the optimizer
         steps every ``batch_size`` images.
 
-        ``tracker`` is an optional :class:`~..training.mlflow_tracker.MLflowTracker`.
+        ``tracker`` is a :class:`~..training.mlflow_tracker.MLflowTracker`.
         The MLflow run is opened, logged to and closed *here* (on the worker
-        thread) because MLflow runs are thread-bound. When ``tracker`` is None
-        a disabled tracker is used, so all tracking calls are safe no-ops.
+        thread) because MLflow runs are thread-bound. The GUI always supplies
+        one; when ``tracker`` is None (direct/programmatic calls, tests) a
+        ``_NullTracker`` no-op stands in so all tracking calls are safe.
         """
         import torch
         from ultralytics.utils import ops
 
-        from .mlflow_tracker import MLflowTracker
+        from .mlflow_tracker import _NullTracker
         if tracker is None:
-            tracker = MLflowTracker(enabled=False, tracking_uri=None)
+            tracker = _NullTracker()
         # Route tracker status lines through the thread-safe progress signal.
         tracker.set_log(self.progress_signal.emit)
 

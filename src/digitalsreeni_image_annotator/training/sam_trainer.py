@@ -412,8 +412,12 @@ class SAMFineTuner(QObject):
                 optimizer.step()
                 optimizer.zero_grad()
             avg = epoch_loss / max(1, seen)
-            self.progress_signal.emit(f"Epoch {epoch}/{epochs}  loss={avg:.4f}")
-            tracker.log_metrics({"loss": avg}, step=epoch)
+            # "train_loss" (not "loss"): this is the mean loss over the training
+            # instances only — there is no validation split yet (tracked as a
+            # follow-up). Naming it explicitly keeps the door open for a future
+            # "val_loss" without renaming history.
+            self.progress_signal.emit(f"Epoch {epoch}/{epochs}  train_loss={avg:.4f}")
+            tracker.log_metrics({"train_loss": avg}, step=epoch)
 
         result = self._save_and_verify(net, base_file, out_path)
         result.update(stopped=self.stop_training, instances=total_instances)

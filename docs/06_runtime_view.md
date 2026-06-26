@@ -66,6 +66,96 @@ User presses Enter
     └─> update() to show final annotation
 ```
 
+## Mask Selection & Deletion on the Canvas (issue #75)
+
+Active only when no drawing/SAM tool is selected (`ImageLabel._is_select_mode()`).
+Double-click still enters vertex-edit; Ctrl+drag still pans.
+
+```
+User clicks / drags on image (no tool active)
+    │
+    ├─> ImageLabel mouse press/move/release
+    │   ├─> click            → annotation_at(pos)        (smallest mask, seg or bbox)
+    │   ├─> click empty      → []                        (clears selection)
+    │   ├─> drag             → annotations_in_rect(rect) (rubber band, bounds-intersect)
+    │   └─> Shift            → toggle (click) / add (drag)
+    │
+    ├─> emit canvasSelectionChanged(annotations, mode)   mode = replace|add|toggle
+    │
+    └─> AnnotationController.apply_canvas_selection()
+        ├─> compute new set from highlighted_annotations + annotations per mode
+        ├─> image_label.highlighted_annotations = new    (blue selection overlay)
+        ├─> mirror onto annotation_list (blockSignals while selecting)
+        └─> enable Merge (≥2) / Change Class (≥1)
+
+User presses Delete (canvas focused)
+    │
+    ├─> ImageLabel.keyPressEvent → deleteSelectionRequested
+    └─> AnnotationController.delete_selected_annotations()  (record_history → remove → re-sort → autosave)
+```
+
+The canvas and the list share one selection (matched by dict value-equality), so
+Delete/Merge/Change-Class behave the same from either surface. See ADR-022.
+
+**Delete and merge are now frictionless and reversible.** Delete removes the
+selection immediately — no "Are you sure?" confirmation and no "N deleted" success
+dialog. Merge always replaces the originals with their union (no keep/delete prompt)
+and shows no success dialog. Both snapshot the pre-edit state first, so **Ctrl+Z**
+restores it; the removed confirmations are unnecessary now that undo is the net.
+See [ADR-026](09_architecture_decisions.md#adr-026-snapshot-based-undoredo-for-annotation-edits).
+
+## Shape Editing on the Canvas (issue #40)
+
+When exactly one shape is selected (idle mode), its 8 selection handles become
+draggable — direct manipulation, no separate mode, for **any** shape (polygon,
+mask, or imported box). The geometry mutates in place so the canvas updates live;
+release clamps it into the image and persists.
+
+```
+One shape selected → handles are grab targets (hover shows resize/move cursors)
+    │
+    ├─> press on a handle      → "resize"  (anchor = opposite corner/edge)
+    ├─> press inside the shape → "pending_move" → "move" once drag > 3px/zoom
+    │                            (plain click, no drag → falls through to select)
+    ├─> press outside          → normal rubber-band selection (#75)
+    │
+    ├─> drag → _update_bbox_drag(): mutate geometry in place
+    │          ├─ bbox kind → set [x,y,w,h]   (resize trims; move translates)
+    │          └─ seg  kind → scale vertices (resize) / translate (move);
+    │                         _sync_bbox_key keeps an imported bbox consistent
+    │
+    ├─> release → clamp into the image (ADR-024: move slides inside, resize clamps)
+    │             emit bboxEditCommitted
+    │             └─> AnnotationController.commit_bbox_edit()
+    │                 save → rebuild list (area refreshes) → re-mirror selection → autosave
+    │
+    └─> Esc during drag → restore original geometry, cancel
+```
+
+Polygon vertex edits (double-click) are likewise clamped into the image on Enter.
+See ADR-023 (shape editing) and ADR-024 (bounds enforcement).
+
+## Adjusting Mask Complexity — Detail % (issue #24)
+
+The Annotations table carries a per-row **Detail %** spinbox (100 = raw). Dialing
+it down thins a dense SAM/DINO mask; dialing back to 100 restores it exactly.
+
+```
+User changes a row's Detail % spinbox (1..100)
+    │
+    └─> AnnotationController.on_detail_pct_changed(row, pct)
+        ├─> resolve the live drawn object (value-equality, _live_annotation)
+        ├─> pct == 100 → segmentation = segmentation_raw (restore)
+        │   pct  < 100 → lazy-init segmentation_raw (first time);
+        │                segmentation = simplify_polygon(raw, pct)  [Douglas-Peucker]
+        ├─> recompute bbox key if present
+        ├─> refresh the row's Area cell + UserRole in place (no rebuild)
+        └─> image_label.update() → save_current_annotations() → auto_save()
+```
+
+The effective (simplified) `segmentation` renders and exports; `segmentation_raw`
++ `detail_pct` persist in the `.iap`. See ADR-025.
+
 ## SAM-Assisted Annotation (SAM-box / SAM-points)
 
 ```
@@ -369,4 +459,39 @@ User clicks "Export" > "YOLO v8/v11"
     │   └─> Show success message
     │
     └─> Return
+```
+
+## SAM Fine-Tuning (annotate → train → use)
+
+See [ADR-021](09_architecture_decisions.md#adr-021-sam-fine-tuning-via-a-custom-loop-over-the-ultralytics-sam2-module).
+
+```
+User: SAM Fine-Tune (beta) > Train on Current Project…
+    │
+    ├─> build_groups_from_project(all_annotations, image_paths, slices, image_slices)
+    │       polygons/bboxes → SampleGroup(image_loader, specs)   (masks rasterised lazily)
+    │
+    ├─> _gpu_gate(): resolve_torch_device(); if "cpu" → warn + let user back out
+    │
+    ├─> SAMTrainConfigDialog: base model, epochs, lr, batch, prompt (bbox/point),
+    │                          "also fine-tune image encoder?"
+    │
+    ├─> deactivate_sam_tools() + lock SAM inference UI (tools, selector, menu)
+    │       trainer loads its OWN SAM instance; locking avoids a 2nd model on the same CUDA context
+    │
+    └─> SAMTrainingThread → SAMFineTuner.train(...)
+            │  build predictor (one warmup predict), pin device, apply freeze policy
+            │  for each epoch / image / instance:
+            │     set_image → get_im_features  (no_grad when encoder frozen)
+            │     prompt_inference(bbox|point) under enable_grad → mask logits
+            │     focal+dice loss → backward → AdamW step (every batch_size instances)
+            │     progress_signal → TrainingInfoDialog (Stop supported)
+            │  save {"model": state_dict} as <name>_<base_token>.pt → reload-verify via SAM()
+            │
+            └─> training_finished: register in SAMUtils.custom_models,
+                add "★ <name>" to the SAM selector and select it
+                → SAM-box / SAM-points now use the fine-tuned model
+
+Offline variant: "Prepare SAM Dataset…" → export_sam_dataset (images/ + manifest.json),
+then "Train from Dataset Folder…" → build_groups_from_folder → same training path.
 ```

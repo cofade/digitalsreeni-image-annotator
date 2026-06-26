@@ -26,6 +26,36 @@ Annotations are stored in image coordinates (unzoomed, absolute pixels):
 - **Polygon**: Flattened list `[x1, y1, x2, y2, ...]`
 - **Rectangle**: COCO format `[x, y, width, height]`
 
+### Bounds Enforcement — Clamp vs Clip (issues #32 / #36)
+
+No commit path may persist coordinates outside the image rectangle (out-of-bounds
+masks silently poison training data). Four pure helpers live in `utils.py`, and
+the path picks **clamp** or **clip** by whether vertex correspondence must
+survive:
+
+| Helper | Semantics | Used by |
+|--------|-----------|---------|
+| `clamp_segmentation(seg, w, h)` | per-coordinate snap into `[0,w]×[0,h]`; **count-preserving** | polygon vertex-edit commit (Enter); polygon shape-edit commit (#40) |
+| `clamp_bbox(box, w, h)` | snap `[x,y,w,h]` inside (independent corners — trim); keep rectangular & ≥1px | box **resize** commit (#40) |
+| `fit_bbox_inside(box, w, h)` | translate `[x,y,w,h]` back inside, **size-preserving** | box / polygon **move** commit (#40) |
+| `clip_polygon_to_bounds(seg, w, h)` | shapely intersection (largest part; `buffer(0)` repairs self-intersections); **may split/drop** → `None` | Image Augmenter per transformed polygon (#36) |
+
+**Clamp** for live manual edits (a dragged polygon must not lose or reorder
+vertices). **Clip** for batch augmentation (a rotated/zoomed shape genuinely
+exits the frame and should be cut at the edge; a fully-outside polygon is dropped).
+*Drawn* shapes were already shapely-clipped in `finish_polygon` /
+`finish_rectangle`. See ADR-024.
+
+### Polygon simplification — Detail % (issue #24)
+
+SAM/DINO masks are dense (hundreds of vertices). The Annotations table's per-row
+**Detail %** spinbox (100 = raw) thins a mask via `utils.simplify_polygon`
+(Douglas-Peucker, `cv2.approxPolyDP`, binary-searched to a vertex budget). It is
+**reversible**: the dense original is lazy-captured into `segmentation_raw` on
+first simplify, and 100 % restores it exactly. The effective (possibly simplified)
+`segmentation` is what renders and exports; `segmentation_raw` + `detail_pct` ride
+along in `.iap`. See ADR-025.
+
 ### Pan + Zoom Reference Frames
 
 Two non-obvious gotchas live in `ImageLabel.mouseMoveEvent` /
@@ -404,6 +434,13 @@ def generate_slice_name(filename, t, z, c, s):
 |----------|--------|
 | Ctrl+Wheel | Zoom In/Out |
 | Ctrl+Drag | Pan |
+| Click (no tool) | Select mask under cursor |
+| Shift+Click (no tool) | Toggle mask in selection |
+| Drag (no tool) | Rubber-band box-select; Shift+Drag adds |
+| Drag handle (one shape selected) | Resize — scales a polygon, edits a box |
+| Drag inside (one shape selected) | Move the whole shape |
+| Delete | Delete selected mask(s) |
+| Double-click | Enter vertex-edit mode |
 | Esc | Cancel Current Annotation |
 | Enter | Finish/Accept Annotation |
 | Up/Down | Navigate Slices (multi-dimensional) |
@@ -639,3 +676,102 @@ paint commits into O(N). See ADR-018.
 
 See ADR-018 in `09_architecture_decisions.md` for the rationale and
 the full pattern.
+
+## Canvas Selection ↔ List Selection
+
+When no drawing tool is active (`ImageLabel._is_select_mode()`), the canvas
+behaves like a pointer: a single click selects the smallest mask under the
+cursor, a drag draws a rubber band that box-selects, and **Shift** toggles /
+adds. This is wired so there is **one** selection shared by the canvas overlay
+(`highlighted_annotations`, blue selection outline + handles) and the bottom-left
+annotation list — so
+`Delete` / `Merge` / `Change Class` (which read `annotation_list.selectedItems()`)
+work identically whether you selected on the image or in the list. See ADR-022.
+
+Flow: `ImageLabel` emits `canvasSelectionChanged(annotations, mode)` (mode =
+`replace` | `add` | `toggle`) → `AnnotationController.apply_canvas_selection`
+computes the new set, assigns `image_label.highlighted_annotations`, and mirrors
+it onto the list.
+
+Two non-obvious rules make this correct:
+
+- **Match by value-equality, never identity.** `image_label.annotations` is a
+  `deepcopy` of `all_annotations`, and PyQt round-trips dicts stored in a list
+  item's `UserRole` as *copies* — so the "same" annotation has different object
+  identity on the canvas, in `all_annotations`, and in a list item. Every
+  selection comparison therefore uses dict `==` (`a == b`), the same convention
+  as `select_annotation_in_list`, `delete_selected_annotations`, and the
+  `annotation in highlighted_annotations` test in `draw_annotations`. A
+  consequence: two value-equal duplicate masks select together — accepted, and
+  pre-existing.
+- **Block list signals while mirroring.** `apply_canvas_selection` wraps the
+  programmatic list selection in `annotation_list.blockSignals(True/False)`.
+  Without it, `setSelected` fires `itemSelectionChanged` →
+  `update_highlighted_annotations`, which would overwrite the freshly-computed
+  set with the list items' own objects (and clobber a `toggle`).
+
+**The Annotations panel is a `QTableWidget`** (ID | Class | Area | Detail %), not
+a `QListWidget` (issue #24, ADR-025). The bridge above is unchanged in spirit but
+the API maps to table calls: the annotation dict lives in **column 0's UserRole**;
+`count()/item(i)/selectedItems()` become `rowCount()/item(r, ANNOT_COL_ID)/row-
+deduped `selectedIndexes()`; and the mirror uses **`setRangeSelected` (additive)**,
+because `selectRow()` *replaces* the selection in `ExtendedSelection` mode and
+would drop all but the last row. `blockSignals` + value-equality are preserved.
+
+**Ctrl is reserved for pan.** Multi-select uses **Shift**, not Ctrl, because
+Ctrl+drag is the pan gesture (whose reference-frame handling is deliberately
+delicate — see [Pan + Zoom Reference Frames](#pan--zoom-reference-frames)).
+Leaving Ctrl untouched keeps that gesture intact.
+
+**Selection is drawn independent of class colour.** A selected mask is *not*
+recoloured (the first version turned it red, which vanished on a red-class mask,
+and red was the default first class colour). Instead `draw_annotations` keeps the
+class colour and, in a final pass on top of every mask, draws a dashed
+selection-blue **bounding-box marquee plus bright handle squares** at the 4
+corners + 4 edge midpoints (`_SELECTION_COLOR`, `_draw_selection_overlay`) —
+modelled on the sibling open-garden-planner app's CAD selection. The handles
+carry the visibility (a single thin dashed outline was too faint). For a **single
+selected shape** those same handle squares are resize grab targets (and the
+interior is a move target) — `_draw_selection_overlay` and the `_bbox_handle_at`
+hit-test share `_bbox_handle_points`, so the squares you see *are* the targets;
+see ADR-023. Resizing scales a polygon's vertices (a box edits `[x,y,w,h]`);
+reshaping a polygon vertex-by-vertex is still double-click vertex edit.
+This never collides with any class colour. Relatedly, the default class palette
+(`core/constants.py`) was reordered so red is last and the fill opacity lowered
+to keep the image legible — see the No Hardcoded Colors Rule for the broader
+"don't fight the theme/colours" theme.
+
+## Tool Activation — One Choke-Point, Mutually Exclusive
+
+All six canvas tools (Polygon, Rectangle, Paint, Eraser, SAM-box, SAM-points)
+go through a **single** activation method, `ImageAnnotator.activate_tool(name)`
+(`name=None` = selection mode). It is the only place `current_tool`, the SAM
+flags (`sam_box_active` / `sam_points_active`), and the toolbar button checks
+change, so they can never drift apart. `activate_tool`:
+
+1. checks exactly one tool button (block-signals around `setChecked`, so the
+   programmatic check doesn't re-enter `toggle_tool` / `toggle_sam_*`),
+2. clears SAM transient state unless entering that SAM tool (sets the flag if it is),
+3. calls `image_label.set_active_tool(name)` (deactivates the previous handler),
+4. updates cursor + `update_ui_for_current_tool`.
+
+`toggle_tool` (manual buttons) and `toggle_sam_box` / `toggle_sam_points` (SAM,
+in `SAMController`) all delegate here. Before this, the `QButtonGroup` was
+non-exclusive and the SAM toggles had their own ad-hoc state writes, so a SAM
+tool could be active **at the same time** as a manual tool (both buttons checked,
+both overlays live). The group stays `setExclusive(False)` because we need
+click-to-toggle-off; exclusivity is enforced by `activate_tool` unchecking the
+others. `_is_select_mode()` keys off `current_tool is None` + cleared SAM flags,
+so it is correct once those are always in sync.
+
+## Esc Returns to Selection Mode
+
+Selection mode (no tool, click-to-select masks) is the canvas default. Pressing
+**Esc** now both cancels any in-progress state **and** deactivates the active
+tool, so a single Esc always lands you back in selection mode (previously the
+tool stayed selected and you had to click its button off). `ImageLabel`'s Escape
+handler clears the gesture (SAM points/box, in-progress polygon/paint/eraser) and
+then emits `selectModeRequested` when a tool is active; the window's
+`_on_select_mode_requested` calls `activate_tool(None)`. Exceptions that stay put:
+polygon vertex-edit exit (already selection mode, uses `enableToolsRequested`),
+DINO temp-review reject, and cancelling a rubber-band drag.

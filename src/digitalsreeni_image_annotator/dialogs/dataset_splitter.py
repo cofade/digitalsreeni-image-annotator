@@ -66,6 +66,14 @@ class DatasetSplitterTool(QDialog):
         test_layout.addWidget(self.test_percent)
         layout.addLayout(test_layout)
 
+        # Keep the three percentages summing to 100 by auto-balancing the
+        # other two whenever one changes. _rebalancing guards against the
+        # programmatic setValue calls re-triggering these handlers.
+        self._rebalancing = False
+        self.train_percent.valueChanged.connect(self._on_train_changed)
+        self.val_percent.valueChanged.connect(self._on_val_changed)
+        self.test_percent.valueChanged.connect(self._on_test_changed)
+
         # Format selection
         self.format_selection_layout = QHBoxLayout()
         self.format_label = QLabel("Output Format:")
@@ -113,6 +121,103 @@ class DatasetSplitterTool(QDialog):
     def select_json_file(self):
         self.json_file, _ = QFileDialog.getOpenFileName(self, "Select COCO JSON File", "", "JSON Files (*.json)")
 
+    def _set_silently(self, spin, value):
+        """Set a spin box without re-entering the rebalance handlers."""
+        spin.blockSignals(True)
+        spin.setValue(max(0, min(100, value)))
+        spin.blockSignals(False)
+
+    def _on_train_changed(self, train):
+        # Changing train pushes the delta into val; if val can't absorb it
+        # all (would go negative), the remainder spills into test.
+        if self._rebalancing:
+            return
+        self._rebalancing = True
+        try:
+            train = max(0, min(100, train))
+            test = self.test_percent.value()
+            val = 100 - train - test
+            if val < 0:
+                val, test = 0, 100 - train
+            self._set_silently(self.train_percent, train)
+            self._set_silently(self.val_percent, val)
+            self._set_silently(self.test_percent, test)
+        finally:
+            self._rebalancing = False
+
+    def _on_val_changed(self, val):
+        # Changing val is absorbed by test first; once test is exhausted,
+        # the rest comes out of train.
+        if self._rebalancing:
+            return
+        self._rebalancing = True
+        try:
+            val = max(0, min(100, val))
+            train = self.train_percent.value()
+            test = 100 - train - val
+            if test < 0:
+                test, train = 0, 100 - val
+            self._set_silently(self.train_percent, train)
+            self._set_silently(self.val_percent, val)
+            self._set_silently(self.test_percent, test)
+        finally:
+            self._rebalancing = False
+
+    def _on_test_changed(self, test):
+        # Changing test is absorbed by val first; once val is exhausted,
+        # the rest comes out of train.
+        if self._rebalancing:
+            return
+        self._rebalancing = True
+        try:
+            test = max(0, min(100, test))
+            train = self.train_percent.value()
+            val = 100 - train - test
+            if val < 0:
+                val, train = 0, 100 - test
+            self._set_silently(self.train_percent, train)
+            self._set_silently(self.val_percent, val)
+            self._set_silently(self.test_percent, test)
+        finally:
+            self._rebalancing = False
+
+    @staticmethod
+    def compute_split_counts(n, train_pct, val_pct, test_pct):
+        """Return (train, val, test) image counts that sum to n.
+
+        A subset whose percentage is 0 gets exactly 0 images (this is the
+        fix for the off-by-one where test=0% still produced one image). The
+        flooring remainder is handed to the subsets with the largest
+        fractional part, but only to those with pct > 0. Assumes the three
+        percentages sum to 100 (validated in split_dataset).
+        """
+        if n <= 0:
+            return 0, 0, 0
+        counts = {
+            "train": int(n * train_pct / 100),
+            "val": int(n * val_pct / 100),
+            "test": int(n * test_pct / 100),
+        }
+        fracs = sorted(
+            (
+                (n * pct / 100 - counts[key], key)
+                for pct, key in (
+                    (train_pct, "train"),
+                    (val_pct, "val"),
+                    (test_pct, "test"),
+                )
+                if pct > 0
+            ),
+            reverse=True,
+        )
+        remainder = n - sum(counts.values())
+        i = 0
+        while remainder > 0 and fracs:
+            counts[fracs[i % len(fracs)][1]] += 1
+            remainder -= 1
+            i += 1
+        return counts["train"], counts["val"], counts["test"]
+
     def split_dataset(self):
         if not self.input_directory or not self.output_directory:
             QMessageBox.warning(self, "Error", "Please select input and output directories.")
@@ -142,12 +247,14 @@ class DatasetSplitterTool(QDialog):
         image_files = [f for f in os.listdir(self.input_directory) if f.lower().endswith(('.png', '.jpg', '.jpeg', '.tif', '.tiff'))]
         random.shuffle(image_files)
 
-        train_split = int(len(image_files) * self.train_percent.value() / 100)
-        val_split = int(len(image_files) * self.val_percent.value() / 100)
+        n = len(image_files)
+        train_n, val_n, test_n = self.compute_split_counts(
+            n, self.train_percent.value(), self.val_percent.value(),
+            self.test_percent.value())
 
-        train_images = image_files[:train_split]
-        val_images = image_files[train_split:train_split + val_split]
-        test_images = image_files[train_split + val_split:]
+        train_images = image_files[:train_n]
+        val_images = image_files[train_n:train_n + val_n]
+        test_images = image_files[train_n + val_n:train_n + val_n + test_n]
 
         for subset, images in [("train", train_images), 
                              ("val", val_images), 
@@ -185,12 +292,14 @@ class DatasetSplitterTool(QDialog):
 
         random.shuffle(image_files)
 
-        train_split = int(len(image_files) * self.train_percent.value() / 100)
-        val_split = int(len(image_files) * self.val_percent.value() / 100)
+        n = len(image_files)
+        train_n, val_n, test_n = self.compute_split_counts(
+            n, self.train_percent.value(), self.val_percent.value(),
+            self.test_percent.value())
 
-        train_images = image_files[:train_split]
-        val_images = image_files[train_split:train_split + val_split]
-        test_images = image_files[train_split + val_split:]
+        train_images = image_files[:train_n]
+        val_images = image_files[train_n:train_n + val_n]
+        test_images = image_files[train_n + val_n:train_n + val_n + test_n]
 
         # Create main directories
         os.makedirs(self.output_directory, exist_ok=True)

@@ -20,6 +20,15 @@ Carl Zeiss Image file format for multi-dimensional microscopy images. Contains m
 ### DINO / Grounding DINO
 "DINO" in this codebase refers specifically to **Grounding DINO** (IDEA-Research, 2023) — an open-set object detector that takes a natural-language phrase ("drone", "wing of an aircraft") and returns bounding boxes for matching regions of an image. Not to be confused with the self-supervised vision-only DINOv1/v2 backbones (similar name, different model). Models live under `models/grounding-dino-base/` and `models/grounding-dino-tiny/`.
 
+### Fine-Tuning (SAM)
+Continuing training of a pre-trained SAM 2 / 2.1 model on the user's own annotations so the assisted tools work better on their imagery. Because Ultralytics ships no SAM trainer, the app uses a custom loop over the Ultralytics `SAM2Model` (see [ADR-021](09_architecture_decisions.md#adr-021-sam-fine-tuning-via-a-custom-loop-over-the-ultralytics-sam2-module)). **Decoder-only** (default) trains just the mask decoder, freezing the image and prompt encoders — fast, low-VRAM, robust on modest data; optionally the image encoder is also unfrozen for heavily domain-shifted data.
+
+### Focal + Dice Loss
+The mask-supervision loss used during SAM fine-tuning: a focal term (down-weights easy pixels, emphasises hard ones) plus a dice term (region overlap), combined ≈20:1. Standard across the SAM fine-tuning literature.
+
+### Mask Decoder
+The lightweight SAM head that turns image embeddings + prompt embeddings into mask logits. The default fine-tuning target (`sam_mask_decoder`, ~4.2M params for the tiny model) since it is small and adapts quickly.
+
 ### Multi-dimensional Image
 An image with more than 2 dimensions, typically from microscopy. Dimensions include T (time), Z (depth), C (channel), S (scene), H (height), W (width).
 
@@ -46,6 +55,43 @@ Segment Anything Model - Meta's foundation model for image segmentation. Version
 
 ### SAM Point Mode
 Annotation mode where user clicks positive points (inside object) and negative points (outside object) to guide SAM segmentation.
+
+### Select Mode (Canvas)
+The idle canvas state (no drawing/SAM tool active, not editing, no temp review) in
+which clicks and drags select existing masks instead of drawing. Single-click
+selects, Shift toggles/adds, drag box-selects; double-click still enters vertex
+edit. See ADR-022.
+
+### Rubber-Band Selection
+A dashed selection rectangle dragged on the canvas in Select Mode; every annotation
+whose bounds intersect it is selected. Shift+drag adds to the current selection.
+
+### Shape Resize Handle
+One of the 8 blue squares (4 corners + 4 edge midpoints) drawn around a single
+selected annotation. They are direct-manipulation grab targets for **any** shape:
+dragging a handle resizes it (opposite side anchored — a box edits `[x,y,w,h]`, a
+polygon scales its vertices); dragging the interior moves the whole shape.
+Reshaping a polygon vertex-by-vertex is still double-click vertex edit. See
+ADR-023.
+
+### Detail % (Mask Complexity)
+A per-annotation control (1–100, **100 = raw/full precision**) in the Annotations
+table that reversibly thins a polygon's vertex count via Douglas-Peucker, for
+smaller label files. Lower keeps proportionally fewer vertices; 100 restores the
+raw polygon exactly. See ADR-025 and [[segmentation-raw]].
+
+### segmentation_raw
+The dense, full-precision polygon kept alongside a (possibly simplified)
+`segmentation` so **Detail %** simplification is reversible. Lazy-captured the
+first time a mask is thinned; absent on raw/imported annotations. Persists in
+`.iap` but is not exported (exports emit the effective `segmentation`).
+
+### Clamp vs Clip
+Two ways to keep annotation coordinates inside the image. **Clamp** snaps each
+coordinate into `[0,w]×[0,h]` and preserves the vertex count — used for live manual
+edits (polygon vertex drag, shape resize/move). **Clip** intersects the polygon
+with the image rectangle (shapely), which may split or drop it — used for augmented
+polygons. See ADR-024.
 
 ### Semantic Labels
 Single-channel image where each pixel value represents the class ID. Used for semantic segmentation training.
@@ -171,7 +217,7 @@ Functions under `ui/` that construct widget trees at startup. Each takes the `Im
 |-----------|-------------|
 | Tool Section | Buttons for Polygon, Rectangle, Paint Brush, Eraser, SAM tools |
 | Class List | QListWidget showing all classes with colors |
-| Annotation List | QListWidget showing all annotations for current image |
+| Annotation List | QTableWidget (ID \| Class \| Area \| Detail %) of all annotations for the current image |
 | Image Label | Central QLabel displaying image with zoom/pan |
 | Slice Slider | Navigate through multi-dimensional image slices |
 | Menu Bar | File, Edit, View, Tools, Help menus |

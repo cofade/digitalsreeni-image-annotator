@@ -38,6 +38,8 @@ from PyQt6.QtWidgets import (
     QTextEdit,
 )
 
+from ..core.constants import default_class_color
+
 
 class DINOReviewEventFilter(QObject):
     """Application-wide event filter that lets Enter / Escape accept or
@@ -501,6 +503,10 @@ class DINOController(QObject):
         current_image = self.mw.current_slice or self.mw.image_file_name
         is_current = image_name == current_image
 
+        # Snapshot under this image's own key (may differ from the on-screen
+        # image for batch commits) so the additions are undoable (ADR-026).
+        self.mw.annotation_controller.record_history(image_name)
+
         if is_current:
             target = self.mw.image_label.annotations
         else:
@@ -635,6 +641,8 @@ class DINOController(QObject):
             return
         image_name = self.mw.current_slice or self.mw.image_file_name
 
+        self.mw.annotation_controller.record_history(image_name)
+
         for ann in self.mw.image_label.temp_annotations:
             class_name = ann["category_name"]
             if class_name not in self.mw.class_mapping:
@@ -687,7 +695,7 @@ class DINOController(QObject):
         for temp_class_name, annotations in temp_annotations.items():
             if temp_class_name not in self.mw.image_label.class_colors:
                 color = QColor(
-                    Qt.GlobalColor(len(self.mw.image_label.class_colors) % 16 + 7)
+                    default_class_color(len(self.mw.image_label.class_colors))
                 )
                 self.mw.image_label.class_colors[temp_class_name] = color
             self.mw.image_label.annotations[temp_class_name] = annotations

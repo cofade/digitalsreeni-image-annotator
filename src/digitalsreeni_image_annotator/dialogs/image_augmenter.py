@@ -4,10 +4,12 @@ import cv2
 import numpy as np
 import json
 
-from PyQt6.QtWidgets import (QDialog, QVBoxLayout, QHBoxLayout, QPushButton, 
-                             QFileDialog, QLabel, QMessageBox, QSpinBox, 
+from PyQt6.QtWidgets import (QDialog, QVBoxLayout, QHBoxLayout, QPushButton,
+                             QFileDialog, QLabel, QMessageBox, QSpinBox,
                              QCheckBox, QDoubleSpinBox, QProgressBar, QApplication)
 from PyQt6.QtCore import Qt
+
+from ..utils import clip_polygon_to_bounds
 
 class ImageAugmenterDialog(QDialog):
     def __init__(self, parent=None):
@@ -254,6 +256,8 @@ class ImageAugmenterDialog(QDialog):
     
                         for ann in original_annotations:
                             augmented_ann = self.augment_annotation(ann, transform_params, augmented.shape[:2])
+                            if augmented_ann is None:
+                                continue  # polygon fell entirely outside the frame (#36)
                             augmented_ann["id"] = next_annotation_id
                             augmented_ann["image_id"] = next_image_id
                             augmented_coco_data["annotations"].append(augmented_ann)
@@ -446,11 +450,21 @@ class ImageAugmenterDialog(QDialog):
             shape = transform_params["shape"]
             augmented_ann["segmentation"] = [self.elastic_transform_polygon(annotation["segmentation"][0], dx, dy, shape)]
         
-        # Recalculate bbox and area for all transformation types
+        # Clip the transformed polygon to the (augmented) image rectangle so a
+        # rotation/zoom/flip can't write out-of-bounds coordinates into the COCO
+        # export and silently poison training data (upstream #36). image_shape
+        # is (height, width). A polygon left entirely outside the frame is
+        # dropped (return None) and skipped by the caller.
         if "segmentation" in augmented_ann and augmented_ann["segmentation"]:
+            clipped = clip_polygon_to_bounds(
+                augmented_ann["segmentation"][0], image_shape[1], image_shape[0]
+            )
+            if clipped is None:
+                return None
+            augmented_ann["segmentation"] = [clipped]
             augmented_ann["bbox"] = self.get_bbox_from_polygon(augmented_ann["segmentation"][0])
             augmented_ann["area"] = int(self.calculate_polygon_area(augmented_ann["segmentation"][0]))
-        
+
         return augmented_ann
 
 

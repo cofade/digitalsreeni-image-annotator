@@ -13,15 +13,23 @@ from PyQt6.QtWidgets import (
     QButtonGroup,
     QComboBox,
     QHBoxLayout,
+    QHeaderView,
     QLabel,
     QListWidget,
     QPushButton,
     QScrollArea,
     QSlider,
+    QTableWidget,
     QVBoxLayout,
     QWidget,
 )
 
+from ..core.constants import (
+    ANNOT_COL_AREA,
+    ANNOT_COL_CLASS,
+    ANNOT_COL_DETAIL,
+    ANNOT_COL_ID,
+)
 from ..dialogs.dino_phrase_editor import ClassThresholdTable, PhraseEditorPanel
 
 
@@ -146,11 +154,11 @@ def build_sidebar(window):
     dino_browse_layout.setContentsMargins(0, 0, 0, 0)
     window.lbl_dino_custom = QLabel("No path set")
     window.lbl_dino_custom.setWordWrap(True)
-    # Use palette(text) so the colour follows the active stylesheet
-    # (light or dark) — hardcoded #555 used to render unreadable on
-    # dark mode. See "No Hardcoded Colors Rule" in CLAUDE.md.
-    # No font-size here — the caption follows the global ui_font_pt rule.
-    window.lbl_dino_custom.setStyleSheet("color:palette(text);")
+    # No inline colour: `palette(text)` resolves to a near-white role in light
+    # mode (rendering this caption unreadable). The global QLabel stylesheet
+    # rule gives a theme-correct colour in both modes — leave the property out
+    # so the global sheet wins. See "No Hardcoded Colors Rule" in CLAUDE.md.
+    # No font-size here either — the caption follows the global ui_font_pt rule.
     btn_dino_browse = QPushButton("Browse")
     # No fixed width — a 60px cap clipped the caption at large UI font
     # sizes (low-vision zoom); sizeHint tracks the active font.
@@ -221,12 +229,29 @@ def build_sidebar(window):
     window.paint_brush_button.clicked.connect(window.toggle_tool)
     window.eraser_button.clicked.connect(window.toggle_tool)
 
-    # Annotations list subsection
+    # Annotations table subsection (issue #24). A 4-column table — ID | Class |
+    # Area | Detail % — mirroring the DINO ClassThresholdTable idiom (per-row
+    # spinbox via setCellWidget, stylesheet-only header). Column 0 holds the
+    # annotation dict in UserRole for the value-equality selection bridge.
     annotation_layout.addWidget(QLabel("Annotations"))
-    window.annotation_list = QListWidget()
-    window.annotation_list.setSelectionMode(
-        QAbstractItemView.SelectionMode.ExtendedSelection
+    table = QTableWidget(0, 4)
+    table.setHorizontalHeaderLabels(["ID", "Class", "Area", "Detail %"])
+    table.setSelectionBehavior(QAbstractItemView.SelectionBehavior.SelectRows)
+    table.setSelectionMode(QAbstractItemView.SelectionMode.ExtendedSelection)
+    table.setEditTriggers(QAbstractItemView.EditTrigger.NoEditTriggers)
+    table.verticalHeader().setVisible(False)
+    table.verticalHeader().setSectionResizeMode(
+        QHeaderView.ResizeMode.ResizeToContents
     )
+    header = table.horizontalHeader()
+    header.setSectionResizeMode(ANNOT_COL_CLASS, QHeaderView.ResizeMode.Stretch)
+    for col in (ANNOT_COL_ID, ANNOT_COL_AREA, ANNOT_COL_DETAIL):
+        header.setSectionResizeMode(col, QHeaderView.ResizeMode.ResizeToContents)
+    # Structural only — header colours come from the active stylesheet's
+    # QHeaderView::section rule (No Hardcoded Colors Rule), so it matches both
+    # themes. See dino_phrase_editor.ClassThresholdTable.
+    table.setStyleSheet("QHeaderView::section { font-weight: bold; padding: 2px; }")
+    window.annotation_list = table
     window.annotation_list.itemSelectionChanged.connect(
         window.update_highlighted_annotations
     )

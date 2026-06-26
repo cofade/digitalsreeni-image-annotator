@@ -65,15 +65,17 @@ class ClassThresholdTable(QTableWidget):
         self.verticalHeader().setSectionResizeMode(
             QHeaderView.ResizeMode.ResizeToContents)
         self.setMaximumHeight(160)
-        # No hardcoded background colors — pick them up from the active
-        # stylesheet so the table integrates with both light and dark
-        # mode. The earlier "background: #e0e0e0" produced a bright bar
-        # across the top of the panel in dark mode.
-        # No font-size either: the compact size is set (and scaled with
-        # ui_font_pt) by the appended overrides in ui/theme.py.
+        # Structural only — no colours here. Header background/text come from
+        # the active stylesheet's QHeaderView::section rule (light:
+        # default_stylesheet, dark: soft_dark_stylesheet), so the header
+        # matches both themes. The earlier inline "background: palette(mid);
+        # color: palette(text)" resolved against the *OS* palette (dark on
+        # some boxes) and painted the header black in the app's light mode —
+        # see the No Hardcoded Colors Rule. No font-size either: the compact
+        # size is set (and scaled with ui_font_pt) by the overrides in
+        # ui/theme.py.
         self.setStyleSheet(
-            "QHeaderView::section { font-weight: bold; "
-            "  padding: 2px; background-color: palette(mid); color: palette(text); }"
+            "QHeaderView::section { font-weight: bold; padding: 2px; }"
         )
 
     def _make_spin(self, value=0.25):

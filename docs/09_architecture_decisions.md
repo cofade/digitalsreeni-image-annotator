@@ -739,6 +739,378 @@ persistence mechanism in the app.
 
 ---
 
+## ADR-021: SAM Fine-Tuning via a Custom Loop over the Ultralytics SAM2 Module
+
+**Status**: Accepted
+
+**Context**: Users annotating domain-specific imagery (microscopy,
+medical, materials) get generic SAM masks that need heavy correction.
+We want to let them fine-tune SAM 2 / 2.1 on their own annotations and
+reuse the result in the existing SAM-box / SAM-points workflow
+(upstream issue bnsreenu#73).
+
+The obvious approach — mirror the YOLO trainer's `model.train(...)` —
+**does not work**: Ultralytics registers only a *predictor* for SAM's
+`segment` task (`SAM.task_map`), so `SAM(...).train()` raises
+`NotImplementedError` (verified on ultralytics 8.4.51).
+
+**Decision**: Fine-tune with a custom PyTorch loop that **reuses
+Ultralytics' own forward path**. `SAM(...).model` is a plain
+`SAM2Model` `nn.Module`; its `SAM2Predictor` exposes the forward in
+reusable pieces — `get_im_features` (image encoder) and
+`prompt_inference` / `_inference_features` (prompt encoder + mask
+decoder). These are *not* wrapped in `inference_mode` unless reached
+via the public `__call__`, so calling them directly under
+`torch.enable_grad()` yields differentiable mask logits. The engine
+(`training/sam_trainer.py`) adds focal+dice loss (≈20:1) + AdamW +
+backward. Default freeze policy: train only `sam_mask_decoder`
+(image + prompt encoders frozen); an optional flag also unfreezes the
+image encoder.
+
+Checkpoints are saved as `{"model": state_dict}` — the exact shape
+Ultralytics' `_load_checkpoint` reads (it rebuilds the architecture
+from the filename suffix and `load_state_dict`s the nested `model`
+key). Consequently a fine-tuned file **must keep its base token in the
+name** (e.g. `myrun_sam2_t.pt`), enforced by `make_custom_filename`;
+`build_sam` selects the architecture by `ckpt.endswith(token)`. Every
+save is round-trip-verified by reloading through `SAM(out_path)` and
+running one forward — failing loudly rather than producing a file that
+won't reload (cf. facebookresearch/sam2#337 key-mismatch failures).
+
+**Alternatives considered**:
+- *facebookresearch/sam2 training code* — rejected: heavy extra
+  dependency overlapping Ultralytics' bundled SAM2, and its checkpoints
+  need state-dict conversion to reload into our `SAM()` inference path.
+- *Export dataset + train externally* — rejected as the default (less
+  "integrated"), though `Prepare SAM Dataset` + folder training give a
+  similar offline path for users who want it.
+
+**Consequences**:
+- ✅ No new runtime dependency; fine-tuned models drop straight into
+  the existing SAM selector and inference path.
+- ✅ Exposure to Ultralytics internals is confined to a few
+  already-exercised predictor methods, guarded by
+  `test_sam_finetuning.py::TestUltralyticsAPI` (fails on an upgrade
+  that renames them).
+- ⚠️ The trainer loads its **own** `SAM` instance on its `QThread`
+  (it does not touch `SAMUtils._model`), and must **not** use
+  `sam_utils._run_sync` (its re-entry guard is GUI-thread-local). The
+  real hazard is two SAM models (resident inference + training) on one
+  CUDA context, so `SAMTrainController` locks the SAM inference UI
+  (tools + model selector + the fine-tune menu) for the duration —
+  re-enabled in `training_finished` on both the success and error
+  paths.
+- ⚠️ Decoder fine-tuning is realistically GPU-only; a CPU-only box is
+  hard-warned before a run (`resolve_torch_device`), and the device is
+  pinned so an incompatible GPU is honoured as CPU instead of crashing.
+- ⚠️ Encoder features are recomputed per epoch (bounded memory) rather
+  than cached across epochs; revisit if large datasets need the speedup.
+- ⚠️ **Loss must use the inference coordinate frame.** SAM2 letterboxes
+  the image (`LetterBox(1024, center=False)`, pad bottom/right) and
+  inference maps masks back with `ops.scale_masks(..., padding=False)`,
+  which crops that padding before upsampling. The training loss therefore
+  runs the decoder logits through the *same* `ops.scale_masks` before
+  comparing to the GT mask — a naive `F.interpolate` over the full
+  low-res mask bakes the padding into the target and the decoder learns
+  masks shifted by the pad (a downward shift on non-square images, caught
+  only during GUI testing because the e2e tests used square images). The
+  landscape regression test (`test_landscape_no_mask_shift`) and the
+  `ops.scale_masks` API-drift guard protect this.
+
+---
+
+## ADR-022: Canvas Mask Selection Unified with the Annotation List
+
+**Status**: Accepted (issue bnsreenu#75)
+
+**Context**: Selecting an existing annotation was only possible through the
+bottom-left annotation list (already `ExtendedSelection`) or by *double*-clicking
+a mask on the canvas — which immediately enters vertex-edit mode. There was no
+single-click select, no box/multi-select on the image, and canvas `Delete` worked
+only while in vertex-edit mode. Issue #75 asked for single-click select (without
+entering edit), rubber-band box select, modifier multi-select, and multi-delete —
+all directly on the canvas.
+
+**Decision**: Add an **idle-mode selection layer** to `ImageLabel` and route it
+through the *existing* annotation-list selection so delete/merge/change-class are
+reused unchanged:
+
+- **Idle activation.** Selection is live only in `_is_select_mode()` — no drawing
+  tool, not editing, not SAM, no temp review. Picking any tool restores drawing.
+  No new tool button (matches the user's "a single click should select" ask).
+- **Gestures.** Plain click selects the smallest mask under the cursor (covers
+  segmentation *and* bbox); click on empty space clears; drag draws a rubber band
+  and selects every annotation whose bounds intersect it; **Shift** makes a click
+  toggle and a drag additive. Double-click is unchanged (still vertex edit).
+- **Ctrl stays pan.** Ctrl+drag pan (with its carefully tuned reference frame) is
+  left untouched; multi-select uses Shift instead of Ctrl.
+- **One selection, two surfaces.** The canvas emits
+  `canvasSelectionChanged(annotations, mode)`; `AnnotationController.apply_canvas_selection`
+  computes the new set (replace/add/toggle), sets `image_label.highlighted_annotations`,
+  and **mirrors it onto the list** with signals blocked. `Delete` on the canvas
+  reuses `delete_selected_annotations` (which reads the list selection).
+
+**Consequences**:
+- Delete / Merge / Change-Class need no new logic — they already operate on the
+  list selection, which the canvas now drives.
+- ⚠️ Matching between the canvas and list relies on **dict value-equality**, like
+  the rest of the selection code (`image_label.annotations` is a deepcopy of
+  `all_annotations`, and PyQt round-trips `UserRole` dicts as copies, so identity
+  is never stable). Value-equal duplicate masks would select together — a
+  pre-existing, accepted limitation. See the crosscutting "Canvas selection ↔
+  list selection" section.
+- ⚠️ The list mirror must block `itemSelectionChanged` while selecting, or it
+  recurses back through `update_highlighted_annotations` and overwrites the set.
+
+**Selection is rendered class-colour-independent (amendment).** The first cut
+drew the selected mask in solid **red** — invisible on a red-class mask, and the
+default palette assigned red as the *first* class colour. Selection is now an
+overlay drawn in a final pass on top of every mask, independent of class colour
+and modelled on the sibling open-garden-planner app's CAD selection: a dashed
+selection-blue **bounding-box marquee** (`_SELECTION_COLOR = QColor(0, 120, 215,
+220)`) plus bright opaque-blue **handle squares** at the 4 corners + 4 edge
+midpoints, white-cased and fixed on-screen size (`_draw_selection_overlay` in
+`widgets/image_label.py`). The handles are what make selection unmistakable
+regardless of mask colour (a single thin dashed outline was too faint; an earlier
+marching-ants + marquee was too busy). The handles are now grab targets for
+resize/move of any selected shape (see ADR-023). The mask keeps its
+class colour; the rubber-band rect uses the same blue dashed style. Separately,
+the default class palette
+(`core/constants.py::DEFAULT_CLASS_COLORS` / `default_class_color`) was reordered
+so red is **last** (no fresh project starts on red) and muted, and the default
+fill opacity dropped to `0.2` (`DEFAULT_FILL_OPACITY`) so masks don't bury the
+image. Existing projects keep their persisted class colours.
+
+---
+
+## ADR-023: Direct-Manipulation Shape Editing on the Selection Handles
+
+**Status**: Accepted (issue bnsreenu#40)
+
+**Context**: `"bbox"`-keyed annotations (from COCO/YOLO import and detectors)
+were **not editable at all** — `start_polygon_edit` only matches `"segmentation"`,
+so double-click vertex edit skipped them. ADR-022 draws 8 handle squares around
+*any* selected annotation, but they were visual-only. A first cut wired them up
+for `"bbox"`-typed annotations only — but almost everything in this app is stored
+as `"segmentation"` (drawn rectangles, polygons, SAM/DINO masks all are), so the
+handles looked grabbable on every shape yet did nothing on the shapes users
+actually have. The handles must act on **any** selected shape.
+
+**Decision**: Wire the handles up as **direct-manipulation** resize/move of the
+single selected shape, modelled on the sibling open-garden-planner app's
+`ResizeHandle`. No new mode, no double-click — it works off the existing idle-mode
+selection:
+
+- **Single-shape, any kind.** Handles are draggable when exactly one annotation
+  with a bounding box is selected (`_single_selected_shape()`); a multi-select
+  leaves them visual. The press handler resolves to the live object
+  (`_live_annotation`) and records `kind` — `"seg"` (polygon/mask) or `"bbox"`
+  (box-only import) — which picks the geometry the handles drive
+  (`_begin_shape_edit`).
+- **Anchor-from-handle.** A corner/edge drag computes the new bounding box
+  (`_resize_bbox`: replaces the dragged coordinate, opposite side fixed,
+  normalised, ≥ 1px). A `"bbox"` shape sets `[x, y, w, h]` directly; a polygon
+  **scales every vertex** from the old box to the new one
+  (`_scale_segmentation`), so the outline resizes proportionally. Per-handle
+  resize cursors match OGP (`_BBOX_HANDLE_CURSORS`; `SizeAll` over the interior).
+- **Move is drag-gated.** A press inside the shape starts a *pending* move that
+  promotes only once the drag clears the `3px/zoom` threshold — so a plain click
+  still falls through to selection (preserving nested-mask click-through). Move
+  translates the box (`[x,y,w,h]`) or all vertices (`_translate_segmentation`).
+  The geometry mutates **in place** so the canvas + overlay redraw live.
+- **Bbox key stays in sync.** Imported annotations carry both `segmentation` and
+  `bbox`; editing the polygon recomputes the `bbox` key (`_sync_bbox_key`) so
+  export/training stay consistent. Drawn shapes have no bbox key and gain none.
+- **Commit / cancel.** Release clamps into the image (ADR-024 — move slides the
+  intact shape back inside, resize trims/clamps) and emits `bboxEditCommitted` →
+  `AnnotationController.commit_bbox_edit` (save + list rebuild + re-mirror the
+  selection). Escape restores the original geometry.
+
+**Consequences**:
+- The handles you see are exactly the grab targets — `_draw_selection_overlay`
+  and `_bbox_handle_at` share `_bbox_handle_points`, so visual and hit geometry
+  can't drift — and now they work on every selected shape, not just imported boxes.
+- Resizing a polygon **scales** it (handles drive the bounding box); reshaping a
+  polygon vertex-by-vertex is still double-click vertex edit. A `"bbox"` shape
+  stays rectangular by construction.
+- ⚠️ The shape-drag branches sit **before** the rubber-band branch in the
+  idle-mode mouse dispatch; both are gated on `_is_select_mode()` so a
+  tool/edit/SAM state still wins. (Internal names keep the `bbox_edit` /
+  `bboxEditCommitted` prefix — they denote editing via the bounding-box handles,
+  whatever the underlying geometry.)
+
+---
+
+## ADR-024: Bounds Enforcement — Clamp Manual Edits, Clip Augmented Data
+
+**Status**: Accepted (issues bnsreenu#32, bnsreenu#36)
+
+**Context**: Annotation coordinates could be persisted outside the image
+rectangle and silently poison training data. *Drawn* shapes were already safe
+(`finish_polygon`/`finish_rectangle` shapely-intersect with the image boundary),
+but two paths weren't: **manual edits** (polygon vertex drag; the new bbox drag)
+clamped nothing, and the **Image Augmenter** wrote rotated/zoomed/flipped polygons
+verbatim.
+
+**Decision**: Add three pure helpers in `utils.py` and apply the right one per
+path:
+
+- **Clamp manual edits** with `clamp_segmentation` / `clamp_bbox` — per-coordinate
+  snap into `[0, w] × [0, h]`. Per-coordinate (not a shapely cut) is deliberate:
+  it **preserves the vertex count and ordering**, so a polygon being dragged never
+  loses or splits points mid-edit. Applied in place at edit commit (polygon Enter;
+  bbox release), persisting through the existing save-by-reference path.
+- **Clip augmented data** with `clip_polygon_to_bounds` — a shapely intersection
+  (largest resulting polygon; `buffer(0)` first to repair self-intersections an
+  affine augmentation can introduce). Geometric trimming is correct here because an
+  augmented shape genuinely extends past the frame and should be cut at the edge,
+  not have stray vertices snapped onto it. A polygon left fully outside returns
+  `None` and is **dropped** by the augmenter loop.
+
+**Consequences**:
+- One vocabulary, two semantics: *clamp* (cheap, count-preserving, for live edits)
+  vs *clip* (exact, may drop/split, for batch augmentation). The choice is about
+  whether vertex correspondence must survive, not about which is "more correct".
+- ⚠️ `clip_polygon_to_bounds` can return fewer/more vertices than the input and may
+  return `None`; callers must handle the drop (the augmenter `continue`s).
+- The existing `finish_polygon`/`finish_rectangle` inline clips were left as-is to
+  keep the diff contained; they could later delegate to `clip_polygon_to_bounds`.
+
+---
+
+## ADR-025: Reversible Per-Annotation Polygon Simplification (Detail %)
+
+**Status**: Accepted (issue bnsreenu#24)
+
+**Context**: SAM/DINO masks are stored as raw dense polygons — `_mask_to_polygon`
+returns the flattened `cv2.findContours` boundary with no simplification, so a
+single mask can carry hundreds of vertices, bloating label files. Issue #24 asked
+for a "mask complexity — less ↔ more points" control. The point add/remove half of
+#24 was already covered by the SAM-points tool; this is the remaining piece.
+
+**Decision**: A **per-annotation, reversible Detail %** control, surfaced as a
+column in the Annotations panel:
+
+- **Detail % (1–100, 100 = raw).** `utils.simplify_polygon(raw, pct)` thins via
+  Douglas-Peucker (`cv2.approxPolyDP`), binary-searching the epsilon for the
+  richest polygon whose vertex count is still ≤ `round(raw_count × pct/100)`.
+- **Reversible via a preserved raw.** The dense original is **lazy-captured** into
+  `segmentation_raw` the first time a mask is thinned (nothing simplifies it
+  before that, so the live `segmentation` *is* the raw at capture). 100 % copies
+  `segmentation_raw` back into `segmentation` exactly. No edits to the SAM/DINO/
+  manual accept paths were needed.
+- **Two new annotation keys** (`segmentation_raw`, `detail_pct`) ride along: they
+  round-trip through `.iap` for free (project save does `ann.copy()` →
+  `convert_to_serializable` → JSON), and exports read only the effective
+  `segmentation`, so the *simplified* polygon is what's exported. Imported/old
+  annotations have neither key → handled by lazy-init.
+- **Live + in place.** The change handler resolves the selected row to the live
+  drawn object by value-equality (`image_label._live_annotation`, reused from
+  #40), mutates `segmentation` in place, refreshes the Area cell + the row's
+  UserRole, redraws, and saves. The `bbox` key (if present) is recomputed.
+
+**The Annotations panel became a `QTableWidget`** (ID | Class | Area | Detail %),
+mirroring `dialogs/dino_phrase_editor.ClassThresholdTable` (per-row spinbox via
+`setCellWidget`, `SelectRows`, `NoEditTriggers`, stylesheet-only header). This
+re-homes the #75 canvas↔list selection bridge onto a table:
+
+- The annotation dict lives in **column 0's UserRole** (the value-equality marker).
+- `count()/item(i)/selectedItems()` → `rowCount()/item(r, 0)/row-deduped
+  selectedIndexes()`; the mirror uses **`setRangeSelected` (additive)** because
+  `selectRow()` *replaces* the selection in ExtendedSelection mode and would drop
+  all but the last row. `blockSignals` + value-equality are preserved verbatim.
+
+**Consequences**:
+- Closing #24 with a small, contained change: the feature is the table UI + one
+  controller handler + one pure util; the accept paths are untouched.
+- ✅ Fully reversible per annotation: Detail %=100 restores `segmentation_raw`
+  exactly. **Exception:** reshaping a polygon with the #40 handles invalidates the
+  baseline — `_clamp_edited_shape` drops `segmentation_raw` and resets
+  `detail_pct=100`, so the *edited* geometry becomes the new raw (the old dense
+  outline no longer describes the reshaped polygon, and a later 100 % must not
+  silently revert the edit). The detail handler also re-points
+  `highlighted_annotations` at the mutated object so the overlay + a subsequent
+  handle drag stay coherent.
+- ⚠️ The spinbox `valueChanged` is connected **after** the initial `setValue`, so
+  building/rebuilding the table never fires the simplification handler.
+- ⚠️ The dead `core/annotation_utils.py` still references the old QListWidget API
+  but is unimported (confirmed) — left as-is to keep the diff contained.
+
+---
+
+## ADR-026: Snapshot-Based Undo/Redo for Annotation Edits
+
+**Status**: Accepted
+
+**Context**: Annotation edits (create, delete, merge, move/scale, change class,
+detail %, paint, eraser, SAM/DINO accept) were all irreversible. The only safety
+net was a confirmation dialog on delete and a keep/delete prompt on merge — both
+of which broke flow (delete also popped a success dialog). The justification for
+those dialogs was "you can't undo," so removing them required a real undo/redo.
+
+The mutation surface is wide and subtle: every operation writes both
+`image_label.annotations` (the live working copy) and `all_annotations[key]`, and
+the two share inner list objects via the shallow-copy save. Annotations are
+matched by **value-equality**, not identity (ADR-022/025), numbers are reassigned
+on most edits (`renumber_annotations`), and Detail % carries a lazily-captured
+`segmentation_raw` (ADR-025). A fine-grained command-per-operation design would
+have to reproduce every one of these invariants in its undo path.
+
+**Decision**: **Snapshot the whole per-image annotation dict** before each edit;
+undo restores a snapshot wholesale. Restoring the entire dict sidesteps all the
+value-equality / renumbering / selection-rehoming / `segmentation_raw`
+subtleties — there is nothing to reconcile, only a deep copy to install.
+
+- `controllers/annotation_history.AnnotationHistory` holds **per-image-key**
+  undo/redo stacks (key = `current_slice or image_file_name`), so Ctrl+Z acts on
+  the image on screen and never reaches an image you can't see. Stacks are
+  retained across navigation and cleared on clear-all / new-project / project
+  open. Depth is capped (50) and the symmetric model needs no separate baseline:
+  `record(before)` pushes the pre-edit state, `undo(current)` swaps current onto
+  redo and returns the popped before-state, `redo(current)` is the mirror.
+- **One choke-point**, `AnnotationController.record_history()`, called *before*
+  each synchronous mutation (finish polygon/rectangle, delete, merge, change
+  class, eraser replace, SAM accept, DINO accept). It is **not** hooked onto
+  `save_current_annotations()` — that also fires on navigation and runs *after*
+  mutation, so it can neither be filtered to real edits nor capture a clean
+  "before."
+- **Deferred gestures** (bbox move/scale, paint stroke, polygon vertex edit)
+  notify the controller only *after* mutating in place. They capture the baseline
+  at gesture **start** via a new `ImageLabel.editBaselineRequested` signal →
+  `capture_edit_baseline`, and push it at commit (`commit_edit_baseline`, called
+  from `commit_bbox_edit`, `commit_polygon_edit`, and the `annotationsBatchSaved`
+  handler). A **deep-equality dedup** in `record()` drops aborted gestures (Esc'd
+  drag, empty stroke) so they leave no entry.
+  - *Vertex edit also got a save-discipline fix.* Its Enter-commit historically
+    only refreshed the list and relied on a later save to persist (and **Esc did
+    not revert** the in-place drags). `commit_polygon_edit` now calls
+    `save_current_annotations`, and Esc restores the segmentation from a snapshot
+    taken at edit-mode entry — so the commit is both persisted and undoable, and
+    Esc truly cancels.
+- **Detail-% coalescing.** The spinbox fires `valueChanged` per step; a whole
+  drag on one annotation records once (token = key + number + class), so one
+  Ctrl+Z reverts the entire drag including `detail_pct` and `segmentation_raw`.
+- **Shortcuts** are `QShortcut`s with `ApplicationShortcut` context (Ctrl+Z; Ctrl+Y
+  and Ctrl+Shift+Z for redo) — the annotation-list `QTableWidget` would otherwise
+  consume Ctrl+Z. Undo/redo are no-ops during project load, while a modal is open,
+  while a text field has focus, or while a draw/edit gesture is in flight
+  (`_undo_blocked`). Undo persists via `auto_save` — the net must survive reopen.
+
+**Delete and merge dialogs removed.** With undo as the net, `delete_selected_annotations`
+drops both the confirmation and the success dialog; `merge_annotations` drops the
+keep/delete prompt (originals are always replaced by the union) and the success
+dialog. Validation warnings stay.
+
+**Consequences**:
+- ✅ Every annotation edit is reversible; destructive ops are instant and flow-friendly.
+- ✅ Robust against the value-equality/renumber/raw subtleties because it restores
+  whole dicts rather than replaying operations.
+- ⚠️ Memory is a bounded deep copy per edit per image (annotations are small;
+  depth-capped at 50). ⚠️ Undo clears the current selection rather than trying to
+  re-resolve it by value across a list rebuild — the safe, predictable choice.
+
+---
+
 ## Decisions Under Consideration
 
 ### Consider pytest-qt for Utility Testing

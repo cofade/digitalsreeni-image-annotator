@@ -156,6 +156,23 @@ The earlier subprocess approach is documented as
 [ADR-011](09_architecture_decisions.md#adr-011-run-torch-based-workers-in-isolated-subprocesses)
 (Superseded).
 
+### SAM Fine-Tuning Subsystem (`training/`)
+
+Lets users fine-tune SAM 2 / 2.1 on their own annotations, since
+Ultralytics ships no SAM trainer (ADR-021). Distinct from `inference/`
+because it is *training*, not inference.
+
+| Module | Responsibility |
+|--------|----------------|
+| `training/sam_trainer.py` | `SAMFineTuner` — custom decoder (optionally encoder) fine-tuning loop reusing `SAM2Predictor.get_im_features` / `prompt_inference` under autograd, focal+dice loss, AdamW, checkpoint save+reload-verify. Also geometry helpers (`polygon_to_mask`, `mask_to_xyxy`, `mask_to_point`), `make_custom_filename`, `list_custom_models`, and the `SampleGroup` lazy-rasterising dataset item. |
+| `training/sam_dataset.py` | `build_groups_from_project` (live `all_annotations`) and `build_groups_from_folder` (prepared dataset) → `list[SampleGroup]`, mirroring `export_yolo_v5plus` image resolution. |
+| `io/export_formats.py::export_sam_dataset` | Writes `images/` + `manifest.json` (authoritative bbox/segmentation specs) for an inspectable, re-trainable on-disk dataset. |
+
+Fine-tuned checkpoints save as `{"model": state_dict}` and reload
+through the unchanged `SAM(path)` inference path; `SAMUtils` gains a
+`custom_models` registry so they appear in the SAM selector alongside
+the eight built-ins.
+
 ### DINO Subsystem (Grounding DINO + SAM pipeline)
 
 LLM-assisted detection: the user gives free-form text phrases per class,
@@ -196,7 +213,7 @@ export time — see [Cross-cutting Concepts](08_crosscutting_concepts.md)).
 
 ## Level 3: Controllers
 
-Seven `QObject` controllers plus an `io_controller` helper module
+Eight `QObject` controllers plus an `io_controller` helper module
 carve `ImageAnnotator` into single-responsibility owners that the
 orchestrator delegates to. Each `QObject` controller holds `self.mw
 = main_window` and owns one slice of behaviour; the
@@ -215,6 +232,7 @@ the controller graph.
 | `SAMController` | SAM box/points tool lifecycle, debounce timer, `_sam_inference_in_flight` re-entrancy guard (ADR-013), model picker. |
 | `DINOController` | Single + batch detection, batch review navigation, temp-annotation accept/reject, custom-model browse, `DINOReviewEventFilter` ownership (ADR-015). |
 | `YOLOController` | Training menu, `TrainingThread`, prediction dialog, result processing. |
+| `SAMTrainController` | SAM fine-tuning menu, GPU gate, `SAMTrainingThread`, config dialog, registers fine-tuned checkpoints into the SAM selector (ADR-021). |
 | `io_controller` *(module-level functions, not a class)* | Thin UI wrappers around the pure `io/export_formats.py` and `io/import_formats.py` modules. |
 
 Communication: `ImageLabel` does not import controllers directly —

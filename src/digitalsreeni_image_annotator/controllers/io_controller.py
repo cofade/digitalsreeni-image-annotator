@@ -11,9 +11,10 @@ inside `annotator_window.py` delegate trivially.
 
 import os
 
-from PyQt6.QtCore import Qt
 from PyQt6.QtGui import QColor
 from PyQt6.QtWidgets import QFileDialog, QMessageBox
+
+from ..core.constants import default_class_color
 
 from ..io.export_formats import (
     export_coco_json,
@@ -157,7 +158,7 @@ def import_annotations(mw):
                 new_id = len(mw.class_mapping) + 1
                 mw.class_mapping[category_name] = new_id
                 mw.image_label.class_colors[category_name] = QColor(
-                    Qt.GlobalColor(new_id % 16 + 7)
+                    default_class_color(new_id - 1)
                 )
 
     print("Updating UI")

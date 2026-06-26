@@ -326,6 +326,10 @@ class ImageController(QObject):
 
         self.mw.save_current_annotations()
         self.mw.image_label.clear_temp_sam_prediction()
+        # Exit vertex-edit mode (as switch_image does) so editing_polygon /
+        # _editing_polygon_orig don't linger onto the next slice (ADR-026).
+        self.mw.image_label.exit_editing_mode()
+        self.mw.annotation_controller.reset_coalesce()
 
         slice_name = item.text()
         for name, qimage in self.mw.slices:
@@ -363,6 +367,7 @@ class ImageController(QObject):
         self.mw.save_current_annotations()
         self.mw.image_label.clear_temp_sam_prediction()
         self.mw.image_label.exit_editing_mode()
+        self.mw.annotation_controller.reset_coalesce()
 
         file_name = item.text()
         print(f"\nSwitching to image: {file_name}")
@@ -895,7 +900,7 @@ class ImageController(QObject):
                 self.mw.image_file_name = ""
                 self.mw.current_slice = None
                 self.mw.image_label.clear()
-                self.mw.annotation_list.clear()
+                self.mw.annotation_list.setRowCount(0)
 
             if self.mw.image_list.count() > 0:
                 next_item = self.mw.image_list.item(0)
@@ -906,7 +911,7 @@ class ImageController(QObject):
                 self.mw.image_file_name = ""
                 self.mw.current_slice = None
                 self.mw.image_label.clear()
-                self.mw.annotation_list.clear()
+                self.mw.annotation_list.setRowCount(0)
                 self.mw.slice_list.clear()
 
             self.mw.update_ui()
@@ -947,7 +952,7 @@ class ImageController(QObject):
                     self.mw.image_file_name = ""
                     self.mw.current_slice = None
                     self.mw.image_label.clear()
-                    self.mw.annotation_list.clear()
+                    self.mw.annotation_list.setRowCount(0)
 
                 if self.mw.image_list.count() > 0:
                     next_item = self.mw.image_list.item(0)
@@ -958,7 +963,7 @@ class ImageController(QObject):
                     self.mw.image_file_name = ""
                     self.mw.current_slice = None
                     self.mw.image_label.clear()
-                    self.mw.annotation_list.clear()
+                    self.mw.annotation_list.setRowCount(0)
                     self.mw.slice_list.clear()
 
                 self.mw.update_ui()

@@ -47,14 +47,17 @@ src/digitalsreeni_image_annotator/
 ├── __init__.py                   # Public API re-exports
 │
 ├── core/                         # constants, annotation_utils, image_utils
-├── controllers/                  # 7 controllers (project, image, sam, dino,
-│                                 #   yolo, annotation, class) + io_controller
+├── controllers/                  # 8 controllers (project, image, sam,
+│                                 #   sam_train, dino, yolo, annotation,
+│                                 #   class) + io_controller
 ├── widgets/
 │   ├── image_label.py            # ImageLabel canvas widget (dispatcher)
 │   ├── canvas_context.py         # CanvasContext read accessor (ADR-018)
 │   └── tools/                    # Per-tool handlers (ADR-019): rectangle,
 │                                 #   polygon, paint, eraser
 ├── inference/                    # sam_utils.py, dino_utils.py
+├── training/                     # SAM fine-tuning (ADR-021): sam_trainer.py
+│                                 #   (SAMFineTuner), sam_dataset.py
 ├── io/                           # export_formats.py, import_formats.py
 ├── ui/                           # menu_bar, sidebar, shortcuts, theme, stylesheets
 └── dialogs/                      # Standalone tool dialogs (statistics,
@@ -76,8 +79,10 @@ src/digitalsreeni_image_annotator/
 | `SAMController` | controllers/sam_controller.py | SAM model picker, debounce, in-flight guard (ADR-013) |
 | `DINOController` | controllers/dino_controller.py | DINO single/batch detection, batch review, temp-class workflow |
 | `YOLOController` | controllers/yolo_controller.py | YOLO training menu + prediction wiring |
-| `SAMUtils` | inference/sam_utils.py | Load SAM models, run inference |
+| `SAMUtils` | inference/sam_utils.py | Load SAM models (built-in + fine-tuned), run inference |
 | `DINOUtils` | inference/dino_utils.py | Grounding-DINO model load + inference |
+| `SAMFineTuner` | training/sam_trainer.py | Fine-tune SAM 2 decoder/encoder via custom loop over Ultralytics SAM2Model (ADR-021) |
+| `SAMTrainController` | controllers/sam_train_controller.py | SAM fine-tune menu, GPU gate, training thread, selector registration |
 
 See [Building Block View](docs/05_building_block_view.md) for detailed class documentation.
 
@@ -169,6 +174,13 @@ See [Runtime View](docs/06_runtime_view.md#multi-dimensional-image-loading) for 
 | GPU model unload | `model.cpu()` → `gc.collect()` → `torch.cuda.empty_cache()` + `ipc_collect()` + `synchronize()` — full reclaim requires app restart due to per-process CUDA context | Setting refs to None alone leaves circular refs pinned and shows zero Task Manager drop. See [Releasing Model GPU Memory](docs/08_crosscutting_concepts.md#releasing-model-gpu-memory). |
 | Export image-path lookup | Exact-key match first, substring fallback only | `"bee.jpg" in "honeybee.jpg"` is True — substring-only matching writes the wrong file. See [Export Format Filename Matching](docs/08_crosscutting_concepts.md#export-format-filename-matching). |
 | F2 / global shortcuts | Use `QShortcut` with `Qt.ShortcutContext.ApplicationShortcut`, not `keyPressEvent` | `QTableWidget` consumes F2 for in-cell edit before it bubbles up. |
+| Canvas ↔ list selection sync | Canvas selection (idle-mode click/Shift/rubber-band) drives the annotation list via `apply_canvas_selection`; mirror the list with `blockSignals(True/False)` and match annotations by **value-equality**, never identity | PyQt round-trips `UserRole` dicts as copies and `image_label.annotations` is a deepcopy, so identity is never stable; un-blocked `setSelected` recurses through `update_highlighted_annotations`. Multi-select uses **Shift** (Ctrl stays pan). See [ADR-022](docs/09_architecture_decisions.md#adr-022-canvas-mask-selection-unified-with-the-annotation-list). |
+| Selection rendering | Don't recolour a selected mask. Keep its class colour; draw a class-colour-independent overlay (dashed `_SELECTION_COLOR` blue bounding box + bright handle squares at corners/edge-midpoints, OGP-style) in a final pass — `_draw_selection_overlay`. For a single selected shape those handles are draggable (resize/move, any shape). Default class colours come from `core/constants.py::default_class_color` (red last, muted) | Red selection was invisible on a red-class mask; a thin dashed outline alone was too faint; the handles carry the visibility. See ADR-022 amendment. |
+| Shape editing (#40) | Direct manipulation on the selection handles for **any** single selected shape (`_single_selected_shape()` — most shapes are `"segmentation"`, not `"bbox"`; gating on a bbox key made it unreachable). `_begin_shape_edit` records `kind`: a `"seg"` polygon **scales** its vertices (`_scale_segmentation`) / translates them; a `"bbox"` edits `[x,y,w,h]`. `_draw_selection_overlay` + `_bbox_handle_at` share `_bbox_handle_points` (visual == grab); resize anchors the opposite side (`_resize_bbox`); interior drag moves, **drag-gated**. `_sync_bbox_key` keeps an imported bbox consistent. Clamp + `bboxEditCommitted` → `commit_bbox_edit` on release; Esc reverts | Handles drawn since #75 were visual-only; dispatch sits before the rubber-band branch but stays gated on `_is_select_mode()`. Names keep the `bbox_edit` prefix = "edit via the bounding-box handles". See [ADR-023](docs/09_architecture_decisions.md). |
+| Bounds enforcement (#32/#36) | No commit may persist coords outside the image. **Clamp** manual edits (`clamp_segmentation`/`clamp_bbox`, per-coordinate, count-preserving) at edit commit; **clip** augmented polygons (`clip_polygon_to_bounds`, shapely intersection, may drop → `None`, augmenter must `continue`). Drawn shapes already clip in `finish_polygon`/`finish_rectangle` | Clamp keeps vertex correspondence mid-edit; clip is geometrically correct for batch augmentation. See [ADR-024](docs/09_architecture_decisions.md). |
+| Annotations table + Detail % (#24) | The Annotations panel is a **`QTableWidget`** (ID \| Class \| Area \| Detail %), not a list — col 0's UserRole holds the annotation (the #75 value-equality marker). Selection-mirror uses **`setRangeSelected`** (additive); `selectRow()` replaces in `ExtendedSelection`. Per-row Detail % spinbox → `on_detail_pct_changed` resolves the live obj (`_live_annotation`), simplifies from a lazy-captured `segmentation_raw` (`simplify_polygon`, 100=raw), refreshes Area+UserRole in place, saves. Connect `valueChanged` **after** the initial `setValue` so building the table doesn't fire it | Re-homing the selection bridge onto a table is the risk; reversibility needs the raw preserved. See [ADR-025](docs/09_architecture_decisions.md). |
+| Undo/redo (ADR-026) | **Snapshot** the whole per-image annotation dict, don't replay commands — restoring a deep copy sidesteps value-equality/renumber/`segmentation_raw`. `AnnotationController.record_history()` is the choke-point, called **before** each synchronous mutation (finish poly/rect, delete, merge, change-class, eraser, SAM/DINO accept); **don't** hook `save_current_annotations` (also fires on navigation, runs after mutation). Deferred gestures (bbox drag, paint, **polygon vertex edit**) capture the baseline at **start** via `editBaselineRequested` and push at commit (`commit_edit_baseline` via `commit_bbox_edit`/`commit_polygon_edit`/batch-saved); a deep-equal dedup in `AnnotationHistory.record` drops aborted ones. Vertex edit also gained a save-discipline fix — `commit_polygon_edit` now calls `save_current_annotations` and Esc reverts the in-place drags. Detail-% drags coalesce to one entry. Ctrl+Z/Y are `ApplicationShortcut`s; `_undo_blocked` no-ops during load/modal/text-focus/in-flight gesture | Delete/merge confirmation+success dialogs were **removed** (undo is the net); merge always deletes originals. See [ADR-026](docs/09_architecture_decisions.md#adr-026-snapshot-based-undoredo-for-annotation-edits). |
+| Tool activation + Esc | **All six tools (manual + SAM) funnel through `ImageAnnotator.activate_tool(name)`** — the only place `current_tool`, `sam_*_active`, and button checks change, so they can't drift and a SAM tool can't be active with a manual one. Keep `tool_group` non-exclusive (need click-to-toggle-off); `activate_tool` unchecks the others (block-signals around `setChecked`). Esc cancels the in-progress shape **and** emits `selectModeRequested` → `activate_tool(None)`, so Esc always returns to selection mode | SAM toggles used to write state ad-hoc; the group was non-exclusive. See [Tool Activation](docs/08_crosscutting_concepts.md#tool-activation--one-choke-point-mutually-exclusive). |
 
 ## Development Workflow
 
@@ -237,6 +249,7 @@ See [Risks and Technical Debt](docs/11_risks_and_technical_debt.md) for full lis
 | Global | Action |
 |--------|--------|
 | Ctrl+N/O/S | New/Open/Save Project |
+| Ctrl+Z / Ctrl+Y (or Ctrl+Shift+Z) | Undo / redo annotation edit (ADR-026) |
 | Ctrl+Shift+= / Ctrl+Shift+- | UI font bigger/smaller (8-24pt, persisted via QSettings) |
 | Ctrl+Shift+0 | Reset UI font size |
 | F1 | Help |
@@ -245,8 +258,13 @@ See [Risks and Technical Debt](docs/11_risks_and_technical_debt.md) for full lis
 |--------|--------|
 | Ctrl+Wheel | Zoom |
 | Ctrl+Drag | Pan |
+| Click / Shift+Click (no tool) | Select / toggle mask |
+| Drag / Shift+Drag (no tool) | Rubber-band select / add |
+| Drag handle / inside (one shape selected) | Resize (scale) / move the shape |
+| Double-click | Vertex-edit mode |
+| Delete | Delete selected mask(s) — instant, undoable (no confirm dialog) |
 | Enter | Finish/Accept |
-| Esc | Cancel |
+| Esc | Cancel in-progress shape **and** return to selection mode (deactivates the tool) |
 | Up/Down | Navigate slices |
 | -/= | Brush size |
 

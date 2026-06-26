@@ -45,6 +45,27 @@ QListWidget::item:selected {
 }
 
 
+QTableWidget {
+    background-color: #FFFFFF;
+    color: #333333;
+    gridline-color: #CCCCCC;
+}
+
+
+QTableWidget::item:selected {
+    background-color: #CCE5FF;
+    color: #333333;
+}
+
+
+QHeaderView::section {
+    background-color: #E0E0E0;
+    color: #333333;
+    border: 1px solid #CCCCCC;
+    padding: 4px;
+}
+
+
 QLabel {
     color: #333333;
 }

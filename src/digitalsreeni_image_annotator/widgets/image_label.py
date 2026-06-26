@@ -29,7 +29,14 @@ from PyQt6.QtGui import (
 from PyQt6.QtWidgets import QLabel, QMessageBox
 
 from .tools import EraserTool, PaintBrushTool, PolygonTool, RectangleTool
-from ..utils import calculate_area
+from ..core.constants import DEFAULT_FILL_OPACITY
+from ..utils import (
+    calculate_area,
+    calculate_bbox,
+    clamp_bbox,
+    clamp_segmentation,
+    fit_bbox_inside,
+)
 
 warnings.filterwarnings("ignore", category=UserWarning)
 
@@ -45,6 +52,10 @@ class ImageLabel(QLabel):
     annotationsReplaced = pyqtSignal(str, dict)         # eraser path: (image_key, per-class dict)
     annotationListUpdateRequested = pyqtSignal()        # editing-mode exit refresh
     annotationSelected = pyqtSignal(object)             # double-click selection
+    canvasSelectionChanged = pyqtSignal(object, str)    # (list[annotation], mode); mode: replace|add|toggle
+    bboxEditCommitted = pyqtSignal()                    # bbox resize/move finished (issue #40)
+    polygonEditCommitted = pyqtSignal()                 # vertex edit committed (Enter) — save + undo push (ADR-026)
+    editBaselineRequested = pyqtSignal()                # capture undo baseline at gesture start (ADR-026)
     deleteSelectionRequested = pyqtSignal()
     finishPolygonRequested = pyqtSignal()
     finishRectangleRequested = pyqtSignal()
@@ -62,12 +73,28 @@ class ImageLabel(QLabel):
     enableToolsRequested = pyqtSignal()
     disableToolsRequested = pyqtSignal()
     resetToolButtonsRequested = pyqtSignal()
+    selectModeRequested = pyqtSignal()                  # Esc → deactivate tool, return to selection mode
     toolSizeChanged = pyqtSignal(str, int)              # ("paint" | "eraser", new_size)
 
     # Navigation / info
     zoomInRequested = pyqtSignal()
     zoomOutRequested = pyqtSignal()
     imageInfoChanged = pyqtSignal()
+
+    # Selection highlight: a semi-transparent selection-blue, drawn as the
+    # dashed bounding-box marquee (handles use the opaque variant). Class-
+    # colour-independent, so it never vanishes the way the old red-on-red
+    # highlight did.
+    _SELECTION_COLOR = QColor(0, 120, 215, 220)
+
+    # Resize cursors per bbox handle (issue #40), matching the OGP convention:
+    # diagonal arrows on corners, straight arrows on edge midpoints.
+    _BBOX_HANDLE_CURSORS = {
+        "tl": Qt.CursorShape.SizeFDiagCursor, "br": Qt.CursorShape.SizeFDiagCursor,
+        "tr": Qt.CursorShape.SizeBDiagCursor, "bl": Qt.CursorShape.SizeBDiagCursor,
+        "tm": Qt.CursorShape.SizeVerCursor,   "bm": Qt.CursorShape.SizeVerCursor,
+        "ml": Qt.CursorShape.SizeHorCursor,   "mr": Qt.CursorShape.SizeHorCursor,
+    }
 
     def __init__(self, parent=None):
         super().__init__(parent)
@@ -86,6 +113,17 @@ class ImageLabel(QLabel):
         self.start_point = None
         self.end_point = None
         self.highlighted_annotations = []
+        # Idle-mode mask selection (issue #75): drag a rubber band to box-select.
+        # selection_rect is (x0, y0, x1, y1) in image coords while a drag is live.
+        self.selection_origin = None
+        self.selecting = False
+        self.selection_rect = None
+        # Direct-manipulation shape edit via the selection handles (issue #40).
+        # None when idle; otherwise a dict {annotation, mode:
+        # resize|pending_move|move, handle, kind: seg|bbox, orig_bbox, orig_seg,
+        # start_pos, moved} while a handle/interior drag of the single selected
+        # shape is live.
+        self.bbox_edit = None
         self.setMouseTracking(True)
         self.setFocusPolicy(Qt.FocusPolicy.StrongFocus)
         self.original_pixmap = None
@@ -96,9 +134,12 @@ class ImageLabel(QLabel):
         self.offset_y = 0
         self.drawing_polygon = False
         self.editing_polygon = None
+        # Original segmentation captured when vertex-edit mode is entered, so
+        # Esc can revert the in-place drags (ADR-026).
+        self._editing_polygon_orig = None
         self.editing_point_index = None
         self.hover_point_index = None
-        self.fill_opacity = 0.3
+        self.fill_opacity = DEFAULT_FILL_OPACITY
         self.drawing_rectangle = False
         self.current_rectangle = None
         self.bit_depth = None
@@ -222,6 +263,12 @@ class ImageLabel(QLabel):
         self.temp_point = None
         self.start_point = None
         self.end_point = None
+        # Drop any in-progress rubber-band so a stale rect can't render on
+        # the next image/slice (switch_image/switch_slice call through here).
+        self.selection_origin = None
+        self.selecting = False
+        self.selection_rect = None
+        self.bbox_edit = None
 
     def clear_current_annotation(self):
         """Clear the current annotation."""
@@ -250,6 +297,9 @@ class ImageLabel(QLabel):
             # Polygon edit mode is modal; runs orthogonal to tool selection
             if self.editing_polygon:
                 self.draw_editing_polygon(painter)
+            # Idle-mode rubber-band selection rectangle (issue #75)
+            if self.selection_rect is not None:
+                self.draw_selection_rect(painter)
             # SAM overlays (cross-cutting; not part of the tool handlers)
             if self.sam_box_active and self.sam_bbox:
                 self.draw_sam_bbox(painter)
@@ -322,6 +372,9 @@ class ImageLabel(QLabel):
         painter.restore()
 
     def accept_temp_annotations(self):
+        # Capture the pre-accept state for undo before the batch append; the
+        # commit pushes it on annotationsBatchSaved (ADR-026).
+        self.editBaselineRequested.emit()
         for annotation in self.temp_annotations:
             class_name = annotation["category_name"]
 
@@ -414,6 +467,23 @@ class ImageLabel(QLabel):
         painter.drawRect(QRectF(min(x1, x2), min(y1, y2), abs(x2 - x1), abs(y2 - y1)))
         painter.restore()
 
+    def draw_selection_rect(self, painter):
+        """Draw the idle-mode rubber-band selection rectangle (issue #75).
+
+        A single dashed selection-blue rect with a faint fill — same restrained
+        style as the selection outline (not red, which clashes with class colours)."""
+        painter.save()
+        painter.translate(self.offset_x, self.offset_y)
+        painter.scale(self.zoom_factor, self.zoom_factor)
+        x0, y0, x1, y1 = self.selection_rect
+        rect = QRectF(min(x0, x1), min(y0, y1), abs(x1 - x0), abs(y1 - y0))
+        fill = QColor(self._SELECTION_COLOR)
+        fill.setAlphaF(0.10)
+        painter.setBrush(QBrush(fill))
+        painter.setPen(QPen(self._SELECTION_COLOR, self._pen_w(1), Qt.PenStyle.DashLine))
+        painter.drawRect(rect)
+        painter.restore()
+
     def clear_temp_sam_prediction(self):
         self.temp_sam_prediction = None
         self.update()
@@ -449,9 +519,14 @@ class ImageLabel(QLabel):
         self.start_point = None
         self.end_point = None
         self.highlighted_annotations.clear()
+        self.selection_origin = None
+        self.selecting = False
+        self.selection_rect = None
+        self.bbox_edit = None
         self.original_pixmap = None
         self.scaled_pixmap = None
         self.editing_polygon = None
+        self._editing_polygon_orig = None
         self.editing_point_index = None
         self.hover_point_index = None
         self.current_rectangle = None
@@ -477,13 +552,12 @@ class ImageLabel(QLabel):
 
             color = self.class_colors.get(class_name, QColor(Qt.GlobalColor.white))
             for annotation in class_annotations:
-                if annotation in self.highlighted_annotations:
-                    border_color = Qt.GlobalColor.red
-                    fill_color = QColor(Qt.GlobalColor.red)
-                else:
-                    border_color = color
-                    fill_color = QColor(color)
-
+                # Selection no longer recolours the mask (it used to turn red,
+                # which was invisible on a red-class mask). The mask always
+                # keeps its class colour; selection is drawn as a
+                # class-colour-independent overlay in a final pass below.
+                border_color = color
+                fill_color = QColor(color)
                 fill_color.setAlphaF(self.fill_opacity)
 
                 text_color = Qt.GlobalColor.white if self.dark_mode else Qt.GlobalColor.black
@@ -553,7 +627,41 @@ class ImageLabel(QLabel):
                         centroid, f"SAM: {self.temp_sam_prediction['score']:.2f}"
                     )
 
+        # Selection overlay — drawn LAST so it sits on top of every mask's
+        # fill, and in a class-colour-independent style so it's recognisable
+        # regardless of the selected mask's colour (issue #75 follow-up).
+        for annotation in self.highlighted_annotations:
+            self._draw_selection_overlay(painter, annotation)
+
         painter.restore()
+
+    def _draw_selection_overlay(self, painter, annotation):
+        """Mark a selected annotation the way the sibling open-garden-planner
+        app does: a dashed selection-blue bounding box plus bright square
+        handles at the 4 corners and 4 edge midpoints. Class-colour-independent
+        and clearly visible regardless of the mask's own colour."""
+        if not self._is_class_pickable(annotation.get("category_name")):
+            return  # don't draw selection chrome over a hidden mask
+        bb = self._annotation_bbox(annotation)
+        if bb is None:
+            return
+        x0, y0, x1, y1 = bb
+        rect = QRectF(x0, y0, x1 - x0, y1 - y0)
+
+        # Dashed bounding-box marquee.
+        painter.setBrush(Qt.BrushStyle.NoBrush)
+        painter.setPen(QPen(self._SELECTION_COLOR, self._pen_w(1.5), Qt.PenStyle.DashLine))
+        painter.drawRect(rect)
+
+        # Handle squares — opaque blue with a white casing so they read on any
+        # background; fixed on-screen size (zoom-compensated). For a bbox these
+        # are grab targets for resize (issue #40); for a polygon they are visual
+        # markers only (vertex editing happens via double-click).
+        half = 4 * self.ui_scale / self.zoom_factor
+        painter.setPen(QPen(Qt.GlobalColor.white, self._pen_w(1), Qt.PenStyle.SolidLine))
+        painter.setBrush(QBrush(QColor(0, 120, 215)))
+        for hx, hy in self._bbox_handle_points(bb).values():
+            painter.drawRect(QRectF(hx - half, hy - half, 2 * half, 2 * half))
 
     def draw_editing_polygon(self, painter):
         """Draw the polygon being edited."""
@@ -683,6 +791,29 @@ class ImageLabel(QLabel):
                 self.drawing_sam_bbox = True
             elif self.editing_polygon:
                 self.handle_editing_click(pos, event)
+            elif self._is_select_mode():
+                shape = self._single_selected_shape()
+                handle = self._bbox_handle_at(shape, pos) if shape is not None else None
+                if handle is not None:
+                    # Grab a resize handle of the single selected shape (#40).
+                    # Resolve to the live object first so an edit on a
+                    # list-selected (UserRole copy) shape isn't lost.
+                    self._begin_shape_edit(
+                        self._live_annotation(shape), "resize", handle, pos
+                    )
+                elif shape is not None and self._annotation_contains(shape, pos):
+                    # Press inside the shape: a move, deferred until the drag
+                    # clears the click threshold (see _update_bbox_drag).
+                    self._begin_shape_edit(
+                        self._live_annotation(shape), "pending_move", None, pos
+                    )
+                else:
+                    # Idle-mode mask selection (issue #75): remember the press as
+                    # the potential rubber-band origin; a click vs. drag is
+                    # decided on move/release.
+                    self.selection_origin = pos
+                    self.selecting = False
+                    self.selection_rect = None
             else:
                 handler = self.active_tool_handler
                 if handler is not None:
@@ -707,6 +838,7 @@ class ImageLabel(QLabel):
             return
 
         pos = self.cursor_pos
+        left_down = bool(event.buttons() & Qt.MouseButton.LeftButton)
         if (
             self.current_tool == "sam_box"
             and self.sam_box_active
@@ -717,6 +849,13 @@ class ImageLabel(QLabel):
             self.sam_bbox[3] = pos[1]
         elif self.editing_polygon:
             self.handle_editing_move(pos)
+        elif self.bbox_edit is not None and left_down:
+            self._update_bbox_drag(pos)
+        elif self._is_select_mode() and self.selection_origin is not None and left_down:
+            self._update_selection_drag(pos)
+        elif self._is_select_mode() and not left_down:
+            # Hover feedback over a selected shape's handles/interior (#40).
+            self._update_select_cursor(pos)
         else:
             handler = self.active_tool_handler
             if handler is not None:
@@ -744,6 +883,10 @@ class ImageLabel(QLabel):
                     self.samPredictionApplyRequested.emit()
                 elif self.editing_polygon:
                     self.editing_point_index = None
+                elif self.bbox_edit is not None:
+                    self._commit_bbox_drag(pos, event)
+                elif self._is_select_mode() and self.selection_origin is not None:
+                    self._finish_selection(pos, event)
                 else:
                     handler = self.active_tool_handler
                     if handler is not None:
@@ -787,22 +930,46 @@ class ImageLabel(QLabel):
             elif self.temp_sam_prediction:
                 self.samPredictionAccepted.emit()
             elif self.editing_polygon:
+                # Clamp the edited polygon back into the image before exit so a
+                # vertex dragged past the edge can't poison the saved coords
+                # (upstream #32).
+                if self.original_pixmap is not None:
+                    self.editing_polygon["segmentation"] = clamp_segmentation(
+                        self.editing_polygon["segmentation"],
+                        self.original_pixmap.width(),
+                        self.original_pixmap.height(),
+                    )
+                changed = (
+                    self.editing_polygon.get("segmentation")
+                    != self._editing_polygon_orig
+                )
                 self.editing_polygon = None
+                self._editing_polygon_orig = None
                 self.editing_point_index = None
                 self.hover_point_index = None
                 self.enableToolsRequested.emit()
-                self.annotationListUpdateRequested.emit()
+                if changed:
+                    # polygonEditCommitted syncs all_annotations + pushes the
+                    # undo baseline + refreshes the list (ADR-026).
+                    self.polygonEditCommitted.emit()
+                else:
+                    # Nothing moved — just refresh, no history entry.
+                    self.annotationListUpdateRequested.emit()
             else:
                 handler = self.active_tool_handler
                 if handler is not None:
                     handler.on_enter()
         elif event.key() == Qt.Key.Key_Escape:
+            # Esc cancels any in-progress state AND returns the canvas to
+            # selection mode (the default), deactivating the active tool via
+            # selectModeRequested → window.activate_tool(None). (issue: Esc
+            # used to leave the tool selected.)
             if self.sam_points_active:
                 self.samPointsCleared.emit()
                 self.sam_positive_points = []
                 self.sam_negative_points = []
                 self.clear_temp_sam_prediction()
-                self.update()
+                self.selectModeRequested.emit()
             # DINO temp_annotations are rejected via the application-wide
             # DINOReviewEventFilter (see ADR-015). Branch below catches
             # non-DINO temp state only.
@@ -811,23 +978,61 @@ class ImageLabel(QLabel):
             elif self.sam_box_active:
                 self.sam_bbox = None
                 self.clear_temp_sam_prediction()
+                self.selectModeRequested.emit()
             elif self.editing_polygon:
+                # Revert the in-place vertex drags so Esc truly cancels the
+                # edit (it used to silently keep them). No commit → no undo
+                # entry; the pending baseline is dropped on the next gesture.
+                if self._editing_polygon_orig is not None:
+                    self.editing_polygon["segmentation"] = list(
+                        self._editing_polygon_orig
+                    )
                 self.editing_polygon = None
+                self._editing_polygon_orig = None
                 self.editing_point_index = None
                 self.hover_point_index = None
                 self.enableToolsRequested.emit()
+            elif self.bbox_edit is not None:
+                # Cancel an in-progress bbox resize/move, restoring the box.
+                # (Already in selection mode — no tool to deactivate.)
+                self._cancel_bbox_drag()
+            elif self._is_select_mode() and (
+                self.selecting or self.selection_origin is not None
+            ):
+                # Cancel an in-progress rubber band (selection unchanged).
+                self.selection_origin = None
+                self.selecting = False
+                self.selection_rect = None
             else:
                 handler = self.active_tool_handler
                 if handler is not None:
                     handler.on_escape()
+                if self.current_tool is not None:
+                    # A drawing tool (polygon/rectangle/paint/eraser) stays
+                    # active after cancelling its in-progress shape; deactivate
+                    # it so Esc always lands in selection mode.
+                    self.selectModeRequested.emit()
         elif event.key() == Qt.Key.Key_Delete:
             if self.editing_polygon:
                 self.deleteSelectionRequested.emit()
                 self.editing_polygon = None
+                self._editing_polygon_orig = None
                 self.editing_point_index = None
                 self.hover_point_index = None
                 self.enableToolsRequested.emit()
                 self.update()
+            elif (
+                self._is_select_mode()
+                and self._ctx is not None
+                and self._ctx.has_annotation_selection()
+            ):
+                # Idle-mode canvas selection: delete the selected masks.
+                # Gate on the annotation-list selection (the controller's
+                # source of truth) rather than the red highlight, which a
+                # list rebuild (e.g. a sort) can leave stale — otherwise a
+                # canvas Delete would pop a spurious "nothing selected"
+                # warning. See ADR-022.
+                self.deleteSelectionRequested.emit()
         elif event.key() == Qt.Key.Key_Minus:
             if self.current_tool == "paint_brush":
                 new_size = max(1, self._ctx.paint_brush_size() - 1)
@@ -846,6 +1051,374 @@ class ImageLabel(QLabel):
                 new_size = self._ctx.eraser_size() + 1
                 self.toolSizeChanged.emit("eraser", new_size)
                 print(f"Eraser size: {new_size}")
+        self.update()
+
+    # --- Idle-mode mask selection (issue #75) ---
+
+    def _is_select_mode(self):
+        """True when the canvas is idle (no drawing/SAM tool, not editing,
+        no temp review) — the only state where bare clicks/drags select
+        existing masks instead of drawing."""
+        return (
+            self.current_tool is None
+            and not self.editing_polygon
+            and not self.sam_box_active
+            and not self.sam_points_active
+            and not self.temp_annotations
+            and not self.temp_sam_prediction
+        )
+
+    @staticmethod
+    def _annotation_contains(annotation, pos):
+        """Hit-test a single annotation (segmentation polygon or bbox). Falls
+        through to the bbox when segmentation is absent/None/empty — an imported
+        bbox-only annotation carries ``"segmentation": None``."""
+        seg = annotation.get("segmentation")
+        if seg:
+            points = [QPoint(int(x), int(y)) for x, y in zip(seg[0::2], seg[1::2])]
+            return len(points) >= 3 and ImageLabel.point_in_polygon(pos, points)
+        bbox = annotation.get("bbox")
+        if bbox:
+            x, y, w, h = bbox
+            return x <= pos[0] <= x + w and y <= pos[1] <= y + h
+        return False
+
+    @staticmethod
+    def _annotation_bbox(annotation):
+        """Axis-aligned bounds (x0, y0, x1, y1) of an annotation, or None. Falls
+        through to the bbox when segmentation is absent/None/empty (imported
+        bbox-only annotations carry ``"segmentation": None``)."""
+        seg = annotation.get("segmentation")
+        if seg:
+            xs, ys = seg[0::2], seg[1::2]
+            if xs and ys:
+                return (min(xs), min(ys), max(xs), max(ys))
+        bbox = annotation.get("bbox")
+        if bbox:
+            x, y, w, h = bbox
+            return (x, y, x + w, y + h)
+        return None
+
+    def _is_class_pickable(self, class_name):
+        # No context (e.g. unit tests) → everything is pickable.
+        return self._ctx is None or self._ctx.is_class_visible(class_name)
+
+    def annotation_at(self, pos):
+        """Smallest-area annotation containing pos, or None. Covers both
+        segmentation and bbox annotations and skips hidden classes. Smallest
+        wins so a mask nested inside another stays reachable (cf.
+        start_polygon_edit / upstream #33)."""
+        best = None
+        best_area = None
+        for class_name, annotations in self.annotations.items():
+            if not self._is_class_pickable(class_name):
+                continue
+            for annotation in annotations:
+                if self._annotation_contains(annotation, pos):
+                    area = calculate_area(annotation)
+                    if best is None or area < best_area:
+                        best = annotation
+                        best_area = area
+        return best
+
+    def annotations_in_rect(self, rect):
+        """All annotations whose bounds intersect the rubber-band rect.
+        rect is (x0, y0, x1, y1) in image coords (any corner order)."""
+        x0, y0, x1, y1 = rect
+        rx0, rx1 = min(x0, x1), max(x0, x1)
+        ry0, ry1 = min(y0, y1), max(y0, y1)
+        result = []
+        for class_name, annotations in self.annotations.items():
+            if not self._is_class_pickable(class_name):
+                continue
+            for annotation in annotations:
+                bb = self._annotation_bbox(annotation)
+                if bb is None:
+                    continue
+                ax0, ay0, ax1, ay1 = bb
+                if ax0 <= rx1 and ax1 >= rx0 and ay0 <= ry1 and ay1 >= ry0:
+                    result.append(annotation)
+        return result
+
+    def _update_selection_drag(self, pos):
+        """Grow the rubber band once the drag clears the click threshold."""
+        if self.selection_origin is None:
+            return
+        if not self.selecting:
+            threshold = 3.0 / max(self.zoom_factor, 1e-6)
+            if self.distance(pos, self.selection_origin) < threshold:
+                return
+            self.selecting = True
+        ox, oy = self.selection_origin
+        self.selection_rect = (ox, oy, pos[0], pos[1])
+
+    def _finish_selection(self, pos, event):
+        """Resolve a press→release in select mode into a selection change.
+        Shift makes it additive (drag) / toggling (click)."""
+        additive = bool(event.modifiers() & Qt.KeyboardModifier.ShiftModifier)
+        if self.selecting and self.selection_rect is not None:
+            anns = self.annotations_in_rect(self.selection_rect)
+            self.canvasSelectionChanged.emit(anns, "add" if additive else "replace")
+        else:
+            ann = self.annotation_at(pos)
+            if additive:
+                if ann is not None:  # Shift+click on empty space keeps the selection
+                    self.canvasSelectionChanged.emit([ann], "toggle")
+            else:
+                self.canvasSelectionChanged.emit(
+                    [ann] if ann is not None else [], "replace"
+                )
+        self.selection_origin = None
+        self.selecting = False
+        self.selection_rect = None
+
+    # --- Direct-manipulation shape editing via the selection handles (#40) ---
+
+    @staticmethod
+    def _bbox_handle_points(bb):
+        """Handle id -> (x, y) for the 8 resize handles of an AABB
+        (x0, y0, x1, y1). Shared by the selection overlay (draw) and the
+        handle hit-test so the squares you see are exactly the grab targets."""
+        x0, y0, x1, y1 = bb
+        cx, cy = (x0 + x1) / 2.0, (y0 + y1) / 2.0
+        return {
+            "tl": (x0, y0), "tm": (cx, y0), "tr": (x1, y0),
+            "ml": (x0, cy), "mr": (x1, cy),
+            "bl": (x0, y1), "bm": (cx, y1), "br": (x1, y1),
+        }
+
+    def _single_selected_shape(self):
+        """The selected annotation iff exactly one shape is selected and it has
+        a bounding box (segmentation or bbox) — the state in which the handles
+        are draggable. Returns the highlighted entry as-is (its geometry is all
+        the hover cursor + handle hit-test need); the press handler resolves it
+        to the live object via ``_live_annotation`` before mutating. None for a
+        multi-selection. Cheap — no scan, so it's safe per hover frame."""
+        if len(self.highlighted_annotations) != 1:
+            return None
+        sel = self.highlighted_annotations[0]
+        return sel if self._annotation_bbox(sel) is not None else None
+
+    def _live_annotation(self, annotation):
+        """Resolve a (possibly list-copied) annotation to the live object inside
+        ``self.annotations`` — what the canvas renders and
+        ``save_current_annotations`` persists. A list-driven selection stores
+        ``item.data(UserRole)``, which PyQt round-trips as a *copy*, so mutating
+        that copy in place would be lost. Match by value-equality; identity is
+        unstable (ADR-022). Only the drag-arm path pays this scan, not hover."""
+        for anns in self.annotations.values():
+            for ann in anns:
+                if ann == annotation:
+                    return ann
+        return annotation
+
+    def _bbox_handle_at(self, annotation, pos):
+        """Handle id under pos for a shape's bounding box, or None. Grab radius
+        is zoom-compensated so it stays a constant on-screen target."""
+        bb = self._annotation_bbox(annotation)
+        if bb is None:
+            return None
+        radius = 8 * self.ui_scale / max(self.zoom_factor, 1e-6)
+        for hid, point in self._bbox_handle_points(bb).items():
+            if self.distance(pos, point) <= radius:
+                return hid
+        return None
+
+    @staticmethod
+    def _resize_bbox(orig_bbox, handle, pos):
+        """New [x, y, w, h] after dragging `handle` to `pos`, keeping the
+        opposite edge/corner fixed. Normalised so width/height never go
+        negative (dragging past the anchor flips the box) and stay >= 1."""
+        x, y, w, h = orig_bbox
+        x0, y0, x1, y1 = x, y, x + w, y + h
+        px, py = pos
+        if "l" in handle:
+            x0 = px
+        if "r" in handle:
+            x1 = px
+        if "t" in handle:
+            y0 = py
+        if "b" in handle:
+            y1 = py
+        nx, ny = min(x0, x1), min(y0, y1)
+        nw, nh = max(1, abs(x1 - x0)), max(1, abs(y1 - y0))
+        return [nx, ny, nw, nh]
+
+    @staticmethod
+    def _scale_segmentation(orig_seg, old_aabb, new_aabb):
+        """Map every vertex from the old bounding box to the new one (affine
+        scale), so resizing the box scales the whole polygon proportionally."""
+        ox0, oy0, ox1, oy1 = old_aabb
+        nx0, ny0, nx1, ny1 = new_aabb
+        sx = (nx1 - nx0) / ((ox1 - ox0) or 1.0)
+        sy = (ny1 - ny0) / ((oy1 - oy0) or 1.0)
+        out = list(orig_seg)
+        for i in range(0, len(out) - 1, 2):
+            out[i] = nx0 + (orig_seg[i] - ox0) * sx
+            out[i + 1] = ny0 + (orig_seg[i + 1] - oy0) * sy
+        return out
+
+    @staticmethod
+    def _translate_segmentation(orig_seg, dx, dy):
+        """Shift every vertex by (dx, dy)."""
+        out = list(orig_seg)
+        for i in range(0, len(out) - 1, 2):
+            out[i] = orig_seg[i] + dx
+            out[i + 1] = orig_seg[i + 1] + dy
+        return out
+
+    @staticmethod
+    def _sync_bbox_key(ann):
+        """Keep a stored bbox key consistent with an edited segmentation.
+        Imported annotations carry both (the bbox feeds export / SAM training);
+        drawn shapes have no bbox key and are left untouched."""
+        if ann.get("bbox") is not None and ann.get("segmentation"):
+            ann["bbox"] = calculate_bbox(ann["segmentation"])
+
+    def _begin_shape_edit(self, live, mode, handle, pos):
+        """Arm a resize/move of one selected shape. `kind` picks the geometry
+        the handles drive: a polygon ("seg") scales/translates its vertices, a
+        box-only annotation ("bbox") edits [x, y, w, h]. orig_bbox is the AABB
+        used as the resize reference for both."""
+        bb = self._annotation_bbox(live)
+        kind = "seg" if live.get("segmentation") else "bbox"
+        # Capture the pre-gesture state for undo now: the drag mutates the
+        # annotation in place, so the controller can't snapshot a clean
+        # "before" at commit time (ADR-026).
+        self.editBaselineRequested.emit()
+        self.bbox_edit = {
+            "annotation": live,
+            "mode": mode,
+            "handle": handle,
+            "kind": kind,
+            "orig_bbox": [bb[0], bb[1], bb[2] - bb[0], bb[3] - bb[1]],
+            "orig_seg": list(live["segmentation"]) if kind == "seg" else None,
+            "start_pos": pos,
+            "moved": False,
+        }
+
+    def _update_select_cursor(self, pos):
+        """Hover feedback in select mode: resize cursors over a selected shape's
+        handles, a move cursor over its interior, arrow otherwise."""
+        shape = self._single_selected_shape()
+        if shape is not None:
+            handle = self._bbox_handle_at(shape, pos)
+            if handle is not None:
+                self.setCursor(self._BBOX_HANDLE_CURSORS[handle])
+                return
+            if self._annotation_contains(shape, pos):
+                self.setCursor(Qt.CursorShape.SizeAllCursor)
+                return
+        self.setCursor(Qt.CursorShape.ArrowCursor)
+
+    def _update_bbox_drag(self, pos):
+        """Advance an in-progress shape resize/move, mutating the annotation's
+        geometry in place so the canvas + selection overlay redraw live."""
+        edit = self.bbox_edit
+        if edit is None:
+            return
+        if edit["mode"] == "pending_move":
+            # Promote to a real move only once the drag clears the click
+            # threshold, so a plain click still falls through to selection
+            # (e.g. picking a smaller mask nested in the shape).
+            threshold = 3.0 / max(self.zoom_factor, 1e-6)
+            if self.distance(pos, edit["start_pos"]) < threshold:
+                return
+            edit["mode"] = "move"
+        ann = edit["annotation"]
+        if edit["mode"] == "resize":
+            new_box = self._resize_bbox(edit["orig_bbox"], edit["handle"], pos)
+            if edit["kind"] == "seg":
+                ox, oy, ow, oh = edit["orig_bbox"]
+                nx, ny, nw, nh = new_box
+                ann["segmentation"] = self._scale_segmentation(
+                    edit["orig_seg"], (ox, oy, ox + ow, oy + oh),
+                    (nx, ny, nx + nw, ny + nh),
+                )
+                self._sync_bbox_key(ann)
+            else:
+                ann["bbox"] = new_box
+            edit["moved"] = True
+        elif edit["mode"] == "move":
+            dx, dy = pos[0] - edit["start_pos"][0], pos[1] - edit["start_pos"][1]
+            if edit["kind"] == "seg":
+                ann["segmentation"] = self._translate_segmentation(
+                    edit["orig_seg"], dx, dy
+                )
+                self._sync_bbox_key(ann)
+            else:
+                x, y, w, h = edit["orig_bbox"]
+                ann["bbox"] = [x + dx, y + dy, w, h]
+            edit["moved"] = True
+
+    def _clamp_edited_shape(self, ann, edit, width, height):
+        """Clamp a just-edited shape into the image. A move slides the intact
+        shape back inside (size/shape preserving); a resize trims to the border.
+        clamp_segmentation is the final safety net guaranteeing the bounds even
+        for an oversized shape that a translate can't fully fit."""
+        if edit["kind"] == "seg":
+            seg = ann["segmentation"]
+            if edit["mode"] == "move":
+                bb = self._annotation_bbox(ann)
+                fitted = fit_bbox_inside(
+                    [bb[0], bb[1], bb[2] - bb[0], bb[3] - bb[1]], width, height
+                )
+                seg = self._translate_segmentation(
+                    seg, fitted[0] - bb[0], fitted[1] - bb[1]
+                )
+            ann["segmentation"] = clamp_segmentation(seg, width, height)
+            self._sync_bbox_key(ann)
+            # The polygon was reshaped — its old dense "raw" (issue #24) no
+            # longer describes it, so a later Detail %=100 must not revert this
+            # edit. Reset the simplification baseline to the edited geometry.
+            if ann.get("segmentation_raw"):
+                ann.pop("segmentation_raw", None)
+                ann["detail_pct"] = 100
+        elif edit["mode"] == "move":
+            ann["bbox"] = fit_bbox_inside(ann["bbox"], width, height)
+        else:
+            ann["bbox"] = clamp_bbox(ann["bbox"], width, height)
+
+    def _commit_bbox_drag(self, pos, event):
+        """Finish a shape drag: clamp into the image and persist if it actually
+        moved; otherwise treat the press as a plain click → select."""
+        edit = self.bbox_edit
+        self.bbox_edit = None
+        if edit is None:
+            return
+        if edit["moved"]:
+            ann = edit["annotation"]
+            if self.original_pixmap is not None:
+                self._clamp_edited_shape(
+                    ann, edit, self.original_pixmap.width(),
+                    self.original_pixmap.height(),
+                )
+            # Point the selection at the live, mutated object so the controller
+            # can re-select it by value-equality after the list rebuild. A no-op
+            # for a canvas-click selection (already the live object); the real
+            # work is replacing a stale list-selection copy.
+            self.highlighted_annotations = [ann]
+            self.bboxEditCommitted.emit()
+        else:
+            # No drag happened — behave exactly like an idle click so
+            # nested-mask click-through keeps working.
+            self.selection_origin = edit["start_pos"]
+            self.selecting = False
+            self.selection_rect = None
+            self._finish_selection(pos, event)
+
+    def _cancel_bbox_drag(self):
+        """Escape during a shape drag: restore the original geometry, drop it."""
+        edit = self.bbox_edit
+        self.bbox_edit = None
+        if edit is not None:
+            ann = edit["annotation"]
+            if edit["kind"] == "seg":
+                ann["segmentation"] = list(edit["orig_seg"])
+                self._sync_bbox_key(ann)
+            else:
+                x, y, w, h = edit["orig_bbox"]
+                ann["bbox"] = [x, y, w, h]
         self.update()
 
     def start_polygon_edit(self, pos):
@@ -872,6 +1445,10 @@ class ImageLabel(QLabel):
                             best_area = area
         if best is not None:
             self.editing_polygon = best
+            # Snapshot for undo (pushed on Enter) and for Esc revert — vertex
+            # drags mutate the segmentation in place (ADR-026).
+            self._editing_polygon_orig = list(best.get("segmentation", []))
+            self.editBaselineRequested.emit()
             self.current_tool = None
             self.disableToolsRequested.emit()
             self.resetToolButtonsRequested.emit()
@@ -928,6 +1505,7 @@ class ImageLabel(QLabel):
 
     def exit_editing_mode(self):
         self.editing_polygon = None
+        self._editing_polygon_orig = None
         self.editing_point_index = None
         self.hover_point_index = None
         self.update()

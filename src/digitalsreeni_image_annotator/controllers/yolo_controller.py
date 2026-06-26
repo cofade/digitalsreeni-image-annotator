@@ -138,12 +138,24 @@ class YOLOController(QObject):
         if not self.mw.yolo_trainer:
             self.initialize_yolo_trainer()
 
+        # YOLO training needs a non-empty validation set; hold some images out
+        # by default (0 keeps everything in train, but val/ will then be empty).
+        val_split, ok = QInputDialog.getInt(
+            self.mw,
+            "Validation Split",
+            "Percent of images for the validation set (0 = all in train):",
+            20, 0, 100, 5,
+        )
+        if not ok:
+            return
+
         try:
-            yaml_path = self.mw.yolo_trainer.prepare_dataset()
+            yaml_path = self.mw.yolo_trainer.prepare_dataset(val_split)
             QMessageBox.information(
                 self.mw,
                 "Dataset Prepared",
-                f"YOLO dataset prepared successfully. YAML file: {yaml_path}",
+                f"YOLO dataset prepared successfully ({val_split}% validation).\n"
+                f"YAML file: {yaml_path}",
             )
         except Exception as e:
             QMessageBox.critical(

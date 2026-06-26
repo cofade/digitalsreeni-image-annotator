@@ -129,20 +129,21 @@ class YOLOTrainer(QObject):
                 QMessageBox.critical(self.main_window, "Error Loading Model", f"Could not load the model. Error: {str(e)}")
         return False
 
-    def prepare_dataset(self):
+    def prepare_dataset(self, val_split=20):
         output_dir, yaml_path = export_yolo_v5plus(
             self.main_window.all_annotations,
             self.main_window.class_mapping,
             self.main_window.image_paths,
             self.main_window.slices,
             self.main_window.image_slices,
-            self.dataset_path
+            self.dataset_path,
+            val_split,
         )
-        
+
         yaml_path = Path(yaml_path)
         with yaml_path.open('r', encoding='utf-8') as f:
             yaml_content = yaml.safe_load(f)
-        
+
         # Update paths for new YOLO v5+ structure
         yaml_content['train'] = 'images/train'  # Changed from train/images
         yaml_content['val'] = 'images/val'      # Changed from train/images

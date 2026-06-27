@@ -149,10 +149,11 @@ def assign_train_val(image_names, val_pct):
 
     val_pct in [0, 100]; 0 -> everything in train (the original behaviour).
     Ordering uses a stable filename hash so the split is reproducible across
-    runs and machines (unlike the built-in hash() which is salted per process),
-    and the val count is allocated exactly so the val set is never accidentally
-    empty: whenever val_pct > 0 and there are >= 2 annotated images, at least
-    one image lands in val and at least one stays in train.
+    runs and machines (unlike the built-in hash() which is salted per process).
+    The val count is the nearest integer to the requested fraction, clamped so
+    the val set is never accidentally empty: whenever val_pct > 0 and there are
+    >= 2 annotated images, at least one image lands in val and at least one
+    stays in train.
     """
     names = list(image_names)
     if val_pct <= 0 or len(names) < 2:

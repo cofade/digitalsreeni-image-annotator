@@ -15,6 +15,31 @@ from PyQt6.QtWidgets import QTextBrowser
 from PyQt6.QtGui import QPalette, QTextCharFormat, QTextCursor
 from PyQt6.QtCore import pyqtSignal, QObject
 
+
+def _resolve_training_yaml(yaml_dir, yaml_content):
+    """Resolve a dataset yaml's train/val pointers to absolute paths for training.
+
+    Honors the yaml's own train/val pointers — ``export_yolo_v5plus`` points
+    ``val`` at ``images/val`` when a held-out set was routed there, and falls
+    back to ``images/train`` when it wasn't (``val_split=0`` or a single-image
+    project) — so the user's split is kept while YOLO is never fed an empty val
+    dir. Returns a new dict; the input is not mutated.
+
+    Invariant: the dataset root is the yaml's own directory (``yaml_dir``).
+    Every yaml this trainer consumes satisfies it — the ones ``prepare_dataset``
+    generates have ``path == output_dir == yaml_dir``, and ``load_yaml``
+    relativizes train/val to the yaml's own directory. The standalone ``path``
+    key is therefore redundant once train/val are absolute, and is dropped.
+    """
+    resolved = dict(yaml_content)
+    train_rel = resolved.get("train", os.path.join("images", "train"))
+    val_rel = resolved.get("val", train_rel)  # export fallback ⇒ never empty
+    resolved["train"] = str((Path(yaml_dir) / train_rel).resolve())
+    resolved["val"] = str((Path(yaml_dir) / val_rel).resolve())
+    resolved.pop("path", None)
+    return resolved
+
+
 class TrainingInfoDialog(QDialog):
     stop_signal = pyqtSignal()
 
@@ -254,19 +279,10 @@ class YOLOTrainer(QObject):
             with yaml_path.open('r', encoding='utf-8') as f:
                 yaml_content = yaml.safe_load(f)
             print(f"YAML content: {yaml_content}")
-            
-            # Honor the train/val split written by prepare_dataset /
-            # export_yolo_v5plus. The export already points `val` at images/val
-            # when a held-out set was routed there, and falls back to images/train
-            # when it wasn't (val_split=0 or a single-image project) — so reading
-            # the yaml's own pointers (rather than forcing val=train as before)
-            # keeps the user's split while never feeding YOLO an empty val dir.
-            train_rel = yaml_content.get('train', os.path.join('images', 'train'))
-            val_rel = yaml_content.get('val', train_rel)  # export fallback ⇒ never empty
-            yaml_content['train'] = str((yaml_dir / train_rel).resolve())
-            yaml_content['val'] = str((yaml_dir / val_rel).resolve())
-            # train/val are now absolute; drop the now-redundant dataset root.
-            yaml_content.pop('path', None)
+
+            # Resolve train/val to absolute paths, honoring the split the export
+            # wrote (see _resolve_training_yaml for the data-root invariant).
+            yaml_content = _resolve_training_yaml(yaml_dir, yaml_content)
 
             # Create the val directory structure if it doesn't exist
             val_img_dir = yaml_dir / 'images' / 'val'

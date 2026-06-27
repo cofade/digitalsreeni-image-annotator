@@ -255,13 +255,19 @@ class YOLOTrainer(QObject):
                 yaml_content = yaml.safe_load(f)
             print(f"YAML content: {yaml_content}")
             
-            # For now, use train as val since we don't have separate validation set
-            train_dir = str(yaml_dir / 'images' / 'train')
-            
-            # Update YAML content with correct paths
-            yaml_content['train'] = train_dir
-            yaml_content['val'] = train_dir  # Use same directory for validation
-            
+            # Honor the train/val split written by prepare_dataset /
+            # export_yolo_v5plus. The export already points `val` at images/val
+            # when a held-out set was routed there, and falls back to images/train
+            # when it wasn't (val_split=0 or a single-image project) — so reading
+            # the yaml's own pointers (rather than forcing val=train as before)
+            # keeps the user's split while never feeding YOLO an empty val dir.
+            train_rel = yaml_content.get('train', os.path.join('images', 'train'))
+            val_rel = yaml_content.get('val', train_rel)  # export fallback ⇒ never empty
+            yaml_content['train'] = str((yaml_dir / train_rel).resolve())
+            yaml_content['val'] = str((yaml_dir / val_rel).resolve())
+            # train/val are now absolute; drop the now-redundant dataset root.
+            yaml_content.pop('path', None)
+
             # Create the val directory structure if it doesn't exist
             val_img_dir = yaml_dir / 'images' / 'val'
             val_label_dir = yaml_dir / 'labels' / 'val'

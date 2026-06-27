@@ -11,7 +11,8 @@ from ..io.export_formats import export_yolo_v5plus
 from collections import deque
 
 
-from PyQt6.QtWidgets import QTextEdit
+from PyQt6.QtWidgets import QTextBrowser
+from PyQt6.QtGui import QPalette, QTextCharFormat, QTextCursor
 from PyQt6.QtCore import pyqtSignal, QObject
 
 class TrainingInfoDialog(QDialog):
@@ -23,8 +24,12 @@ class TrainingInfoDialog(QDialog):
         self.setModal(False)
         self.layout = QVBoxLayout(self)
 
-        self.info_text = QTextEdit(self)
+        # QTextBrowser (not QTextEdit) so the MLflow run link rendered via
+        # update_info_link() is clickable; setOpenExternalLinks opens it in the
+        # system browser instead of trying to navigate inside the widget.
+        self.info_text = QTextBrowser(self)
         self.info_text.setReadOnly(True)
+        self.info_text.setOpenExternalLinks(True)
         self.layout.addWidget(self.info_text)
 
         self.stop_button = QPushButton("Stop Training", self)
@@ -37,9 +42,36 @@ class TrainingInfoDialog(QDialog):
 
         self.setMinimumSize(400, 300)
 
+    def _append_block(self, text, char_format):
+        """Append one line with an explicit char format.
+
+        Each line carries its own format, so the anchor format of a link line
+        can't bleed into the plain lines appended after it (which would render
+        later progress rows as clickable links — they aren't). Using a cursor
+        with an explicit format is what makes that guarantee; ``append()`` reuses
+        the document's trailing format and leaks the anchor.
+        """
+        doc = self.info_text.document()
+        cursor = QTextCursor(doc)
+        cursor.movePosition(QTextCursor.MoveOperation.End)
+        if not doc.isEmpty():
+            cursor.insertBlock()
+        cursor.insertText(text, char_format)
+        bar = self.info_text.verticalScrollBar()
+        bar.setValue(bar.maximum())
+
     def update_info(self, text):
-        self.info_text.append(text)
-        self.info_text.verticalScrollBar().setValue(self.info_text.verticalScrollBar().maximum())
+        self._append_block(text, QTextCharFormat())  # plain — never a link
+
+    def update_info_link(self, label, url):
+        """Append a clickable link (opens in the system browser)."""
+        fmt = QTextCharFormat()
+        fmt.setAnchor(True)
+        fmt.setAnchorHref(url)
+        fmt.setFontUnderline(True)
+        # Theme-correct link colour from the palette (No Hardcoded Colors Rule).
+        fmt.setForeground(self.info_text.palette().color(QPalette.ColorRole.Link))
+        self._append_block(label, fmt)
 
     def stop_training(self):
         self.stop_signal.emit()

@@ -188,6 +188,9 @@ class SAMFineTuner(QObject):
     controller and progress dialog wiring is identical."""
 
     progress_signal = pyqtSignal(str)
+    # Emitted (from the worker thread) with the MLflow-UI deep link once the run
+    # opens, so the controller can show a clickable link + auto-open the browser.
+    mlflow_run_url = pyqtSignal(str)
 
     def __init__(self):
         super().__init__()
@@ -268,6 +271,7 @@ class SAMFineTuner(QObject):
         freeze_image_encoder: bool = True,
         prompt_type: str = "bbox",
         out_path: str,
+        tracker=None,
     ) -> dict:
         """Fine-tune and save. Returns a small result dict; raises on failure.
 
@@ -275,9 +279,23 @@ class SAMFineTuner(QObject):
         gradient-accumulation count over **images** — all of an image's objects
         are backpropagated together (one backward per image), so the optimizer
         steps every ``batch_size`` images.
+
+        ``tracker`` is a :class:`~..training.mlflow_tracker.MLflowTracker`.
+        The MLflow run is opened, logged to and closed *here* (on the worker
+        thread) because MLflow runs are thread-bound. The GUI always supplies
+        one; when ``tracker`` is None (direct/programmatic calls, tests) a
+        ``_NullTracker`` no-op stands in so all tracking calls are safe.
         """
         import torch
         from ultralytics.utils import ops
+
+        from .mlflow_tracker import _NullTracker
+        if tracker is None:
+            tracker = _NullTracker()
+        # Route tracker status lines through the thread-safe progress signal.
+        tracker.set_log(self.progress_signal.emit)
+        # And the run's UI deep link through its own signal (GUI handles it).
+        tracker.set_run_url_callback(self.mlflow_run_url.emit)
 
         groups = list(groups)
         if not groups:
@@ -301,6 +319,34 @@ class SAMFineTuner(QObject):
         if total_instances == 0:
             raise ValueError("No annotated instances to train on.")
 
+        tracker.start({
+            "base_model": base_model,
+            "base_file": os.path.basename(base_file),
+            "device": self._device_label(device),
+            "epochs": epochs,
+            "lr": lr,
+            "batch_size": batch_size,
+            "freeze_image_encoder": freeze_image_encoder,
+            "prompt_type": prompt_type,
+            "images": len(groups),
+            "trainable_params": n_trainable,
+            "total_instances": total_instances,
+        })
+        try:
+            result = self._run_epochs(
+                torch, ops, pred, net, optimizer, groups, epochs, batch_size,
+                prompt_type, freeze_image_encoder, device, total_instances,
+                base_file, out_path, tracker,
+            )
+        finally:
+            tracker.end()
+        return result
+
+    def _run_epochs(
+        self, torch, ops, pred, net, optimizer, groups, epochs, batch_size,
+        prompt_type, freeze_image_encoder, device, total_instances,
+        base_file, out_path, tracker,
+    ) -> dict:
         for epoch in range(1, epochs + 1):
             if self.stop_training:
                 break
@@ -366,10 +412,17 @@ class SAMFineTuner(QObject):
                 optimizer.step()
                 optimizer.zero_grad()
             avg = epoch_loss / max(1, seen)
-            self.progress_signal.emit(f"Epoch {epoch}/{epochs}  loss={avg:.4f}")
+            # "train_loss" (not "loss"): this is the mean loss over the training
+            # instances only — there is no validation split yet (tracked as a
+            # follow-up). Naming it explicitly keeps the door open for a future
+            # "val_loss" without renaming history.
+            self.progress_signal.emit(f"Epoch {epoch}/{epochs}  train_loss={avg:.4f}")
+            tracker.log_metrics({"train_loss": avg}, step=epoch)
 
         result = self._save_and_verify(net, base_file, out_path)
         result.update(stopped=self.stop_training, instances=total_instances)
+        tracker.log_metrics({"stopped_early": int(self.stop_training)})
+        tracker.log_artifact(out_path)
         self.progress_signal.emit(
             f"Saved fine-tuned model: {out_path}" if not self.stop_training
             else f"Stopped early — saved current state to {out_path}"

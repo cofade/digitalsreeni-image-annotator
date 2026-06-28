@@ -444,7 +444,7 @@ User clicks "Export" > "YOLO v8/v11"
     │   ├─> For each annotated image:
     │   │   │
     │   │   ├─> Copy image to the train or val split it was assigned to
-    │   │   │   (val_split == 0 → everything in train, the original behaviour)
+    │   │   │   (val_split == 0 -> everything in train, the original behaviour)
     │   │   │
     │   │   ├─> Convert annotations to YOLO format:
     │   │   │   │
@@ -501,3 +501,46 @@ User: SAM Fine-Tune (beta) > Train on Current Project…
 Offline variant: "Prepare SAM Dataset…" → export_sam_dataset (images/ + manifest.json),
 then "Train from Dataset Folder…" → build_groups_from_folder → same training path.
 ```
+
+## In-app YOLO Training (annotate → train → predict)
+
+Mirrors the SAM fine-tuning loop's "train then use" shape: a run lands in a
+predictable, per-project folder and is then selectable for prediction.
+
+```
+User: YOLO (beta) > Training > Train Model
+    │
+    ├─> _configure_mlflow(): set MLFLOW_TRACKING_URI (file:// URI), enable the
+    │       Ultralytics mlflow setting  (no link yet — just the store path line)
+    │
+    └─> TrainingThread → YOLOTrainer.train_model(epochs, imgsz)
+            │  _resolve_training_yaml → temp_train.yaml (honors the train/val split)
+            │  model.train(..., project=models/yolo/custom, name=<project>)
+            │     ├─ on_train_epoch_end (epoch 1): _emit_mlflow_url()
+            │     │     mlflow.active_run() is set (Ultralytics started it in
+            │     │     on_pretrain_routine_end) → emit mlflow_run_url(deep link)
+            │     │       → YOLOController._on_mlflow_run_url: clickable link in
+            │     │         the dialog + start MLflow UI server once + open browser
+            │     └─ per-epoch progress_signal → TrainingInfoDialog
+            │  _register_trained_model(): from trainer.best (fallback save_dir),
+            │     write sibling data.yaml (class names) → last_saved_model_path
+            │     _prune_run_artifacts(): if the run was MLflow-tracked, delete
+            │       everything except best.pt + data.yaml — Ultralytics' MLflow
+            │       callback already logged the full run dir (weights + plots +
+            │       csv) into the run, so the local diagnostics are redundant.
+            │       (Not tracked → keep the whole folder; it lives nowhere else.)
+            │
+            └─> training_finished: report the saved best.pt path in the dialog.
+                Prediction > Load Model lists it via list_custom_yolo_models()
+                ("★ <project>"), pre-filling model + yaml → predict.
+```
+
+Output lands in `models/yolo/custom/<project>/weights/best.pt` (Ultralytics
+auto-increments on collision), **not** the default `./runs` — parallel to SAM's
+`models/sam/custom`. After a tracked run the folder is pruned to `best.pt` +
+`data.yaml` (the diagnostics — curves, confusion matrix, batch mosaics,
+`results.csv` — remain in the MLflow run via Ultralytics' `on_train_end`
+`log_artifact`). The MLflow link path reuses the SAM machinery
+(`run_ui_url`, `start_mlflow_ui_server`); the only difference is YOLO reads the
+run id from Ultralytics' *native* MLflow callback rather than the in-process
+`MLflowTracker`.

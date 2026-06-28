@@ -309,8 +309,8 @@ def export_yolo_v5plus(all_annotations, class_mapping, image_paths, slices, imag
 
     print(f"[YOLO v5+] export: {len(all_annotations)} image entries, "
           f"{len(image_paths)} known image paths, "
-          f"{len(class_to_index)} class(es) → {list(class_to_index.keys())}; "
-          f"val_split={val_split}% → {len(val_names)} val / "
+          f"{len(class_to_index)} class(es) -> {list(class_to_index.keys())}; "
+          f"val_split={val_split}% -> {len(val_names)} val / "
           f"{len(annotated) - len(val_names)} train")
 
     label_files_written = 0
@@ -365,7 +365,7 @@ def export_yolo_v5plus(all_annotations, class_mapping, image_paths, slices, imag
             dst_path = os.path.join(images_dir, file_name_img)
             if not os.path.exists(dst_path):
                 shutil.copy2(image_path, dst_path)
-                print(f"[YOLO v5+]     copied image → {dst_path}")
+                print(f"[YOLO v5+]     copied image -> {dst_path}")
             img = QImage(image_path)
             img_width, img_height = img.width(), img.height()
 
@@ -394,7 +394,7 @@ def export_yolo_v5plus(all_annotations, class_mapping, image_paths, slices, imag
                         h = h / img_height
                         f.write(f"{class_index} {x_center:.6f} {y_center:.6f} {w:.6f} {h:.6f}\n")
                         ann_lines += 1
-        print(f"[YOLO v5+]     wrote {ann_lines} annotation line(s) → {label_path}")
+        print(f"[YOLO v5+]     wrote {ann_lines} annotation line(s) -> {label_path}")
         label_files_written += 1
 
     print(f"[YOLO v5+] export complete: {label_files_written} label file(s) written")

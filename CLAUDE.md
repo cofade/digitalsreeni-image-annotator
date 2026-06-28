@@ -49,7 +49,7 @@ Issue numbers refer to https://github.com/bnsreenu/digitalsreeni-image-annotator
 | Issue | Size | Task |
 |-------|------|------|
 | #35 | large | Keypoint annotation tool |
-| #85 | large | Train/val split + both-loss tracking + LR warmup→cosine schedule + early stopping (SAM fine-tuning & YOLO) |
+| #85 | large | Train/val split + both-loss tracking + LR warmup->cosine schedule + early stopping (SAM fine-tuning & YOLO) |
 
 ## Project Structure
 

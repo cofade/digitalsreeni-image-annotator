@@ -5,6 +5,10 @@ models/
 *.onnx
 *.safetensors
 
+# Ultralytics' default training output dir (in-app YOLO training routes into
+# models/yolo/custom instead, but a stray CLI/fallback run can still land here)
+runs/
+
 # User project files
 *.iap
 

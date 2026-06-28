@@ -1,11 +1,12 @@
 import os
 from PyQt6.QtWidgets import QFileDialog, QMessageBox
 from PyQt6.QtWidgets import (QDialog, QVBoxLayout, QHBoxLayout, QPushButton,
-                             QLineEdit, QLabel, QDialogButtonBox)
+                             QLineEdit, QLabel, QDialogButtonBox, QComboBox)
 import yaml
 import numpy as np
 from pathlib import Path
 from ..io.export_formats import export_yolo_v5plus
+from ..utils import models_base_dir
 
 
 from collections import deque
@@ -14,6 +15,65 @@ from collections import deque
 from PyQt6.QtWidgets import QTextBrowser
 from PyQt6.QtGui import QPalette, QTextCharFormat, QTextCursor
 from PyQt6.QtCore import pyqtSignal, QObject
+
+
+# Trained YOLO checkpoints land here, namespaced per run, mirroring SAM's
+# ``models/sam/custom`` layout (see training.sam_trainer.SAM_CUSTOM_DIR). Each
+# run is its own ``<name>/`` sub-dir holding Ultralytics' ``weights/best.pt``
+# plus a ``data.yaml`` (class names) so the prediction loader has both halves
+# it needs without the user hunting through ``runs/``.
+YOLO_MODELS_DIR = os.path.join(models_base_dir(), "yolo")
+YOLO_CUSTOM_DIR = os.path.join(YOLO_MODELS_DIR, "custom")
+
+
+def _sanitize_run_name(name):
+    """Filesystem-safe run name; falls back to ``model`` when empty."""
+    safe = "".join(c if c.isalnum() or c in "-_" else "_" for c in str(name)).strip("_")
+    return safe or "model"
+
+
+def list_custom_yolo_models() -> dict:
+    """``{display_name: (model_path, yaml_path)}`` for trained YOLO models.
+
+    Scans ``YOLO_CUSTOM_DIR`` for run folders that produced a ``best.pt``; the
+    sibling ``data.yaml`` (written at train time) supplies the class names the
+    prediction loader validates against. Used to populate the Load-Model
+    dialog's dropdown so a freshly trained model is selectable without browsing.
+    """
+    out = {}
+    if os.path.isdir(YOLO_CUSTOM_DIR):
+        for entry in sorted(os.listdir(YOLO_CUSTOM_DIR)):
+            run_dir = os.path.join(YOLO_CUSTOM_DIR, entry)
+            best = os.path.join(run_dir, "weights", "best.pt")
+            if os.path.isfile(best):
+                yml = os.path.join(run_dir, "data.yaml")
+                out[f"★ {entry}"] = (best, yml if os.path.isfile(yml) else "")
+    return out
+
+
+def _resolve_training_yaml(yaml_dir, yaml_content):
+    """Resolve a dataset yaml's train/val pointers to absolute paths for training.
+
+    Honors the yaml's own train/val pointers — ``export_yolo_v5plus`` points
+    ``val`` at ``images/val`` when a held-out set was routed there, and falls
+    back to ``images/train`` when it wasn't (``val_split=0`` or a single-image
+    project) — so the user's split is kept while YOLO is never fed an empty val
+    dir. Returns a new dict; the input is not mutated.
+
+    Invariant: the dataset root is the yaml's own directory (``yaml_dir``).
+    Every yaml this trainer consumes satisfies it — the ones ``prepare_dataset``
+    generates have ``path == output_dir == yaml_dir``, and ``load_yaml``
+    relativizes train/val to the yaml's own directory. The standalone ``path``
+    key is therefore redundant once train/val are absolute, and is dropped.
+    """
+    resolved = dict(yaml_content)
+    train_rel = resolved.get("train", os.path.join("images", "train"))
+    val_rel = resolved.get("val", train_rel)  # export fallback ⇒ never empty
+    resolved["train"] = str((Path(yaml_dir) / train_rel).resolve())
+    resolved["val"] = str((Path(yaml_dir) / val_rel).resolve())
+    resolved.pop("path", None)
+    return resolved
+
 
 class TrainingInfoDialog(QDialog):
     stop_signal = pyqtSignal()
@@ -91,6 +151,21 @@ class LoadPredictionModelDialog(QDialog):
 
         layout = QVBoxLayout(self)
 
+        # Trained-models dropdown — auto-discovered from models/yolo/custom so a
+        # freshly trained run is one click away (browsing below stays available
+        # for external models). Maps each entry to its (model, yaml) pair.
+        self._trained = list_custom_yolo_models()
+        if self._trained:
+            trained_layout = QHBoxLayout()
+            self.trained_combo = QComboBox()
+            self.trained_combo.addItem("— select a trained model —", None)
+            for display, paths in self._trained.items():
+                self.trained_combo.addItem(display, paths)
+            self.trained_combo.currentIndexChanged.connect(self._on_trained_selected)
+            trained_layout.addWidget(QLabel("Trained Model:"))
+            trained_layout.addWidget(self.trained_combo)
+            layout.addLayout(trained_layout)
+
         # Model file selection
         model_layout = QHBoxLayout()
         self.model_edit = QLineEdit()
@@ -128,9 +203,24 @@ class LoadPredictionModelDialog(QDialog):
         if file_name:
             self.yaml_path = file_name
             self.yaml_edit.setText(file_name)
-        
+
+    def _on_trained_selected(self, _index):
+        """Fill model + yaml from the chosen trained run (placeholder clears)."""
+        paths = self.trained_combo.currentData()
+        if not paths:
+            return
+        model_path, yaml_path = paths
+        self.model_path = model_path
+        self.model_edit.setText(model_path)
+        self.yaml_path = yaml_path
+        self.yaml_edit.setText(yaml_path)
+
 class YOLOTrainer(QObject):
     progress_signal = pyqtSignal(str)
+    # Emitted once per run with the MLflow UI deep link, mirroring the SAM
+    # fine-tuner's signal of the same name so the controller can show a
+    # clickable link / open the run (see YOLOController._on_mlflow_run_url).
+    mlflow_run_url = pyqtSignal(str)
 
     def __init__(self, project_dir, main_window):
         super().__init__()
@@ -147,6 +237,12 @@ class YOLOTrainer(QObject):
         self.conf_threshold = 0.25
         self.stop_training = False
         self.class_names = None
+        # Set by train_model() once a run finishes, so the controller can tell
+        # the user where the checkpoint landed and offer it for prediction.
+        self.last_saved_model_path = None
+        self.last_saved_yaml_path = None
+        # Latched so the per-epoch callback emits the MLflow link only once.
+        self._mlflow_url_emitted = False
 
     def load_model(self, model_path=None):
         from ultralytics import YOLO
@@ -161,24 +257,25 @@ class YOLOTrainer(QObject):
                 QMessageBox.critical(self.main_window, "Error Loading Model", f"Could not load the model. Error: {str(e)}")
         return False
 
-    def prepare_dataset(self):
+    def prepare_dataset(self, val_split=20):
         output_dir, yaml_path = export_yolo_v5plus(
             self.main_window.all_annotations,
             self.main_window.class_mapping,
             self.main_window.image_paths,
             self.main_window.slices,
             self.main_window.image_slices,
-            self.dataset_path
+            self.dataset_path,
+            val_split,
         )
-        
+
         yaml_path = Path(yaml_path)
         with yaml_path.open('r', encoding='utf-8') as f:
             yaml_content = yaml.safe_load(f)
-        
-        # Update paths for new YOLO v5+ structure
-        yaml_content['train'] = 'images/train'  # Changed from train/images
-        yaml_content['val'] = 'images/val'      # Changed from train/images
-        yaml_content['test'] = '../test/images'
+
+        # export_yolo_v5plus already writes the correct relative train/val
+        # pointers (val falls back to train when no val images were routed),
+        # so don't clobber them here — just add the test placeholder.
+        yaml_content.setdefault('test', '../test/images')
         
         with yaml_path.open('w', encoding='utf-8') as f:
             yaml.dump(yaml_content, f, default_flow_style=False)
@@ -220,15 +317,42 @@ class YOLOTrainer(QObject):
         total_epochs = trainer.epochs
         loss = trainer.loss.item()
         progress_text = f"Epoch {epoch}/{total_epochs}, Loss: {loss:.4f}"
-        
+
         # Only emit the signal, don't call the callback directly
         self.progress_signal.emit(progress_text)
-        
+        self._emit_mlflow_url()
+
         if self.stop_training:
             trainer.model.stop = True
             self.stop_training = False
             return False
         return True
+
+    def _emit_mlflow_url(self):
+        """Emit the MLflow run's UI deep link, once per run.
+
+        Ultralytics' native MLflow callback starts the run in
+        ``on_pretrain_routine_end`` (before any epoch), so by the first
+        ``on_train_epoch_end`` ``mlflow.active_run()`` is populated regardless
+        of callback ordering. We read its run/experiment ids and hand the
+        controller the same deep link the SAM path builds. Best-effort: a
+        tracking hiccup must never disturb the run."""
+        if self._mlflow_url_emitted:
+            return
+        try:
+            import mlflow
+
+            run = mlflow.active_run()
+            if run is None:
+                return
+            from ..training.mlflow_tracker import run_ui_url
+
+            self._mlflow_url_emitted = True
+            self.mlflow_run_url.emit(
+                run_ui_url(run.info.experiment_id, run.info.run_id)
+            )
+        except Exception as exc:
+            print(f"Could not resolve MLflow run link for YOLO training: {exc}")
     
     def train_model(self, epochs=100, imgsz=640):
         if self.model is None:
@@ -239,45 +363,53 @@ class YOLOTrainer(QObject):
         self.stop_training = False
         self.total_epochs = epochs
         self.epoch_info.clear()
-        
+        self._mlflow_url_emitted = False
+        self.last_saved_model_path = None
+        self.last_saved_yaml_path = None
+
         # Add the callback
         self.model.add_callback("on_train_epoch_end", self.on_train_epoch_end)
-        
+
         try:
             yaml_path = Path(self.yaml_path)
             yaml_dir = yaml_path.parent
-            
+
             print(f"Training with YAML: {yaml_path}")
             print(f"YAML directory: {yaml_dir}")
-            
+
             with yaml_path.open('r', encoding='utf-8') as f:
                 yaml_content = yaml.safe_load(f)
             print(f"YAML content: {yaml_content}")
-            
-            # For now, use train as val since we don't have separate validation set
-            train_dir = str(yaml_dir / 'images' / 'train')
-            
-            # Update YAML content with correct paths
-            yaml_content['train'] = train_dir
-            yaml_content['val'] = train_dir  # Use same directory for validation
-            
+
+            # Resolve train/val to absolute paths, honoring the split the export
+            # wrote (see _resolve_training_yaml for the data-root invariant).
+            yaml_content = _resolve_training_yaml(yaml_dir, yaml_content)
+
             # Create the val directory structure if it doesn't exist
             val_img_dir = yaml_dir / 'images' / 'val'
             val_label_dir = yaml_dir / 'labels' / 'val'
             val_img_dir.mkdir(parents=True, exist_ok=True)
             val_label_dir.mkdir(parents=True, exist_ok=True)
-            
+
             # Write updated YAML with adjusted paths
             temp_yaml_path = yaml_dir / 'temp_train.yaml'
             with temp_yaml_path.open('w', encoding='utf-8') as f:
                 yaml.dump(yaml_content, f, default_flow_style=False)
-            
+
             print(f"Training with updated YAML: {temp_yaml_path}")
             print(f"Updated YAML content: {yaml_content}")
-            
+
             from ..core.torch_utils import resolve_torch_device
             device, _ = resolve_torch_device()
-            results = self.model.train(data=str(temp_yaml_path), epochs=epochs, imgsz=imgsz, device=device)
+            # Route the run into models/yolo/custom/<project>/ (Ultralytics
+            # auto-increments on collision) instead of the default ./runs, so
+            # the checkpoint has a predictable home like SAM's custom dir.
+            run_name = _sanitize_run_name(os.path.basename(self.project_dir))
+            results = self.model.train(
+                data=str(temp_yaml_path), epochs=epochs, imgsz=imgsz, device=device,
+                project=YOLO_CUSTOM_DIR, name=run_name,
+            )
+            self._register_trained_model()
             return results
         finally:
             # Clear the callback
@@ -285,7 +417,76 @@ class YOLOTrainer(QObject):
             # Remove temporary YAML file
             if 'temp_yaml_path' in locals():
                 temp_yaml_path.unlink(missing_ok=True)
-           
+
+    def _register_trained_model(self):
+        """Record the run's best.pt + a class-names yaml for later prediction.
+
+        Ultralytics writes ``<save_dir>/weights/best.pt``; we drop a sibling
+        ``data.yaml`` carrying the trained class names so the prediction loader
+        (which needs both a model and a names yaml) can pick this run up from
+        the Load-Model dropdown without the user supplying anything. Best-effort
+        — a failure here just leaves the model un-registered, not the run
+        broken."""
+        try:
+            trainer = getattr(self.model, "trainer", None)
+            # Guard the empty string: Path("") is Path(".") which .exists() as
+            # the cwd, so an absent trainer.best must fall through to save_dir.
+            best_attr = getattr(trainer, "best", "") if trainer else ""
+            best = Path(best_attr) if best_attr else None
+            if not best or not best.exists():
+                save_dir = getattr(trainer, "save_dir", None) if trainer else None
+                if save_dir:
+                    best = Path(save_dir) / "weights" / "best.pt"
+            if not best or not best.exists():
+                print("Trained YOLO checkpoint not found; skipping registration.")
+                return
+            names = self.model.names  # {idx: name} from the trained model
+            # Names-only on purpose: load_prediction_model reads `names` only,
+            # and this yaml describes a *trained model*, not a dataset — it must
+            # NOT carry train/val/path pointers (they'd be stale the moment the
+            # dataset moves). Don't "helpfully" add them.
+            yaml_out = best.parent.parent / "data.yaml"
+            with yaml_out.open("w", encoding="utf-8") as f:
+                yaml.dump({"names": names, "nc": len(names)}, f, default_flow_style=False)
+            self.last_saved_model_path = str(best)
+            self.last_saved_yaml_path = str(yaml_out)
+            print(f"Trained YOLO model registered: {best}")
+            self._prune_run_artifacts(best.parent.parent, best, yaml_out)
+        except Exception as exc:
+            print(f"Could not register trained YOLO model: {exc}")
+
+    def _prune_run_artifacts(self, run_dir, best, data_yaml):
+        """Trim the run dir to the minimum needed to run predictions.
+
+        Ultralytics writes a full run directory (last.pt, args.yaml, results.csv,
+        and a dozen plot/mosaic PNG/JPGs). Its native MLflow callback already
+        logs *all* of it into the MLflow run (``on_train_end`` →
+        ``log_artifact`` over the weights dir + every png/jpg/csv/pt/yaml), so
+        once tracking is confirmed those local copies are redundant — keep only
+        ``best.pt`` + the names ``data.yaml`` the app needs, and let MLflow be
+        the home for the diagnostics.
+
+        Guarded on ``_mlflow_url_emitted``: if the run was *not* MLflow-tracked
+        (tracking degraded), the diagnostics live nowhere else, so we keep the
+        whole folder rather than destroy them. Best-effort — a cleanup failure
+        never breaks the (already finished) run."""
+        if not self._mlflow_url_emitted:
+            print("MLflow run not confirmed; keeping full YOLO run dir locally.")
+            return
+        try:
+            keep = {best.resolve(), data_yaml.resolve()}
+            for path in run_dir.rglob("*"):
+                if path.is_file() and path.resolve() not in keep:
+                    path.unlink(missing_ok=True)
+            # Drop any now-empty subdirs (e.g. plots/), but weights/ survives
+            # because best.pt is still in it.
+            for path in sorted(run_dir.rglob("*"), reverse=True):
+                if path.is_dir() and not any(path.iterdir()):
+                    path.rmdir()
+            print(f"Pruned YOLO run dir to best.pt + data.yaml (diagnostics in MLflow): {run_dir}")
+        except Exception as exc:
+            print(f"Could not prune YOLO run artifacts: {exc}")
+
     def verify_dataset_structure(self):
         yaml_path = Path(self.yaml_path)
         yaml_dir = yaml_path.parent

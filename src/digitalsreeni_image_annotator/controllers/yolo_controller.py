@@ -67,6 +67,9 @@ class YOLOController(QObject):
     def __init__(self, main_window):
         super().__init__(main_window)
         self.mw = main_window
+        # Latched after the MLflow UI server is started once for the session
+        # (mirrors SAMTrainController); a failed launch leaves it False to retry.
+        self._mlflow_ui_started = False
 
     def setup_yolo_menu(self):
         yolo_menu = self.mw.menuBar().addMenu("&YOLO (beta)")
@@ -140,12 +143,21 @@ class YOLOController(QObject):
         if not self.mw.yolo_trainer:
             self.initialize_yolo_trainer()
 
+        # YOLO training needs a non-empty validation set; hold some images out
+        # by default (0 keeps everything in train, but val/ will then be empty).
+        from .io_controller import prompt_validation_split
+
+        val_split, ok = prompt_validation_split(self.mw)
+        if not ok:
+            return
+
         try:
-            yaml_path = self.mw.yolo_trainer.prepare_dataset()
+            yaml_path = self.mw.yolo_trainer.prepare_dataset(val_split)
             QMessageBox.information(
                 self.mw,
                 "Dataset Prepared",
-                f"YOLO dataset prepared successfully. YAML file: {yaml_path}",
+                f"YOLO dataset prepared successfully ({val_split}% validation).\n"
+                f"YAML file: {yaml_path}",
             )
         except Exception as e:
             QMessageBox.critical(
@@ -356,6 +368,7 @@ class YOLOController(QObject):
         self.mw.yolo_trainer.progress_signal.connect(
             self.mw.training_dialog.update_info
         )
+        self.mw.yolo_trainer.mlflow_run_url.connect(self._on_mlflow_run_url)
         self.mw.yolo_trainer.set_progress_callback(self.mw.training_dialog.update_info)
         self.mw.training_dialog.stop_signal.connect(
             self.mw.yolo_trainer.stop_training_signal
@@ -365,17 +378,58 @@ class YOLOController(QObject):
         self.mw.training_thread.finished.connect(self.training_finished)
         self.mw.training_thread.start()
 
+    def _on_mlflow_run_url(self, url):
+        """The YOLO run has opened in MLflow (signalled from the worker thread;
+        this runs on the GUI thread). Show a clickable link in the progress
+        dialog, start the MLflow UI server once, and open the run in the
+        browser. Mirrors SAMTrainController._on_mlflow_run_url; tracking display
+        must never disturb the run, so it is best-effort and self-contained."""
+        import webbrowser
+
+        from PyQt6.QtCore import QTimer
+
+        from ..training.mlflow_tracker import (
+            resolve_tracking_uri,
+            start_mlflow_ui_server,
+        )
+
+        dlg = getattr(self.mw, "training_dialog", None)
+        if dlg is not None:
+            dlg.update_info_link("🔗 Open this run in MLflow", url)
+        try:
+            if not self._mlflow_ui_started:
+                ok, _ = start_mlflow_ui_server(
+                    resolve_tracking_uri(self.mw),
+                    log=dlg.update_info if dlg is not None else None,
+                )
+                # Latch only on success so a failed launch retries next run.
+                self._mlflow_ui_started = ok
+                # Give a cold-started server a moment before opening the tab so
+                # the browser doesn't land on a connection error. (Non-blocking.)
+                QTimer.singleShot(2500 if ok else 0, lambda: webbrowser.open(url))
+            else:
+                webbrowser.open(url)
+        except Exception as exc:
+            print(f"Could not open MLflow UI for the run: {exc}")
+
     def training_finished(self, results):
         # Training is over — hide Stop entirely (only Close remains); the next
         # run re-shows it in start_training.
         self.mw.training_dialog.stop_button.hide()
         self.mw.training_dialog.stop_button.setText("Stop Training")
-        self.mw.yolo_trainer.progress_signal.disconnect(
-            self.mw.training_dialog.update_info
-        )
-        self.mw.training_dialog.stop_signal.disconnect(
-            self.mw.yolo_trainer.stop_training_signal
-        )
+        # One guard around all three so a partial teardown (double-fire / error
+        # path) can't leak a still-connected signal into the next run — mirrors
+        # SAMTrainController.training_finished.
+        try:
+            self.mw.yolo_trainer.progress_signal.disconnect(
+                self.mw.training_dialog.update_info
+            )
+            self.mw.yolo_trainer.mlflow_run_url.disconnect(self._on_mlflow_run_url)
+            self.mw.training_dialog.stop_signal.disconnect(
+                self.mw.yolo_trainer.stop_training_signal
+            )
+        except TypeError:
+            pass  # already disconnected
 
         if isinstance(results, str):
             QMessageBox.critical(
@@ -384,10 +438,17 @@ class YOLOController(QObject):
                 f"An error occurred during training: {results}",
             )
         else:
+            saved = getattr(self.mw.yolo_trainer, "last_saved_model_path", None)
+            where = (
+                f"\n\nSaved to:\n{saved}\n\nIt's now selectable under "
+                "Prediction Settings → Load Model."
+                if saved
+                else ""
+            )
             QMessageBox.information(
                 self.mw,
                 "Training Complete",
-                "YOLO model training completed successfully.",
+                f"YOLO model training completed successfully.{where}",
             )
 
     def set_confidence_threshold(self):

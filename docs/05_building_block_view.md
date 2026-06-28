@@ -232,7 +232,7 @@ the controller graph.
 | `ClassController` | Class add / delete / rename / colour / visibility. `update_slice_list_colors`, `is_class_visible`. |
 | `SAMController` | SAM box/points tool lifecycle, debounce timer, `_sam_inference_in_flight` re-entrancy guard (ADR-013), model picker. |
 | `DINOController` | Single + batch detection, batch review navigation, temp-annotation accept/reject, custom-model browse, `DINOReviewEventFilter` ownership (ADR-015). |
-| `YOLOController` | Training menu, `TrainingThread`, prediction dialog, result processing. |
+| `YOLOController` | Training menu, `TrainingThread`, prediction dialog, result processing. Surfaces the run's MLflow deep link (`_on_mlflow_run_url`, mirrors SAM) and reports the saved `best.pt` path on completion. |
 | `SAMTrainController` | SAM fine-tuning menu, GPU gate, `SAMTrainingThread`, config dialog, registers fine-tuned checkpoints into the SAM selector (ADR-021). |
 | `io_controller` *(module-level functions, not a class)* | Thin UI wrappers around the pure `io/export_formats.py` and `io/import_formats.py` modules. |
 
@@ -285,7 +285,7 @@ Each tool is a standalone dialog/window:
 | `slice_registration.py` | Align slices | Multiple registration algorithms (pystackreg) |
 | `stack_interpolator.py` | Z-spacing adjustment | Interpolation methods, memory-efficient |
 | `dicom_converter.py` | DICOM to TIFF | Preserve metadata, export to JSON |
-| `yolo_trainer.py` | Model training | Train YOLO, load predictions |
+| `yolo_trainer.py` | Model training | Train YOLO (run → `models/yolo/custom/<project>`, pruned to `best.pt`+`data.yaml` when MLflow has the diagnostics), `list_custom_yolo_models` for the prediction dropdown, `mlflow_run_url` signal, load predictions |
 
 ## Data Model
 

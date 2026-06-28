@@ -2,6 +2,7 @@ import json
 from PyQt6.QtGui import QImage
 from ..utils import calculate_area, calculate_bbox
 import yaml
+import hashlib
 import os
 import shutil
 import tempfile
@@ -143,7 +144,30 @@ def create_coco_annotation(ann, image_id, annotation_id, class_name, class_mappi
 
 
 
-def export_yolo_v4(all_annotations, class_mapping, image_paths, slices, image_slices, output_dir):
+def assign_train_val(image_names, val_pct):
+    """Deterministically partition image names into (train_set, val_set).
+
+    val_pct in [0, 100]; 0 -> everything in train (the original behaviour).
+    Ordering uses a stable filename hash so the split is reproducible across
+    runs and machines (unlike the built-in hash() which is salted per process).
+    The val count is the nearest integer to the requested fraction, clamped so
+    the val set is never accidentally empty: whenever val_pct > 0 and there are
+    >= 2 annotated images, at least one image lands in val and at least one
+    stays in train.
+    """
+    names = list(image_names)
+    if val_pct <= 0 or len(names) < 2:
+        return set(names), set()
+    ordered = sorted(names, key=lambda n: hashlib.md5(n.encode("utf-8")).hexdigest())
+    n = len(ordered)
+    # round() is half-to-even, which is fine here; the clamp keeps both sides
+    # non-empty regardless of how the nearest-integer falls.
+    val_count = max(1, min(n - 1, round(n * val_pct / 100)))
+    val = set(ordered[:val_count])
+    return set(names) - val, val
+
+
+def export_yolo_v4(all_annotations, class_mapping, image_paths, slices, image_slices, output_dir, val_split=0):
     # Create output directories
     train_dir = os.path.join(output_dir, 'train')
     valid_dir = os.path.join(output_dir, 'valid')
@@ -157,14 +181,19 @@ def export_yolo_v4(all_annotations, class_mapping, image_paths, slices, image_sl
     # Create a mapping of slice names to their QImage objects
     slice_map = {slice_name: qimage for slice_name, qimage in slices}
 
+    # Deterministically split the annotated images into train/val.
+    annotated = [name for name, ann in all_annotations.items() if ann]
+    _, val_names = assign_train_val(annotated, val_split)
+
     for image_name, annotations in all_annotations.items():
         # Skip if there are no annotations for this image/slice
         if not annotations:
             continue
 
-        # For simplicity, we'll put all data in the train directory
-        images_dir = os.path.join(train_dir, 'images')
-        labels_dir = os.path.join(train_dir, 'labels')
+        # Route this image into the train or val directory.
+        split_dir = valid_dir if image_name in val_names else train_dir
+        images_dir = os.path.join(split_dir, 'images')
+        labels_dir = os.path.join(split_dir, 'labels')
 
         # Handle image saving (similar to before, but adjusted for new directory structure)
         if image_name in slice_map or ('_' in image_name and '.' not in image_name):
@@ -224,11 +253,14 @@ def export_yolo_v4(all_annotations, class_mapping, image_paths, slices, image_sl
                         h = h / img_height
                         f.write(f"{class_index} {x_center:.6f} {y_center:.6f} {w:.6f} {h:.6f}\n")
 
-    # Create YAML file
+    # Create YAML file. Point val at the populated valid/ dir only when images
+    # were actually routed there; otherwise fall back to the train images so
+    # the path stays non-empty (single-image projects, or val_split == 0).
     names = list(class_mapping.keys())
+    val_images_dir = valid_dir if val_names else train_dir
     yaml_data = {
         'train': os.path.abspath(os.path.join(train_dir, 'images')),
-        'val': os.path.abspath(os.path.join(train_dir, 'images')),  # Using train as val
+        'val': os.path.abspath(os.path.join(val_images_dir, 'images')),
         'test': '../test/images',  # Placeholder
         'nc': len(names),
         'names': names
@@ -243,7 +275,7 @@ def export_yolo_v4(all_annotations, class_mapping, image_paths, slices, image_sl
 
 
 
-def export_yolo_v5plus(all_annotations, class_mapping, image_paths, slices, image_slices, output_dir):
+def export_yolo_v5plus(all_annotations, class_mapping, image_paths, slices, image_slices, output_dir, val_split=0):
     """
     Export annotations in YOLO v5+ format.
     Directory structure:
@@ -271,9 +303,15 @@ def export_yolo_v5plus(all_annotations, class_mapping, image_paths, slices, imag
     # Create a mapping of slice names to their QImage objects
     slice_map = {slice_name: qimage for slice_name, qimage in slices}
 
+    # Deterministically split the annotated images into train/val.
+    annotated = [name for name, ann in all_annotations.items() if ann]
+    _, val_names = assign_train_val(annotated, val_split)
+
     print(f"[YOLO v5+] export: {len(all_annotations)} image entries, "
           f"{len(image_paths)} known image paths, "
-          f"{len(class_to_index)} class(es) → {list(class_to_index.keys())}")
+          f"{len(class_to_index)} class(es) -> {list(class_to_index.keys())}; "
+          f"val_split={val_split}% -> {len(val_names)} val / "
+          f"{len(annotated) - len(val_names)} train")
 
     label_files_written = 0
     for image_name, annotations in all_annotations.items():
@@ -283,10 +321,11 @@ def export_yolo_v5plus(all_annotations, class_mapping, image_paths, slices, imag
             print("[YOLO v5+]     skipping: no annotations")
             continue
 
-        # For simplicity, we'll put all data in the train directory
-        # In practice, you might want to implement train/val split logic
-        images_dir = images_train_dir
-        labels_dir = labels_train_dir
+        # Route this image into the train or val directory.
+        if image_name in val_names:
+            images_dir, labels_dir = images_val_dir, labels_val_dir
+        else:
+            images_dir, labels_dir = images_train_dir, labels_train_dir
 
         # Handle image saving (similar logic to the v4 version)
         if image_name in slice_map or ('_' in image_name and '.' not in image_name):
@@ -326,7 +365,7 @@ def export_yolo_v5plus(all_annotations, class_mapping, image_paths, slices, imag
             dst_path = os.path.join(images_dir, file_name_img)
             if not os.path.exists(dst_path):
                 shutil.copy2(image_path, dst_path)
-                print(f"[YOLO v5+]     copied image → {dst_path}")
+                print(f"[YOLO v5+]     copied image -> {dst_path}")
             img = QImage(image_path)
             img_width, img_height = img.width(), img.height()
 
@@ -355,17 +394,20 @@ def export_yolo_v5plus(all_annotations, class_mapping, image_paths, slices, imag
                         h = h / img_height
                         f.write(f"{class_index} {x_center:.6f} {y_center:.6f} {w:.6f} {h:.6f}\n")
                         ann_lines += 1
-        print(f"[YOLO v5+]     wrote {ann_lines} annotation line(s) → {label_path}")
+        print(f"[YOLO v5+]     wrote {ann_lines} annotation line(s) -> {label_path}")
         label_files_written += 1
 
     print(f"[YOLO v5+] export complete: {label_files_written} label file(s) written")
 
-    # Create YAML file
+    # Create YAML file. Point val at the val split only when images were
+    # actually routed there; otherwise fall back to train so `yolo train`
+    # never reads an empty val dir (single-image projects, or val_split == 0).
     names = list(class_mapping.keys())
+    val_rel = os.path.join('images', 'val' if val_names else 'train')
     yaml_data = {
         'path': os.path.abspath(output_dir),  # Root directory
         'train': os.path.join('images', 'train'),  # Relative to path
-        'val': os.path.join('images', 'val'),  # Relative to path
+        'val': val_rel,  # Relative to path
         'nc': len(names),
         'names': names
     }

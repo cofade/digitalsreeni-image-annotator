@@ -11,8 +11,10 @@ import tempfile
 import shutil
 from pathlib import Path
 from PyQt6.QtGui import QImage
+import yaml as yaml_lib
 from src.digitalsreeni_image_annotator.io.export_formats import (
     export_coco_json,
+    export_yolo_v4,
     export_yolo_v5plus,
     export_pascal_voc_bbox,
     create_coco_annotation
@@ -380,6 +382,180 @@ class TestYOLOExport:
         assert 'names' in yaml_data
         assert yaml_data['nc'] == len(sample_class_mapping)
         assert isinstance(yaml_data['names'], list)
+
+    def _multi_image_dataset(self, temp_output_dir, sample_image, count=5):
+        """Build `count` annotated images with real files on disk.
+
+        Returns (annotations, image_paths, src_dir) — src_dir is a separate
+        directory so the export output never collides with the sources.
+        """
+        src_dir = os.path.join(temp_output_dir, "src")
+        os.makedirs(src_dir, exist_ok=True)
+        annotations = {}
+        image_paths = {}
+        for i in range(count):
+            name = f"img_{i:03d}.png"
+            path = os.path.join(src_dir, name)
+            sample_image.save(path)
+            image_paths[name] = path
+            annotations[name] = {
+                "cell": [
+                    {"segmentation": [10, 10, 40, 10, 40, 40, 10, 40], "category": "cell"}
+                ]
+            }
+        return annotations, image_paths
+
+    def test_export_yolo_splits_train_and_val(
+        self, temp_output_dir, sample_class_mapping, sample_image
+    ):
+        """A non-zero split populates both images/train and images/val, and
+        each label .txt sits beside its image in the same split (issue #83)."""
+        out_dir = os.path.join(temp_output_dir, "out")
+        annotations, image_paths = self._multi_image_dataset(
+            temp_output_dir, sample_image, count=5
+        )
+
+        export_yolo_v5plus(
+            annotations, sample_class_mapping, image_paths,
+            slices=[], image_slices={}, output_dir=out_dir, val_split=40,
+        )
+
+        train_imgs = os.listdir(os.path.join(out_dir, 'images', 'train'))
+        val_imgs = os.listdir(os.path.join(out_dir, 'images', 'val'))
+        assert len(train_imgs) > 0 and len(val_imgs) > 0
+        assert len(train_imgs) + len(val_imgs) == 5
+        assert len(val_imgs) == 2  # 40% of 5
+
+        # Every image has its label beside it in the matching split.
+        for split, imgs in (('train', train_imgs), ('val', val_imgs)):
+            label_dir = os.path.join(out_dir, 'labels', split)
+            for img in imgs:
+                stem = os.path.splitext(img)[0]
+                assert os.path.exists(os.path.join(label_dir, stem + '.txt'))
+
+    def test_export_yolo_zero_split_leaves_val_empty(
+        self, temp_output_dir, sample_class_mapping, sample_image
+    ):
+        """val_split=0 preserves the historical all-in-train behaviour."""
+        out_dir = os.path.join(temp_output_dir, "out0")
+        annotations, image_paths = self._multi_image_dataset(
+            temp_output_dir, sample_image, count=4
+        )
+
+        export_yolo_v5plus(
+            annotations, sample_class_mapping, image_paths,
+            slices=[], image_slices={}, output_dir=out_dir, val_split=0,
+        )
+
+        train_imgs = os.listdir(os.path.join(out_dir, 'images', 'train'))
+        val_imgs = os.listdir(os.path.join(out_dir, 'images', 'val'))
+        assert len(train_imgs) == 4
+        assert len(val_imgs) == 0
+
+    def test_export_yolo_splits_multidim_slices(
+        self, temp_output_dir, sample_class_mapping, sample_image
+    ):
+        """Multi-dim slices (no file path, carried as QImage in `slices`) must
+        also route across the train/val split, not all land in train."""
+        out_dir = os.path.join(temp_output_dir, "out_slices")
+        slices = []
+        annotations = {}
+        for i in range(5):
+            slice_name = f"stack.tif_T0_Z{i}_C0"
+            slices.append((slice_name, sample_image))
+            annotations[slice_name] = {
+                "cell": [
+                    {"segmentation": [10, 10, 40, 10, 40, 40, 10, 40], "category": "cell"}
+                ]
+            }
+
+        export_yolo_v5plus(
+            annotations, sample_class_mapping, image_paths={},
+            slices=slices, image_slices={}, output_dir=out_dir, val_split=40,
+        )
+
+        train_imgs = os.listdir(os.path.join(out_dir, 'images', 'train'))
+        val_imgs = os.listdir(os.path.join(out_dir, 'images', 'val'))
+        assert len(train_imgs) > 0 and len(val_imgs) > 0
+        assert len(train_imgs) + len(val_imgs) == 5
+        assert len(val_imgs) == 2  # 40% of 5
+
+        # Each slice's label sits in the same split as its image.
+        for split, imgs in (('train', train_imgs), ('val', val_imgs)):
+            label_dir = os.path.join(out_dir, 'labels', split)
+            for img in imgs:
+                stem = os.path.splitext(img)[0]
+                assert os.path.exists(os.path.join(label_dir, stem + '.txt'))
+
+    def test_export_yolo_single_image_val_falls_back_to_train(
+        self, temp_output_dir, sample_class_mapping, sample_image
+    ):
+        """A single-image project can't fill val, so data.yaml's val must fall
+        back to the (populated) train dir rather than an empty images/val."""
+        out_dir = os.path.join(temp_output_dir, "out_single")
+        annotations, image_paths = self._multi_image_dataset(
+            temp_output_dir, sample_image, count=1
+        )
+
+        export_yolo_v5plus(
+            annotations, sample_class_mapping, image_paths,
+            slices=[], image_slices={}, output_dir=out_dir, val_split=20,
+        )
+
+        val_imgs = os.listdir(os.path.join(out_dir, 'images', 'val'))
+        assert len(val_imgs) == 0  # nothing could be routed to val
+        with open(os.path.join(out_dir, 'data.yaml')) as f:
+            yaml_data = yaml_lib.safe_load(f)
+        assert yaml_data['val'] == os.path.join('images', 'train')
+        # path + relative val must resolve to a real, populated directory.
+        resolved_val = os.path.join(yaml_data['path'], yaml_data['val'])
+        assert os.path.isdir(resolved_val)
+        assert len(os.listdir(resolved_val)) > 0
+
+    def test_export_yolo_v4_splits_train_and_valid(
+        self, temp_output_dir, sample_class_mapping, sample_image
+    ):
+        """YOLO v4 routes images into train/ and valid/ and points data.yaml's
+        val at the populated valid/ images dir when a split is requested."""
+        out_dir = os.path.join(temp_output_dir, "out_v4")
+        annotations, image_paths = self._multi_image_dataset(
+            temp_output_dir, sample_image, count=5
+        )
+
+        export_yolo_v4(
+            annotations, sample_class_mapping, image_paths,
+            slices=[], image_slices={}, output_dir=out_dir, val_split=40,
+        )
+
+        train_imgs = os.listdir(os.path.join(out_dir, 'train', 'images'))
+        valid_imgs = os.listdir(os.path.join(out_dir, 'valid', 'images'))
+        assert len(train_imgs) == 3 and len(valid_imgs) == 2
+
+        with open(os.path.join(out_dir, 'data.yaml')) as f:
+            yaml_data = yaml_lib.safe_load(f)
+        # val must resolve to the populated valid/images dir.
+        assert os.path.basename(os.path.dirname(yaml_data['val'])) == 'valid'
+        assert len(os.listdir(yaml_data['val'])) == 2
+
+    def test_export_yolo_v4_zero_split_val_points_at_train(
+        self, temp_output_dir, sample_class_mapping, sample_image
+    ):
+        """With no split, v4 keeps the historical behaviour: val points at the
+        train images so the path is non-empty."""
+        out_dir = os.path.join(temp_output_dir, "out_v4_zero")
+        annotations, image_paths = self._multi_image_dataset(
+            temp_output_dir, sample_image, count=3
+        )
+
+        export_yolo_v4(
+            annotations, sample_class_mapping, image_paths,
+            slices=[], image_slices={}, output_dir=out_dir, val_split=0,
+        )
+
+        assert len(os.listdir(os.path.join(out_dir, 'valid', 'images'))) == 0
+        with open(os.path.join(out_dir, 'data.yaml')) as f:
+            yaml_data = yaml_lib.safe_load(f)
+        assert os.path.basename(os.path.dirname(yaml_data['val'])) == 'train'
 
 
 class TestPascalVOCExport:

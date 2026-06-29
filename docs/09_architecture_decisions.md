@@ -816,6 +816,9 @@ won't reload (cf. facebookresearch/sam2#337 key-mismatch failures).
   only during GUI testing because the e2e tests used square images). The
   landscape regression test (`test_landscape_no_mask_shift`) and the
   `ops.scale_masks` API-drift guard protect this.
+- ℹ️ The custom loop later gained a train/val split, a no-grad validation pass
+  (`val_loss`), a warmup→cosine LR schedule, and early stopping with best-checkpoint
+  selection — see **ADR-028**.
 
 ---
 
@@ -1193,6 +1196,85 @@ never-abort-training error handling remain — as robustness, not as an opt-out.
   tracking URI / experiment name, but their param/metric keys differ.
 - ⚠️ MLflow run thread-affinity is load-bearing for SAM: the run **must** open and
   close on the worker thread that trains, not the GUI thread that builds the tracker.
+
+---
+
+## ADR-028: Train/Val Split, Val-Loss, Warmup→Cosine LR & Early Stopping for Training
+
+**Status**: Accepted (issue bnsreenu#85)
+
+**Context**: The two trainers were asymmetric and neither reported *generalization*.
+SAM fine-tuning (ADR-021) logged only a per-epoch `train_loss` over all annotated
+instances — no held-out set, so the curve always trended down and couldn't reveal
+overfitting (the main reason to track experiments). Its LR was fixed for the whole
+run and only the last epoch's weights were saved. YOLO already got val metrics + mAP
+from Ultralytics natively, but the app surfaced only a single `trainer.loss` line and
+exposed none of Ultralytics' LR-schedule / early-stop knobs.
+
+**Decision**: Give both trainers a configurable train/val split, both-loss tracking,
+a linear-warmup → cosine-to-floor LR schedule, and patience-based early stopping with
+best-checkpoint selection. The schedule shape is a **fixed smart default** (warmup =
+first 10% of steps, cosine floor = 10% of peak); only the *peak* LR, train %, and
+patience are user-editable (the literature says the peak LR matters more than the
+shape).
+
+- **Deterministic per-image split.** A new `sam_dataset.split_groups(groups,
+  train_pct, seed)` reuses the YOLO export's stable-MD5 `assign_train_val` (ADR for
+  #83) so SAM and YOLO split identically and reproducibly. `SampleGroup` gained a
+  `name` used only as the split key. At 100% train (or a single image) the val set is
+  empty and the val pass / early stopping are skipped (the UI says so; the SAM dialog
+  also disables OK at 0% train). **YOLO's split stays at "Prepare Dataset" time** —
+  it's baked into `images/train` vs `images/val` folders at export, so the Train
+  dialog only adds schedule/early-stop knobs, never a re-export.
+- **SAM val pass + both losses.** The per-image loss body was extracted into
+  `_image_instance_losses(..., train=bool)` so the same forward serves training
+  (`enable_grad`, backprops once per image) and a no-grad validation pass
+  (`_validation_loss`, run under `net.eval()` then encoder train-mode restored). Each
+  epoch logs `train_loss`, `val_loss`, and the current `lr` to MLflow and the progress
+  window. YOLO surfaces its native val loss + mAP via a new `on_fit_epoch_end`
+  callback (fires *after* validation, so `trainer.metrics` is populated; keys read
+  defensively) — MLflow already gets them natively.
+- **LR schedule.** SAM uses `torch.optim.lr_scheduler.LambdaLR` driven by a pure
+  `lr_schedule.warmup_cosine_lambda(total_steps)`, stepped once per optimizer step
+  (`~ceil(train_images / batch_size)` per epoch; the lambda clamps if the real count
+  drifts). A checkbox reverts to constant LR. When on, YOLO forwards `cos_lr=True`,
+  `lr0`, `lrf=0.1`, `warmup_epochs=round(0.1·epochs)` to Ultralytics' `train()`; when
+  off it forwards `cos_lr=False`, `lrf=1.0`, `warmup_epochs=0` so both toggles' "off"
+  state means a genuinely constant LR (not a linear-decay-with-warmup).
+- **Early stopping + best checkpoint.** SAM uses a tiny pure `EarlyStopper(patience)`
+  (default 20; `0` disables). On each val improvement the trainer snapshots the
+  weights (CPU clone); `_save_and_verify(..., state=best_state)` saves that snapshot
+  rather than the last epoch (falls back to the live net when there's no val /
+  improvement, preserving the original behaviour). YOLO forwards `patience` and keeps
+  Ultralytics' `best.pt`.
+
+**Why pure helpers** (`lr_schedule.py`, `early_stop.py`, `split_groups`): the tricky
+math/bookkeeping is unit-tested without torch, Qt, or a real run
+(`test_lr_schedule.py`, `test_early_stop.py`, `test_sam_split.py`); the val/best/early
+-stop wiring is covered by driving `_run_epochs` with light stubs
+(`test_sam_finetuning.py::TestValPassAndBestCheckpoint`), and the YOLO passthrough by
+`test_yolo_training_args.py`.
+
+**Alternatives considered**:
+- *A shared trainer base class for both paths* — rejected: the two loops are too
+  different (custom PyTorch vs Ultralytics-native). Only the pure pieces +
+  `assign_train_val` are shared; a unification refactor isn't warranted.
+- *Exposing every schedule knob* (warmup fraction, floor, lr0 for SAM) — deferred:
+  the simplified surface (peak LR + train % + patience + a schedule toggle) keeps the
+  dialogs legible; the fixed 10%/10% recipe is the modern default.
+- *Stepping the SAM schedule per epoch* — rejected in favour of per-optimizer-step so
+  short runs still get a real warmup ramp.
+
+**Consequences**:
+- ✅ Both trainers now show generalization (val_loss / mAP) and a tracked LR curve;
+  SAM saves its best-val checkpoint instead of the last epoch.
+- ⚠️ SAM's saved checkpoint changing from "last" to "best-val" is a behaviour change
+  (only when a val set exists); 100% train preserves the old last-epoch save.
+- ⚠️ The SAM val pass recomputes encoder features for the held-out images each epoch
+  (same bounded-memory tradeoff as training, ADR-021); a larger split costs more time.
+- ⚠️ `on_fit_epoch_end` reads Ultralytics metric keys (`val/box_loss`,
+  `metrics/mAP50(B)`, …) which vary by task/version, so every read is guarded and a
+  miss just omits that field rather than breaking the run.
 
 ---
 

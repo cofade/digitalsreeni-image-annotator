@@ -475,24 +475,31 @@ See [ADR-021](09_architecture_decisions.md#adr-021-sam-fine-tuning-via-a-custom-
 User: SAM Fine-Tune (beta) > Train on Current Project…
     │
     ├─> build_groups_from_project(all_annotations, image_paths, slices, image_slices)
-    │       polygons/bboxes → SampleGroup(image_loader, specs)   (masks rasterised lazily)
+    │       polygons/bboxes → SampleGroup(image_loader, specs, name)   (masks rasterised lazily)
     │
     ├─> _gpu_gate(): resolve_torch_device(); if "cpu" → warn + let user back out
     │
-    ├─> SAMTrainConfigDialog: base model, epochs, lr, batch, prompt (bbox/point),
-    │                          "also fine-tune image encoder?"
+    ├─> SAMTrainConfigDialog: base model, epochs, PEAK lr, batch, prompt (bbox/point),
+    │                          train split %, early-stop patience, warmup→cosine toggle,
+    │                          "also fine-tune image encoder?"  (OK disabled at 0% train)
     │
     ├─> deactivate_sam_tools() + lock SAM inference UI (tools, selector, menu)
     │       trainer loads its OWN SAM instance; locking avoids a 2nd model on the same CUDA context
     │
     └─> SAMTrainingThread → SAMFineTuner.train(...)
+            │  split_groups(train_pct, seed) → train/val (deterministic; empty val at 100%)
             │  build predictor (one warmup predict), pin device, apply freeze policy
-            │  for each epoch / image / instance:
-            │     set_image → get_im_features  (no_grad when encoder frozen)
-            │     prompt_inference(bbox|point) under enable_grad → mask logits
-            │     focal+dice loss → backward → AdamW step (every batch_size instances)
+            │  LambdaLR(warmup_cosine_lambda(total_steps)) when the schedule is on
+            │  for each epoch:
+            │     train pass / image / instance:
+            │        _image_instance_losses(train=True): set_image → get_im_features,
+            │        prompt_inference(bbox|point) → focal+dice loss → backward
+            │        AdamW step (every batch_size images) → scheduler.step()
+            │     val pass (no_grad, net.eval()): _validation_loss over held-out images
+            │     log {train_loss, val_loss, lr}; EarlyStopper(patience) on val_loss
+            │        → snapshot best-val weights; stop early if patience exceeded
             │     progress_signal → TrainingInfoDialog (Stop supported)
-            │  save {"model": state_dict} as <name>_<base_token>.pt → reload-verify via SAM()
+            │  save {"model": best_state | last_state} as <name>_<base_token>.pt → reload-verify via SAM()
             │
             └─> training_finished: register in SAMUtils.custom_models,
                 add "★ <name>" to the SAM selector and select it
@@ -513,15 +520,23 @@ User: YOLO (beta) > Training > Train Model
     ├─> _configure_mlflow(): set MLFLOW_TRACKING_URI (file:// URI), enable the
     │       Ultralytics mlflow setting  (no link yet — just the store path line)
     │
-    └─> TrainingThread → YOLOTrainer.train_model(epochs, imgsz)
+    │   (Train dialog also collects: warmup→cosine toggle (cos_lr), peak lr0,
+    │    early-stop patience. Warmup_epochs=round(0.1·epochs) and lrf=0.1 derived.)
+    │
+    └─> TrainingThread → YOLOTrainer.train_model(epochs, imgsz, cos_lr, lr0, lrf,
+            │                                     warmup_epochs, patience)
             │  _resolve_training_yaml → temp_train.yaml (honors the train/val split)
-            │  model.train(..., project=models/yolo/custom, name=<project>)
+            │  model.train(..., cos_lr, lr0, lrf, warmup_epochs, patience,
+            │              project=models/yolo/custom, name=<project>)
             │     ├─ on_train_epoch_end (epoch 1): _emit_mlflow_url()
             │     │     mlflow.active_run() is set (Ultralytics started it in
             │     │     on_pretrain_routine_end) → emit mlflow_run_url(deep link)
             │     │       → YOLOController._on_mlflow_run_url: clickable link in
             │     │         the dialog + start MLflow UI server once + open browser
-            │     └─ per-epoch progress_signal → TrainingInfoDialog
+            │     ├─ on_train_epoch_end: train-loss line → TrainingInfoDialog
+            │     └─ on_fit_epoch_end (after validation): val_loss + mAP50 +
+            │           mAP50-95 + lr line → TrainingInfoDialog
+            │           (trainer.metrics; native MLflow callback logs them too)
             │  _register_trained_model(): from trainer.best (fallback save_dir),
             │     write sibling data.yaml (class names) → last_saved_model_path
             │     _prune_run_artifacts(): if the run was MLflow-tracked, delete

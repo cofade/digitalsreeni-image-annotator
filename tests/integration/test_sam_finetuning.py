@@ -120,6 +120,119 @@ class TestMlflowOrchestration:
         assert spy.calls == ["set_log", "start", "end"]
 
 
+class TestValPassAndBestCheckpoint:
+    """The split path (issue bnsreenu#85): each epoch logs val_loss + lr, the
+    best-val checkpoint is saved (not the last epoch), and patience stops early.
+    Drives ``_run_epochs`` directly with light stubs — no weights/GPU."""
+
+    class _RecordingTracker:
+        active = True
+
+        def __init__(self):
+            self.metrics = []  # (metrics_dict, step)
+
+        def set_log(self, log):
+            pass
+
+        def set_run_url_callback(self, cb):
+            pass
+
+        def start(self, params=None):
+            return True
+
+        def log_metrics(self, metrics, step=None):
+            self.metrics.append((metrics, step))
+
+        def log_artifact(self, path):
+            pass
+
+        def end(self):
+            pass
+
+    def test_logs_val_saves_best_and_early_stops(self, monkeypatch):
+        import torch
+
+        ft = SAMFineTuner()
+        net = torch.nn.Linear(1, 1)
+        optimizer = torch.optim.SGD(net.parameters(), lr=0.1)
+
+        # One param-dependent loss per image so backward()/step() actually move
+        # the weights — lets us prove the saved checkpoint is best, not last.
+        monkeypatch.setattr(ft, "_image_instance_losses", lambda *a, **k: [net.weight.sum()])
+
+        # Val improves through epoch 2 then worsens; patience=2 stops at epoch 4.
+        val_seq = iter([0.5, 0.3, 0.4, 0.45, 0.99, 0.99])
+        best_weight = {}
+
+        def fake_val(*a, **k):
+            v = next(val_seq)
+            if abs(v - 0.3) < 1e-9:  # snapshot the weights at the eventual best epoch
+                best_weight["w"] = net.weight.detach().clone()
+            return v
+
+        monkeypatch.setattr(ft, "_validation_loss", fake_val)
+
+        saved = {}
+
+        def fake_save(net_, base_file, out_path, state=None):
+            saved["state"] = state
+            return {"out_path": out_path}
+
+        monkeypatch.setattr(ft, "_save_and_verify", fake_save)
+
+        tracker = self._RecordingTracker()
+        ft._run_epochs(
+            torch, None, None, net, optimizer, None,
+            [object(), object()], [object()],            # train_groups, val_groups
+            10, 1, "bbox", True, torch.device("cpu"),    # epochs, bs, prompt, freeze, device
+            2, 2, 0,                                     # total_instances, patience, seed
+            "base_sam2_t.pt", "out_sam2_t.pt", tracker,
+        )
+
+        # val_loss + lr logged every epoch; the run early-stopped after epoch 4.
+        val_steps = [step for (m, step) in tracker.metrics if "val_loss" in m]
+        assert val_steps == [1, 2, 3, 4]
+        assert all("lr" in m for (m, step) in tracker.metrics if step in (1, 2, 3, 4))
+        # Best (epoch-2) weights saved, NOT the last epoch's.
+        assert saved["state"] is not None
+        assert torch.allclose(saved["state"]["weight"], best_weight["w"])
+        assert not torch.allclose(saved["state"]["weight"], net.weight.detach())
+
+    def test_no_val_set_saves_final_state(self, monkeypatch):
+        import torch
+
+        ft = SAMFineTuner()
+        net = torch.nn.Linear(1, 1)
+        optimizer = torch.optim.SGD(net.parameters(), lr=0.1)
+        monkeypatch.setattr(ft, "_image_instance_losses", lambda *a, **k: [net.weight.sum()])
+        monkeypatch.setattr(
+            ft, "_validation_loss",
+            lambda *a, **k: pytest.fail("validation pass ran with no val set"),
+        )
+
+        saved = {}
+
+        def fake_save(net_, base_file, out_path, state=None):
+            saved["state"] = state
+            return {"out_path": out_path}
+
+        monkeypatch.setattr(ft, "_save_and_verify", fake_save)
+
+        tracker = self._RecordingTracker()
+        ft._run_epochs(
+            torch, None, None, net, optimizer, None,
+            [object()], [],                              # train_groups, NO val_groups
+            3, 1, "bbox", True, torch.device("cpu"),     # epochs, bs, prompt, freeze, device
+            5, 20, 0,                                    # total_instances, patience, seed
+            "base_sam2_t.pt", "out_sam2_t.pt", tracker,
+        )
+
+        # No val ⇒ state=None ⇒ _save_and_verify saves the live (final) net state.
+        assert saved["state"] is None
+        assert not any("val_loss" in m for (m, step) in tracker.metrics)
+        assert any("train_loss" in m for (m, step) in tracker.metrics)
+
+
 @pytest.fixture
 def temp_dir():
     d = tempfile.mkdtemp()

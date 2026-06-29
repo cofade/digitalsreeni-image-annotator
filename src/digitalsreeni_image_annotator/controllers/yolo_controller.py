@@ -24,6 +24,7 @@ import numpy as np
 from PyQt6.QtCore import QObject, QThread, pyqtSignal
 from PyQt6.QtGui import QAction
 from PyQt6.QtWidgets import (
+    QCheckBox,
     QDialog,
     QDialogButtonBox,
     QDoubleSpinBox,
@@ -33,6 +34,7 @@ from PyQt6.QtWidgets import (
     QListWidget,
     QMessageBox,
     QPushButton,
+    QSpinBox,
     QVBoxLayout,
 )
 
@@ -43,20 +45,38 @@ from ..dialogs.yolo_trainer import (
 )
 
 
+def build_yolo_train_opts(epochs, *, cos_lr, lr0, patience):
+    """Map the Train-dialog knobs to Ultralytics ``train()`` kwargs (issue #85).
+
+    "Off" must mean a genuinely constant LR to match the SAM schedule toggle:
+    ``cos_lr=False`` + ``lrf=1.0`` (no decay) + ``warmup_epochs=0`` (no ramp).
+    "On" warms up over the first ~10% of epochs then cosine-decays to a 10%
+    floor. Pure so the on/off mapping is unit-testable without the GUI.
+    """
+    return {
+        "cos_lr": cos_lr,
+        "lr0": lr0,
+        "lrf": 0.1 if cos_lr else 1.0,
+        "warmup_epochs": max(1, round(0.1 * epochs)) if cos_lr else 0,
+        "patience": patience,
+    }
+
+
 class TrainingThread(QThread):
     progress_update = pyqtSignal(str)
     finished = pyqtSignal(object)
 
-    def __init__(self, yolo_trainer, epochs, imgsz):
+    def __init__(self, yolo_trainer, epochs, imgsz, train_opts=None):
         super().__init__()
         self.yolo_trainer = yolo_trainer
         self.epochs = epochs
         self.imgsz = imgsz
+        self.train_opts = train_opts or {}
 
     def run(self):
         try:
             results = self.yolo_trainer.train_model(
-                epochs=self.epochs, imgsz=self.imgsz
+                epochs=self.epochs, imgsz=self.imgsz, **self.train_opts
             )
             self.finished.emit(results)
         except Exception as e:
@@ -296,6 +316,38 @@ class YOLOController(QObject):
         layout.addWidget(imgsz_label)
         layout.addWidget(imgsz_input)
 
+        # LR schedule + early stopping (issue bnsreenu#85). The train/val split
+        # itself is fixed at "Prepare YOLO Dataset" time (#83) — these only
+        # control the optimizer schedule and early stopping. Warmup (10% of
+        # epochs) and the cosine floor (lrf=0.1) are derived smart defaults.
+        cos_lr_checkbox = QCheckBox("Warmup → cosine LR schedule")
+        cos_lr_checkbox.setChecked(True)
+        cos_lr_checkbox.setToolTip(
+            "Warmup then cosine decay to a 10% floor (Ultralytics cos_lr, lrf=0.1). "
+            "Uncheck to hold the peak learning rate constant."
+        )
+        layout.addWidget(cos_lr_checkbox)
+
+        lr0_label = QLabel("Peak learning rate (lr0):")
+        lr0_input = QDoubleSpinBox()
+        lr0_input.setDecimals(5)
+        lr0_input.setRange(1e-5, 1.0)
+        lr0_input.setSingleStep(1e-3)
+        lr0_input.setValue(0.01)
+        layout.addWidget(lr0_label)
+        layout.addWidget(lr0_input)
+
+        patience_label = QLabel("Early-stop patience (epochs, 0 = off):")
+        patience_input = QSpinBox()
+        patience_input.setRange(0, 1000)
+        patience_input.setValue(20)
+        patience_input.setToolTip(
+            "Ultralytics patience: stop when val hasn't improved for this many "
+            "epochs; best.pt is still the best epoch. 0 disables early stopping."
+        )
+        layout.addWidget(patience_label)
+        layout.addWidget(patience_input)
+
         button_box = QDialogButtonBox(
             QDialogButtonBox.StandardButton.Ok | QDialogButtonBox.StandardButton.Cancel
         )
@@ -306,9 +358,21 @@ class YOLOController(QObject):
         dialog.setLayout(layout)
 
         if dialog.exec() == QDialog.DialogCode.Accepted:
-            epochs = int(epochs_input.text())
-            imgsz = int(imgsz_input.text())
-            self.start_training(epochs, imgsz)
+            try:
+                epochs = int(epochs_input.text())
+                imgsz = int(imgsz_input.text())
+            except ValueError:
+                QMessageBox.warning(
+                    self.mw, "Invalid Input", "Epochs and image size must be integers."
+                )
+                return
+            train_opts = build_yolo_train_opts(
+                epochs,
+                cos_lr=cos_lr_checkbox.isChecked(),
+                lr0=lr0_input.value(),
+                patience=patience_input.value(),
+            )
+            self.start_training(epochs, imgsz, train_opts)
 
     def _configure_mlflow(self):
         """Arm Ultralytics' built-in MLflow callback for the next run.
@@ -354,7 +418,7 @@ class YOLOController(QObject):
                 "training continues untracked."
             )
 
-    def start_training(self, epochs, imgsz):
+    def start_training(self, epochs, imgsz, train_opts=None):
         if not hasattr(self.mw, "training_dialog"):
             self.mw.training_dialog = TrainingInfoDialog(self.mw)
         self.mw.training_dialog.show()
@@ -374,7 +438,9 @@ class YOLOController(QObject):
             self.mw.yolo_trainer.stop_training_signal
         )
 
-        self.mw.training_thread = TrainingThread(self.mw.yolo_trainer, epochs, imgsz)
+        self.mw.training_thread = TrainingThread(
+            self.mw.yolo_trainer, epochs, imgsz, train_opts
+        )
         self.mw.training_thread.finished.connect(self.training_finished)
         self.mw.training_thread.start()
 

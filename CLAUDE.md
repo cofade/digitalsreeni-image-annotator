@@ -49,7 +49,6 @@ Issue numbers refer to https://github.com/bnsreenu/digitalsreeni-image-annotator
 | Issue | Size | Task |
 |-------|------|------|
 | #35 | large | Keypoint annotation tool |
-| #85 | large | Train/val split + both-loss tracking + LR warmup->cosine schedule + early stopping (SAM fine-tuning & YOLO) |
 
 ## Project Structure
 
@@ -72,7 +71,8 @@ src/digitalsreeni_image_annotator/
 │                                 #   polygon, paint, eraser
 ├── inference/                    # sam_utils.py, dino_utils.py
 ├── training/                     # SAM fine-tuning (ADR-021): sam_trainer.py
-│                                 #   (SAMFineTuner), sam_dataset.py
+│                                 #   (SAMFineTuner), sam_dataset.py;
+│                                 #   lr_schedule.py + early_stop.py (ADR-028)
 ├── io/                           # export_formats.py, import_formats.py
 ├── ui/                           # menu_bar, sidebar, shortcuts, theme, stylesheets
 └── dialogs/                      # Standalone tool dialogs (statistics,

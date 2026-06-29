@@ -328,6 +328,44 @@ class YOLOTrainer(QObject):
             return False
         return True
 
+    def on_fit_epoch_end(self, trainer):
+        """Surface validation loss + mAP + LR once per epoch (after validation).
+
+        ``on_fit_epoch_end`` fires after the epoch's validation pass, so
+        ``trainer.metrics`` holds the val losses and mAP. Keys vary by task
+        (detect vs segment) and Ultralytics version, so every read is defensive —
+        a missing key or format change must never disturb the run. MLflow already
+        records these natively via Ultralytics' own callback; this only mirrors
+        them into the progress window alongside the train-loss line."""
+        try:
+            epoch = trainer.epoch + 1
+            total = trainer.epochs
+            metrics = getattr(trainer, "metrics", None) or {}
+            parts = [f"Epoch {epoch}/{total}"]
+
+            # This app trains segmentation models, so surface seg_loss too — but
+            # box_loss is always present (the detection head), so show whichever
+            # the run reports.
+            for key, label in (("val/box_loss", "val_box_loss"),
+                               ("val/seg_loss", "val_seg_loss")):
+                val_loss = metrics.get(key)
+                if val_loss is not None:
+                    parts.append(f"{label}={float(val_loss):.4f}")
+            map50 = metrics.get("metrics/mAP50(B)")
+            if map50 is not None:
+                parts.append(f"mAP50={float(map50):.4f}")
+            map5095 = metrics.get("metrics/mAP50-95(B)")
+            if map5095 is not None:
+                parts.append(f"mAP50-95={float(map5095):.4f}")
+            lr = getattr(trainer, "lr", None)
+            if isinstance(lr, dict) and lr:
+                parts.append(f"lr={float(next(iter(lr.values()))):.2e}")
+
+            if len(parts) > 1:  # something beyond the epoch tag was available
+                self.progress_signal.emit("  ".join(parts))
+        except Exception as exc:
+            print(f"Could not surface YOLO val metrics: {exc}")
+
     def _emit_mlflow_url(self):
         """Emit the MLflow run's UI deep link, once per run.
 
@@ -354,12 +392,18 @@ class YOLOTrainer(QObject):
         except Exception as exc:
             print(f"Could not resolve MLflow run link for YOLO training: {exc}")
     
-    def train_model(self, epochs=100, imgsz=640):
+    def train_model(self, epochs=100, imgsz=640, *, cos_lr=True, lr0=0.01,
+                    lrf=0.1, warmup_epochs=None, patience=20):
         if self.model is None:
             raise ValueError("No model loaded. Please load a model first.")
         if self.yaml_path is None or not Path(self.yaml_path).exists():
             raise FileNotFoundError("Dataset YAML not found. Please prepare or load a dataset first.")
-    
+
+        # Warmup over the first ~10% of epochs (the issue's recipe) unless the
+        # caller overrode it. Floor (lrf) defaults to 10% of the peak LR.
+        if warmup_epochs is None:
+            warmup_epochs = max(1, round(0.1 * epochs))
+
         self.stop_training = False
         self.total_epochs = epochs
         self.epoch_info.clear()
@@ -367,8 +411,10 @@ class YOLOTrainer(QObject):
         self.last_saved_model_path = None
         self.last_saved_yaml_path = None
 
-        # Add the callback
+        # Per-epoch progress: on_train_epoch_end has the train loss; on_fit_epoch_end
+        # fires AFTER validation so trainer.metrics carries val loss + mAP.
         self.model.add_callback("on_train_epoch_end", self.on_train_epoch_end)
+        self.model.add_callback("on_fit_epoch_end", self.on_fit_epoch_end)
 
         try:
             yaml_path = Path(self.yaml_path)
@@ -408,12 +454,17 @@ class YOLOTrainer(QObject):
             results = self.model.train(
                 data=str(temp_yaml_path), epochs=epochs, imgsz=imgsz, device=device,
                 project=YOLO_CUSTOM_DIR, name=run_name,
+                cos_lr=cos_lr, lr0=lr0, lrf=lrf, warmup_epochs=warmup_epochs,
+                patience=patience,
             )
             self._register_trained_model()
             return results
         finally:
-            # Clear the callback
+            # Clear our callbacks so they don't stack on a second run (the run's
+            # own trainer holds Ultralytics' native callbacks, so this only drops
+            # ours).
             self.model.callbacks["on_train_epoch_end"] = []
+            self.model.callbacks["on_fit_epoch_end"] = []
             # Remove temporary YAML file
             if 'temp_yaml_path' in locals():
                 temp_yaml_path.unlink(missing_ok=True)

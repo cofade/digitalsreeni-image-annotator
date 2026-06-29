@@ -343,20 +343,31 @@ class YOLOTrainer(QObject):
             metrics = getattr(trainer, "metrics", None) or {}
             parts = [f"Epoch {epoch}/{total}"]
 
-            # This app trains segmentation models, so surface seg_loss too — but
-            # box_loss is always present (the detection head), so show whichever
-            # the run reports.
+            # box_loss is always present (detection head); seg_loss only for
+            # segmentation runs. Keys here carry no special chars, so match exact.
             for key, label in (("val/box_loss", "val_box_loss"),
                                ("val/seg_loss", "val_seg_loss")):
                 val_loss = metrics.get(key)
                 if val_loss is not None:
                     parts.append(f"{label}={float(val_loss):.4f}")
-            map50 = metrics.get("metrics/mAP50(B)")
+
+            # mAP keys carry a task suffix — "(B)"/"(M)" in Ultralytics' in-memory
+            # dict, but some logging layers strip the parens to "B"/"M" (seen in
+            # the MLflow store). Match by substring so either form is surfaced
+            # (and both detection and segmentation runs work).
+            def _first(needle, exclude=None):
+                for key, value in metrics.items():
+                    if needle in key and (exclude is None or exclude not in key):
+                        return value
+                return None
+
+            map50 = _first("mAP50", exclude="mAP50-95")
             if map50 is not None:
                 parts.append(f"mAP50={float(map50):.4f}")
-            map5095 = metrics.get("metrics/mAP50-95(B)")
+            map5095 = _first("mAP50-95")
             if map5095 is not None:
                 parts.append(f"mAP50-95={float(map5095):.4f}")
+
             lr = getattr(trainer, "lr", None)
             if isinstance(lr, dict) and lr:
                 parts.append(f"lr={float(next(iter(lr.values()))):.2e}")

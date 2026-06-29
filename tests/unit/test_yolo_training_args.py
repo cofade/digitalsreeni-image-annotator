@@ -8,6 +8,7 @@ real ``model.train`` is replaced by a recorder so no training actually runs.
 """
 
 from collections import deque
+from types import SimpleNamespace
 
 import pytest
 
@@ -98,3 +99,53 @@ def test_registers_both_progress_callbacks(tmp_path, monkeypatch):
     assert "on_train_epoch_end" in trainer.model.callbacks
     assert "on_fit_epoch_end" in trainer.model.callbacks
     assert trainer.model.callbacks["on_fit_epoch_end"] == []
+
+
+# ── on_fit_epoch_end metric surfacing (val loss + mAP + lr) ──────────────────
+
+def _fit_trainer(metrics, lr={"lr/pg0": 0.0012}):
+    return SimpleNamespace(epoch=2, epochs=10, metrics=metrics, lr=lr)
+
+
+def _emit_fit_line(tmp_path, metrics, lr={"lr/pg0": 0.0012}):
+    trainer = yt.YOLOTrainer(str(tmp_path), None)
+    out = []
+    trainer.progress_signal.connect(out.append)
+    trainer.on_fit_epoch_end(_fit_trainer(metrics, lr))
+    return out[-1] if out else ""
+
+
+def test_fit_line_parenthesized_map_keys(qtbot, tmp_path):
+    # Ultralytics' in-memory trainer.metrics uses "(B)"-suffixed mAP keys.
+    line = _emit_fit_line(tmp_path, {
+        "val/box_loss": 0.59532,
+        "metrics/mAP50(B)": 0.34212,
+        "metrics/mAP50-95(B)": 0.28817,
+    })
+    assert "Epoch 3/10" in line
+    assert "val_box_loss=0.5953" in line
+    assert "mAP50=0.3421" in line and "mAP50-95=0.2882" in line
+    assert "lr=1.20e-03" in line
+
+
+def test_fit_line_paren_stripped_map_keys(qtbot, tmp_path):
+    # Real MLflow-store form (parens stripped) — must still be surfaced.
+    line = _emit_fit_line(tmp_path, {
+        "val/box_loss": 0.59532,
+        "metrics/mAP50B": 0.34212,
+        "metrics/mAP50-95B": 0.28817,
+    })
+    assert "mAP50=0.3421" in line and "mAP50-95=0.2882" in line
+
+
+def test_fit_line_segmentation_surfaces_seg_loss(qtbot, tmp_path):
+    line = _emit_fit_line(tmp_path, {
+        "val/box_loss": 0.5, "val/seg_loss": 0.31, "metrics/mAP50(M)": 0.4,
+    })
+    assert "val_seg_loss=0.3100" in line and "mAP50=0.4000" in line
+
+
+def test_fit_line_no_crash_on_empty_metrics(qtbot, tmp_path):
+    # Defensive: missing metrics / lr must never raise; nothing meaningful to show.
+    line = _emit_fit_line(tmp_path, {}, lr=None)
+    assert line == ""  # only the epoch tag would remain → not emitted

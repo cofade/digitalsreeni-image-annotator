@@ -83,6 +83,10 @@ class ImageAnnotator(QMainWindow):
         self.image_paths = {}
         self.loaded_json = None
         self.class_mapping = {}
+        # Per-class keypoint schema for pose classes (issue #35). Keyed by
+        # class name; a class is a "pose class" iff it has an entry here.
+        # value: {"names": [...], "skeleton": [[a, b], ...], "flip_idx": [...]}
+        self.keypoint_schemas = {}
         self.editing_mode = False
         self.current_slice = None
         self.slices = []
@@ -198,6 +202,8 @@ class ImageAnnotator(QMainWindow):
         il.deleteSelectionRequested.connect(ac.delete_selected_annotations)
         il.finishPolygonRequested.connect(ac.finish_polygon)
         il.finishRectangleRequested.connect(ac.finish_rectangle)
+        il.finishKeypointsRequested.connect(ac.finish_keypoint)
+        il.keypointEditCommitted.connect(ac.commit_keypoint_edit)
 
         # Class
         il.classRequested.connect(cc.add_class)
@@ -781,6 +787,7 @@ class ImageAnnotator(QMainWindow):
         self.class_list.clear()
         self.image_label.class_colors.clear()
         self.class_mapping.clear()
+        self.keypoint_schemas.clear()
 
         # Reset DINO state
         self.dino_class_table.clear_classes()
@@ -949,6 +956,7 @@ class ImageAnnotator(QMainWindow):
             "rectangle": self.rectangle_button,
             "paint_brush": self.paint_brush_button,
             "eraser": self.eraser_button,
+            "keypoint": self.keypoint_button,
             "sam_box": self.sam_box_button,
             "sam_points": self.sam_points_button,
         }
@@ -1024,12 +1032,32 @@ class ImageAnnotator(QMainWindow):
             self.rectangle_button: "rectangle",
             self.paint_brush_button: "paint_brush",
             self.eraser_button: "eraser",
+            self.keypoint_button: "keypoint",
         }
+
+        # The keypoint tool needs a pose schema on the current class (#35). Only
+        # gate activation — unchecking must always fall through to deactivate, or
+        # button state and current_tool would drift on a schemaless class.
+        if (
+            sender is self.keypoint_button
+            and sender.isChecked()
+            and self.current_class not in self.keypoint_schemas
+        ):
+            QMessageBox.warning(
+                self,
+                "No Keypoint Schema",
+                "Define a keypoint schema for this class first "
+                "(right-click the class → Define Keypoint Schema).",
+            )
+            sender.setChecked(False)
+            return
 
         if sender.isChecked():
             self.activate_tool(tool_for_button.get(sender))
             if sender in (self.paint_brush_button, self.eraser_button):
                 self.image_label.setFocus()  # paint/eraser need key focus
+            elif sender is self.keypoint_button:
+                self.image_label.setFocus()  # keypoint needs key focus (Enter/Backspace)
         else:
             self.activate_tool(None)
 

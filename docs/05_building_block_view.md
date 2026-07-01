@@ -43,7 +43,8 @@ src/digitalsreeni_image_annotator/
 	│       ├── rectangle_tool.py
 	│       ├── polygon_tool.py
 	│       ├── paint_tool.py
-	│       └── eraser_tool.py
+	│       ├── eraser_tool.py
+	│       └── keypoint_tool.py       # KeypointTool - pose placement (ADR-029, #35)
 	├── controllers/                   # Project/Image/SAM/DINO/YOLO/Annotation/Class
 	├── inference/                     # sam_utils.py, dino_utils.py
 	│   ├── sam_utils.py
@@ -66,6 +67,7 @@ src/digitalsreeni_image_annotator/
 all_annotations: dict[str, list]    # {filename: [annotation_dicts]}
 all_images: list[str]               # List of loaded image filenames
 class_mapping: dict[str, int]       # {class_name: class_id}
+keypoint_schemas: dict[str, dict]   # {class_name: {names, skeleton, flip_idx}} pose classes (ADR-029, #35)
 image_paths: dict[str, str]         # {filename: absolute_path}
 image_dimensions: dict              # Multi-dimensional image metadata
 image_slices: dict                  # Extracted slices from stacks
@@ -342,6 +344,22 @@ Each tool is a standalone dialog/window:
     "category": "class_name"
 }
 ```
+
+**Keypoint / pose instance** (ADR-029, #35) — one instance of a pose class's
+K keypoints, no `segmentation` key (the discriminator that routes area/detail/
+render):
+```python
+{
+    "keypoints": [x1, y1, v1, x2, y2, v2, ...],  # flat [x,y,v]*K, COCO order
+    "num_keypoints": <count of points with v > 0>,
+    "bbox": [x, y, width, height],               # instance box (resizable)
+    "category_name": "person", "category_id": 1, "number": 1,
+}
+```
+The per-class schema (ordered point names, skeleton edges, flip_idx) lives in
+`ImageAnnotator.keypoint_schemas` and is embedded on each `classes[]` entry in
+the `.iap` file. Pure validation is in `core/keypoint_schema.py`; the editor is
+`dialogs/keypoint_schema_dialog.py::KeypointSchemaDialog`.
 
 ### Multi-dimensional Image Handling
 

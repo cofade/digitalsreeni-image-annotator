@@ -1278,6 +1278,94 @@ math/bookkeeping is unit-tested without torch, Qt, or a real run
 
 ---
 
+## ADR-029: Keypoint / Pose Annotation — Per-Class Schema, COCO Instance Model, 3-State Visibility
+
+**Status**: Accepted (issue bnsreenu#35, PR-1 of 3)
+
+**Context**: The app annotated polygons, rectangles, and paint masks (+ SAM/DINO) but
+had no way to place **keypoints** — the primitive for pose estimation and landmark
+detection. "Keypoint annotation" can mean standalone points or full COCO/YOLO-pose
+instances; the maximal target was chosen: per-class ordered named keypoints + a
+skeleton, one annotation = one K-point instance tied to a bounding box, COCO 3-state
+visibility, and (later PRs) COCO/YOLO-pose export-import + YOLO-pose training. This PR
+(PR-1) covers annotate + persist + render only.
+
+**Decision**:
+
+- **One instance = one annotation, flat `[x,y,v]*K` + stored `bbox`.** A pose instance
+  is stored like any other annotation in `all_annotations[image][class][]`:
+  `{"keypoints": [x1,y1,v1, …], "num_keypoints": <v>0 count>, "bbox": [x,y,w,h],
+  "category_id", "category_name", "number"}`. The flat triple list mirrors COCO
+  exactly, so it round-trips through `.iap` via `image_utils.convert_to_serializable`
+  with **zero** save/load code. **Absence of a `segmentation` key is the load-bearing
+  discriminator**: `calculate_area` falls to the bbox branch, the Detail-% spin
+  auto-disables, and `draw_annotations` routes to the keypoint branch (added *before*
+  the `bbox` branch, since an instance also carries a bbox).
+- **`v` is the COCO 3-state enum** (0 = not labelled, 1 = labelled+occluded,
+  2 = labelled+visible) — identical to YOLO-pose, so no remap on export. The bbox is
+  **stored, not derived**, so `_annotation_bbox`, `calculate_area`, click-selection,
+  and the #40 resize handles all work unchanged; `_keypoint_bounds` is a fallback only
+  for imports that omit a box. `num_keypoints` is recomputed on every edit.
+- **Per-class schema, not per-instance.** COCO requires all instances of a category to
+  share one keypoint set, so the schema lives in `main_window.keypoint_schemas`
+  (`{class_name: {"names", "skeleton", "flip_idx"}}`), **not** on the annotation. A
+  class is a "pose class" iff it has a schema. The schema is embedded on each `classes[]`
+  entry in `.iap` (mirroring `dino_config`'s validate-on-load robustness — malformed
+  schemas are dropped with a print, never crash; old projects load unchanged with an
+  empty store). `flip_idx` (h-flip partner per point) is app-only for COCO but required
+  by YOLO-pose; pure validation lives in `core/keypoint_schema.py` so it's unit-testable.
+- **Guided in-order placement tool.** `KeypointTool(ToolHandler)` places points in
+  schema order: left-click = visible (v2), right-click / Shift+left = occluded (v1),
+  auto-finish at K, Enter finishes early (remaining points padded v0), Backspace goes
+  back, Esc discards. Because the manual-tool dispatch is left-button-only, the tool
+  short-circuits `mousePressEvent` to accept both buttons (mirroring `sam_points`). The
+  in-progress overlay renders for free (paintEvent iterates all handlers).
+- **Editing reuses the #40 selection-handle path, not double-click** (double-click is
+  segmentation-specific). A new edit `kind="kpt"` makes the instance **box transform the
+  whole pose** (scale/translate points + box together, like a polygon's box), while a
+  separate single-point drag (`editing_keypoint`) moves one keypoint; right-click a
+  committed point toggles its visibility (2↔1). Both push an undo baseline at gesture
+  start and commit via `keypointEditCommitted` → `commit_keypoint_edit` (ADR-026).
+- **Guards.** Keypoint instances are rejected from **merge** (no mergeable geometry —
+  they'd be silently deleted) and from cross-schema **change-class** (a normal
+  annotation can't become a pose instance and vice versa; a keypoint instance only
+  moves to a pose class with an identical `names` list). The schema-definition dialog
+  locks the keypoint count K once instances exist (only K can corrupt them).
+- **Area = bbox area (not 0).** `calculate_area` returns the stored box's `w*h` for a
+  keypoint instance — deliberate, so sort-by-area behaves consistently with imported
+  bbox annotations rather than dumping all poses to the end.
+
+**Why pure helpers** (`core/keypoint_schema.py`, `utils.clamp_keypoints`,
+`ImageLabel._keypoint_bounds/_scale_keypoints/_translate_keypoints`): schema
+validation, clamping (ADR-024 bounds enforcement extended to keypoints), and the affine
+geometry are unit-tested without Qt or a model (`test_keypoint_schema.py`,
+`test_keypoint_geometry.py`, `test_utils.py`); the tool logic via a fake-context
+`ImageLabel` (`test_keypoint_tool.py`); the controller/persistence end-to-end on a real
+offscreen window (`test_keypoint_controller.py`).
+
+**Alternatives considered**:
+- *Standalone labeled points* — rejected for this issue: the user wanted COCO/YOLO-pose,
+  which needs the ordered, fixed-K, skeleton-bearing instance model.
+- *Per-instance schema* — rejected: COCO mandates one schema per category; per-class
+  storage enforces it and keeps instances small.
+- *Double-click vertex editing (as polygons use)* — rejected: it's bound to
+  `start_polygon_edit`; the #40 handle path generalizes cleanly to a `kpt` kind.
+- *Graphical skeleton editor* — deferred; a list-based dialog ships first (lowest risk).
+
+**Consequences**:
+- ✅ Pose classes can be defined, annotated, edited, saved/reloaded; the data model is
+  COCO/YOLO-pose-shaped for the export-import (PR-2) and training (PR-3) phases.
+- ⚠️ Finishing early pads not-yet-placed points with v=0 at the origin; they don't
+  render and (in PR-1) can't be relabelled via right-click (only v>0 points are
+  hit-testable). Acceptable — v=0 means "not labelled" per COCO.
+- ⚠️ Old builds opening a project with keypoint instances preserve but don't render them
+  (the old `if/elif` ignores the key); the schema and instances survive a save.
+
+This builds on **ADR-022/023** (canvas selection + #40 handle editing), **ADR-024**
+(bounds clamping), and **ADR-026** (snapshot undo) — see those for the machinery reused.
+
+---
+
 ## Decisions Under Consideration
 
 ### Consider pytest-qt for Utility Testing

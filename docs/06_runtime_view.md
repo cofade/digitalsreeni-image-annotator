@@ -135,6 +135,41 @@ One shape selected → handles are grab targets (hover shows resize/move cursors
 Polygon vertex edits (double-click) are likewise clamped into the image on Enter.
 See ADR-023 (shape editing) and ADR-024 (bounds enforcement).
 
+## Placing a Keypoint / Pose Instance (issue #35, ADR-029)
+
+A "pose class" first needs a keypoint schema (right-click the class → **Define
+Keypoint Schema** → ordered names + skeleton). Then the Keypoint tool places one
+instance's K points **in schema order**:
+
+```
+Define schema on the class (names, skeleton, flip_idx) → keypoint_schemas[class]
+    │
+Activate Keypoint tool (gated: warns if the current class has no schema)
+    │
+Place points in order:
+    ├─ left-click       → next point VISIBLE (v=2)
+    ├─ right / Shift+left → next point OCCLUDED (v=1)
+    ├─ Backspace        → remove the last placed point (go back)
+    ├─ auto-finish at K  ─┐
+    └─ Enter (finish early: pad remaining points with v=0) ─┐
+                                                            │
+    KeypointTool.finishKeypointsRequested ──────────────────┘
+        └─> AnnotationController.finish_keypoint():
+            record_history() → build {keypoints, num_keypoints, bbox, category}
+            → clamp into image → add_annotation_to_list → save → autosave
+    │
+Rendering: draw_annotations "keypoints" branch — skeleton (labelled points only) +
+           markers coloured by visibility + faint instance box + label
+    │
+Editing (select the instance, idle mode):
+    ├─ drag a marker            → single-point move (editing_keypoint)
+    ├─ right-click a marker     → toggle visible ↔ occluded
+    ├─ drag a box handle / inside → transform the WHOLE pose (kind="kpt")
+    └─ commit → keypointEditCommitted → commit_keypoint_edit (save + undo, ADR-026)
+```
+
+Merge and cross-schema change-class are blocked for keypoint instances. See ADR-029.
+
 ## Adjusting Mask Complexity — Detail % (issue #24)
 
 The Annotations table carries a per-row **Detail %** spinbox (100 = raw). Dialing

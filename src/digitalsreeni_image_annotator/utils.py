@@ -67,6 +67,19 @@ def clamp_segmentation(segmentation, width, height):
     return clamped
 
 
+def clamp_keypoints(keypoints, width, height):
+    """Clamp every keypoint of a flat ``[x1, y1, v1, x2, y2, v2, ...]`` list into
+    the image rectangle ``[0, width] x [0, height]``, leaving the visibility flag
+    untouched. Per-coordinate and count-preserving (mirrors
+    :func:`clamp_segmentation`) so a dragged point can't poison saved coords.
+    See ADR-024 / ADR-029. (issue #35)"""
+    clamped = list(keypoints)
+    for i in range(0, len(clamped) - 2, 3):
+        clamped[i] = min(max(clamped[i], 0), width)
+        clamped[i + 1] = min(max(clamped[i + 1], 0), height)
+    return clamped
+
+
 def clamp_bbox(bbox, width, height):
     """Trim a ``[x, y, w, h]`` box to the image rectangle by clamping each
     corner independently, keeping it rectangular and at least 1x1. This is the

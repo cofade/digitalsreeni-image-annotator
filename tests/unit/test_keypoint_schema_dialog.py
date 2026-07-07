@@ -65,3 +65,63 @@ def test_reject_duplicate_names(dialog, monkeypatch):
     )
     d._on_accept()
     assert d.get_schema() is None and warned
+
+
+def test_reject_non_reciprocal_flip_partners(dialog, monkeypatch):
+    # Build a 3-cycle a->b->c->a (valid bijection, but not self-inverse: a
+    # flips to b, yet b doesn't flip back to a). sanitize_schema would
+    # otherwise silently reset ALL flip partners to identity with no warning;
+    # the dialog must instead refuse to close and tell the user why.
+    d = dialog({"names": ["a", "b", "c"], "skeleton": [], "flip_idx": [0, 1, 2]})
+    d.points_table.cellWidget(0, 1).setCurrentIndex(2)  # a's partner -> b
+    d.points_table.cellWidget(1, 1).setCurrentIndex(3)  # b's partner -> c
+    d.points_table.cellWidget(2, 1).setCurrentIndex(1)  # c's partner -> a
+    warned = []
+    monkeypatch.setattr(
+        "digitalsreeni_image_annotator.dialogs.keypoint_schema_dialog.QMessageBox.warning",
+        lambda *a, **k: warned.append(a),
+    )
+    d._on_accept()
+    assert d.get_schema() is None and warned
+
+
+# --- combo-label sync on a plain name edit (no add/remove/move in between) --
+#
+# _refresh_index_combos() only ran on add/remove/move, so typing a name into
+# an existing row left every OTHER row's flip-partner combo (and the skeleton
+# From/To combos) showing a bare index ("6") until some unrelated row op
+# happened to trigger a rebuild. itemChanged on the Name column now triggers
+# it directly.
+
+def test_typed_name_immediately_labels_other_flip_combo(dialog):
+    d = dialog(None)  # two blank default rows
+    d.points_table.item(0, 0).setText("nose")
+    combo = d.points_table.cellWidget(1, 1)  # row 1's flip-partner combo
+    assert combo.itemText(1) == "1: nose"  # index 0 = "self", index 1 = point 1
+
+
+def test_typed_name_immediately_labels_skeleton_combo(dialog):
+    d = dialog(None)
+    d._add_edge()  # edge between the two default blank points (0, 1)
+    d.points_table.item(0, 0).setText("nose")
+    from_combo = d.skeleton_table.cellWidget(0, 0)
+    assert from_combo.itemText(0) == "1: nose"
+
+
+def test_renaming_last_added_point_labels_earlier_rows(dialog):
+    # Mirrors the reported bug: name the newest row and check an EARLIER row's
+    # flip-partner combo already shows it, with no add/remove/move in between.
+    d = dialog(None)
+    d._add_point()
+    d.points_table.item(2, 0).setText("shoulder")
+    combo = d.points_table.cellWidget(0, 1)  # row 0's flip-partner combo
+    assert combo.itemText(3) == "3: shoulder"
+
+
+def test_renaming_does_not_disturb_current_selection(dialog):
+    d = dialog(None)
+    d._add_point()
+    combo = d.points_table.cellWidget(0, 1)
+    combo.setCurrentIndex(2)  # select point 2 (0-based index 1) as flip partner
+    d.points_table.item(2, 0).setText("shoulder")
+    assert combo.currentIndex() == 2  # selection preserved through the rebuild

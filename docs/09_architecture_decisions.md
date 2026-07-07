@@ -1322,10 +1322,14 @@ visibility, and (later PRs) COCO/YOLO-pose export-import + YOLO-pose training. T
   in-progress overlay renders for free (paintEvent iterates all handlers).
 - **Editing reuses the #40 selection-handle path, not double-click** (double-click is
   segmentation-specific). A new edit `kind="kpt"` makes the instance **box transform the
-  whole pose** (scale/translate points + box together, like a polygon's box), while a
-  separate single-point drag (`editing_keypoint`) moves one keypoint; right-click a
-  committed point toggles its visibility (2↔1). Both push an undo baseline at gesture
-  start and commit via `keypointEditCommitted` → `commit_keypoint_edit` (ADR-026).
+  whole pose** (scale/translate points + box together, like a polygon's box) via the
+  existing `bbox_edit` machinery — it commits via `bboxEditCommitted` → `commit_bbox_edit`,
+  same as a bbox/segmentation resize. A **separate** single-point drag (`editing_keypoint`)
+  moves one keypoint, and a right-click on a committed point toggles its visibility
+  (2↔1) — both of *these* push an undo baseline at gesture start and commit via
+  `keypointEditCommitted` → `commit_keypoint_edit` (ADR-026). Not-labelled (v=0) points
+  are skipped by `_scale_keypoints`/`_translate_keypoints` and stay at `(0,0)`, since
+  COCO/YOLO-pose require that invariant.
 - **Guards.** Keypoint instances are rejected from **merge** (no mergeable geometry —
   they'd be silently deleted) and from cross-schema **change-class** (a normal
   annotation can't become a pose instance and vice versa; a keypoint instance only

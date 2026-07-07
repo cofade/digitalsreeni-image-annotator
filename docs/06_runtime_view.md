@@ -162,10 +162,15 @@ Rendering: draw_annotations "keypoints" branch — skeleton (labelled points onl
            markers coloured by visibility + faint instance box + label
     │
 Editing (select the instance, idle mode):
-    ├─ drag a marker            → single-point move (editing_keypoint)
-    ├─ right-click a marker     → toggle visible ↔ occluded
-    ├─ drag a box handle / inside → transform the WHOLE pose (kind="kpt")
-    └─ commit → keypointEditCommitted → commit_keypoint_edit (save + undo, ADR-026)
+    ├─ drag a marker              → single-point move (editing_keypoint)
+    │      commit → keypointEditCommitted → commit_keypoint_edit
+    ├─ right-click a marker       → toggle visible ↔ occluded
+    │      commit → keypointEditCommitted → commit_keypoint_edit
+    └─ drag a box handle / inside → transform the WHOLE pose (kind="kpt",
+           the existing #40 bbox_edit machinery — _scale_keypoints /
+           _translate_keypoints instead of _scale_segmentation)
+           commit → bboxEditCommitted → commit_bbox_edit
+    (both commit paths: save + undo, ADR-026)
 ```
 
 Merge and cross-schema change-class are blocked for keypoint instances. See ADR-029.

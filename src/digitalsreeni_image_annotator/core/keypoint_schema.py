@@ -82,8 +82,20 @@ def sanitize_schema(schema):
     return {"names": names, "skeleton": skeleton, "flip_idx": flip_idx}
 
 
+def is_involution(flip_idx):
+    """True iff `flip_idx` is a self-inverse permutation of 0..len-1 — the
+    shape a horizontal-flip mapping must have (flipping twice returns the
+    original point). A permutation that isn't self-inverse (e.g. a 3-cycle)
+    is nonsensical as a flip map even though it's a valid bijection."""
+    k = len(flip_idx)
+    if sorted(flip_idx) != list(range(k)):
+        return False  # not even a permutation (duplicate or out-of-range target)
+    return all(flip_idx[flip_idx[i]] == i for i in range(k))
+
+
 def _sanitize_flip_idx(flip_idx, k):
-    """A length-K permutation of 0..K-1, or the identity if invalid."""
+    """A length-K self-inverse permutation of 0..K-1, or the identity if
+    invalid (including a permutation that isn't self-inverse)."""
     identity = list(range(k))
     if not isinstance(flip_idx, (list, tuple)) or len(flip_idx) != k:
         return identity
@@ -91,7 +103,7 @@ def _sanitize_flip_idx(flip_idx, k):
         values = [int(v) for v in flip_idx]
     except (TypeError, ValueError):
         return identity
-    if sorted(values) != identity:  # not a permutation of 0..K-1
+    if not is_involution(values):
         return identity
     return values
 

@@ -42,7 +42,11 @@ def _ready_canvas(window, image="img.png"):
     window.image_file_name = image
     window.current_slice = None
     window.all_annotations.setdefault(image, {})
-    window.image_label.annotations = window.all_annotations[image]
+    # Deep-copy, mirroring the real load_image_annotations (annotation_controller.py)
+    # — image_label.annotations and all_annotations[image] must be genuinely
+    # distinct objects, or a copy-vs-live selection bug (list-widget UserRole
+    # copies vs the live dict) can't surface in these tests.
+    window.image_label.annotations = copy.deepcopy(window.all_annotations[image])
     window.current_image = QImage(100, 100, QImage.Format.Format_RGB32)
     il = window.image_label
     il.original_pixmap = QPixmap(100, 100)
@@ -57,6 +61,14 @@ def _place(window, points):
     il.drawing_keypoints = True
     il.keypoint_next_index = len(points)
     window.annotation_controller.finish_keypoint()
+
+
+def _selected_data(window):
+    # The annotations widget is a QTableWidget; selection is per-row, with the
+    # annotation dict in column 0's UserRole. Dedupe selected cells to rows.
+    tbl = window.annotation_list
+    rows = sorted({idx.row() for idx in tbl.selectedIndexes()})
+    return [tbl.item(r, 0).data(Qt.ItemDataRole.UserRole) for r in rows]
 
 
 # --- placement --------------------------------------------------------------
@@ -124,6 +136,32 @@ def test_right_click_toggle_visibility(window):
     assert window.all_annotations["img.png"]["person"][0]["keypoints"][2] == 1  # 2 -> 1
     il._toggle_keypoint_visibility(il._live_annotation(live), 0)
     assert window.all_annotations["img.png"]["person"][0]["keypoints"][2] == 2  # 1 -> 2
+
+
+def test_list_selected_toggle_visibility_persists_and_stays_selected(window):
+    """Selecting via the annotation LIST (not the canvas) puts a value-equal
+    *copy* in highlighted_annotations (PyQt round-trips UserRole dicts as
+    copies). The toggle must still mutate the live object AND re-point
+    highlighted_annotations at it before committing — otherwise the post-commit
+    re-mirror can't value-match the (now-changed) stale copy, and the row
+    silently deselects instead of staying selected."""
+    _pose_class(window)
+    il = _ready_canvas(window)
+    _place(window, [(10, 20, 2), (30, 20, 2), (50, 20, 2)])
+    (live,) = window.all_annotations["img.png"]["person"]
+
+    window.annotation_list.selectRow(0)
+    window.annotation_controller.update_highlighted_annotations()
+    assert il.highlighted_annotations and il.highlighted_annotations[0] is not live
+
+    shape = il._single_selected_shape()      # the list copy (geometry)
+    live_obj = il._live_annotation(shape)    # press handler resolves to live
+    assert live_obj is live
+
+    il._toggle_keypoint_visibility(live_obj, 0)  # emits keypointEditCommitted
+
+    assert window.all_annotations["img.png"]["person"][0]["keypoints"][2] == 1
+    assert _selected_data(window) == [live]  # still selected after the rebuild
 
 
 # --- guards -----------------------------------------------------------------
@@ -289,3 +327,21 @@ def test_delete_removes_schema(window, monkeypatch):
     item = window.class_list.findItems("person", Qt.MatchFlag.MatchExactly)[0]
     window.class_controller.delete_class(item)
     assert "person" not in window.keypoint_schemas
+
+
+def test_switching_to_non_pose_class_deactivates_keypoint_tool(window):
+    # Activating Keypoint on "person" then selecting a schemaless class must
+    # deactivate the tool — otherwise every click silently no-ops with no
+    # feedback (the tool stays "active" but every press is rejected by the
+    # missing-schema guard in KeypointTool.on_mouse_press).
+    _pose_class(window, name="person")
+    window.add_class("cell")  # normal (non-pose) class
+    window.current_class = "person"
+    window.activate_tool("keypoint")
+    assert window.image_label.current_tool == "keypoint"
+
+    cell_item = window.class_list.findItems("cell", Qt.MatchFlag.MatchExactly)[0]
+    window.class_controller.on_class_selected(cell_item)
+
+    assert window.image_label.current_tool is None
+    assert not window.keypoint_button.isChecked()

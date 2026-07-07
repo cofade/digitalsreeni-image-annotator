@@ -1407,24 +1407,33 @@ class ImageLabel(QLabel):
 
     @staticmethod
     def _scale_keypoints(orig_kpts, old_aabb, new_aabb):
-        """Affine-scale every keypoint (x, y) from the old box to the new one,
-        leaving the visibility flag untouched. Mirrors _scale_segmentation so a
-        pose instance's box resizes the whole pose proportionally (#35)."""
+        """Affine-scale every LABELLED keypoint (x, y) from the old box to the
+        new one, leaving the visibility flag untouched. Mirrors
+        _scale_segmentation so a pose instance's box resizes the whole pose
+        proportionally (#35). Not-labelled points (v=0) are left at (0, 0) —
+        COCO/YOLO-pose expect v=0 to always carry (0, 0), and transforming a
+        padding point would plant a bogus but plausible-looking coordinate."""
         ox0, oy0, ox1, oy1 = old_aabb
         nx0, ny0, nx1, ny1 = new_aabb
         sx = (nx1 - nx0) / ((ox1 - ox0) or 1.0)
         sy = (ny1 - ny0) / ((oy1 - oy0) or 1.0)
         out = list(orig_kpts)
         for i in range(0, len(out) - 2, 3):
+            if orig_kpts[i + 2] <= 0:
+                continue
             out[i] = nx0 + (orig_kpts[i] - ox0) * sx
             out[i + 1] = ny0 + (orig_kpts[i + 1] - oy0) * sy
         return out
 
     @staticmethod
     def _translate_keypoints(orig_kpts, dx, dy):
-        """Shift every keypoint (x, y) by (dx, dy), keeping visibility (#35)."""
+        """Shift every LABELLED keypoint (x, y) by (dx, dy), keeping visibility
+        (#35). Not-labelled points (v=0) are left at (0, 0) — see
+        _scale_keypoints for why."""
         out = list(orig_kpts)
         for i in range(0, len(out) - 2, 3):
+            if orig_kpts[i + 2] <= 0:
+                continue
             out[i] = orig_kpts[i] + dx
             out[i + 1] = orig_kpts[i + 1] + dy
         return out
@@ -1700,6 +1709,10 @@ class ImageLabel(QLabel):
             return
         self.editBaselineRequested.emit()
         kps[3 * index + 2] = 1 if v == 2 else 2
+        # Point the selection at the live, mutated object (mirrors
+        # _commit_keypoint_drag / _commit_bbox_drag) so a list-selected
+        # (UserRole copy) instance doesn't go stale after the list rebuild.
+        self.highlighted_annotations = [live]
         self.keypointEditCommitted.emit()
         self.update()
 

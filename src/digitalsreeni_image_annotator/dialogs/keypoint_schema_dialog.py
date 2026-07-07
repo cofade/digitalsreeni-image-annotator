@@ -23,7 +23,7 @@ from PyQt6.QtWidgets import (
     QVBoxLayout,
 )
 
-from ..core.keypoint_schema import make_schema, sanitize_schema
+from ..core.keypoint_schema import is_involution, make_schema, sanitize_schema
 
 
 class KeypointSchemaDialog(QDialog):
@@ -45,6 +45,9 @@ class KeypointSchemaDialog(QDialog):
         self.setWindowTitle(f"Keypoint Schema — {class_name}")
         self.lock_k = lock_k
         self._result_schema = None
+        # Suppresses the itemChanged->refresh hook while _set_rows bulk-builds
+        # rows (each setItem would otherwise trigger its own full rebuild).
+        self._populating = False
 
         layout = QVBoxLayout(self)
 
@@ -59,6 +62,12 @@ class KeypointSchemaDialog(QDialog):
             1, QHeaderView.ResizeMode.ResizeToContents
         )
         layout.addWidget(self.points_table)
+        # A typed name must be reflected in every OTHER row's flip-partner combo
+        # and the skeleton From/To combos immediately — those combos only get
+        # rebuilt on add/remove/move, so without this a freshly-typed name shows
+        # as a bare index ("6") in other dropdowns until some unrelated row edit
+        # happens to trigger a rebuild.
+        self.points_table.itemChanged.connect(self._on_point_name_changed)
 
         point_btns = QHBoxLayout()
         self.add_point_btn = QPushButton("Add point")
@@ -124,9 +133,13 @@ class KeypointSchemaDialog(QDialog):
         """Rebuild both tables from raw (possibly mid-edit / unsanitized) arrays.
         Used by _populate and _move_point; must NOT sanitize, or empty names
         during editing would be dropped."""
-        self.points_table.setRowCount(0)
-        for name in names:
-            self._append_point_row(name)
+        self._populating = True  # each setItem below would otherwise re-trigger a full rebuild
+        try:
+            self.points_table.setRowCount(0)
+            for name in names:
+                self._append_point_row(name)
+        finally:
+            self._populating = False
         self._refresh_index_combos()
         for i, partner in enumerate(flip_idx):
             combo = self.points_table.cellWidget(i, 1)
@@ -195,6 +208,10 @@ class KeypointSchemaDialog(QDialog):
                 cur = combo.currentIndex()
                 idx = cur if 0 <= cur < n else 0
                 self._fill_point_combo(combo, selected=idx, include_self_label=False)
+
+    def _on_point_name_changed(self, item):
+        if item.column() == 0 and not self._populating:
+            self._refresh_index_combos()
 
     # ------------------------------------------------------------- row edits
     def _add_point(self):
@@ -271,6 +288,17 @@ class KeypointSchemaDialog(QDialog):
             return
         if len(set(names)) != len(names):
             QMessageBox.warning(self, "Keypoint Schema", "Keypoint names must be unique.")
+            return
+        # Flip partners must be reciprocal (flipping twice returns the original
+        # point) — sanitize_schema would otherwise silently reset ALL flip
+        # partners to identity with no warning, discarding the user's input.
+        if not is_involution(flip_idx):
+            QMessageBox.warning(
+                self,
+                "Keypoint Schema",
+                "Flip partners must be reciprocal: if A's partner is B, "
+                "B's partner must be A.",
+            )
             return
         try:
             self._result_schema = make_schema(names, skeleton, flip_idx)

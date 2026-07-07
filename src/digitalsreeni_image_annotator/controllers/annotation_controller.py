@@ -711,7 +711,12 @@ class AnnotationController(QObject):
         """Persist a single-keypoint drag or visibility toggle on a committed
         pose instance (#35). ImageLabel mutated the keypoints in place; recompute
         num_keypoints, refresh the list, push the gesture's undo baseline
-        (ADR-026), then re-mirror the selection so the instance stays selected."""
+        (ADR-026), then re-mirror the selection so the instance stays selected.
+
+        The recompute is a no-op for both current gestures (a drag only moves an
+        already-labelled point; a toggle only flips between v=1/v=2) — kept as a
+        defensive safety net so num_keypoints can't silently drift out of sync
+        with a future edit path that does change which points are labelled."""
         selected = list(self.mw.image_label.highlighted_annotations)
         for ann in selected:
             kps = ann.get("keypoints")

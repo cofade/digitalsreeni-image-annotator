@@ -46,3 +46,15 @@ def test_scale_keypoints_doubles_within_box_keeps_visibility():
     # Scale box (0,0,10,10) -> (0,0,20,20): every coord doubles, v untouched.
     out = ImageLabel._scale_keypoints([0, 0, 2, 10, 10, 1], (0, 0, 10, 10), (0, 0, 20, 20))
     assert out == [0, 0, 2, 20, 20, 1]
+
+
+def test_translate_keypoints_leaves_not_labelled_points_at_origin():
+    # A v=0 padding point must stay at (0, 0) — COCO/YOLO-pose require it, and
+    # transforming it would plant a bogus but plausible-looking coordinate.
+    out = ImageLabel._translate_keypoints([10, 20, 2, 0, 0, 0], 5, -5)
+    assert out == [15, 15, 2, 0, 0, 0]
+
+
+def test_scale_keypoints_leaves_not_labelled_points_at_origin():
+    out = ImageLabel._scale_keypoints([0, 0, 2, 0, 0, 0], (0, 0, 10, 10), (0, 0, 20, 20))
+    assert out == [0, 0, 2, 0, 0, 0]

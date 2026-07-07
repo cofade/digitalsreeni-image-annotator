@@ -258,6 +258,17 @@ class ClassController(QObject):
                 self.mw.disable_annotation_tools()
             else:
                 self.mw.enable_annotation_tools()
+
+            # The keypoint tool needs a pose schema on the current class; if
+            # the newly-selected class has none, deactivate rather than
+            # leaving the tool active-but-silently-inert (clicks would no-op
+            # with no feedback). check_unsaved_changes() above already
+            # committed/discarded any in-progress placement. (#35)
+            if (
+                self.mw.image_label.current_tool == "keypoint"
+                and self.mw.current_class not in self.mw.keypoint_schemas
+            ):
+                self.mw.activate_tool(None)
         else:
             self.mw.current_class = None
             self.mw.disable_annotation_tools()

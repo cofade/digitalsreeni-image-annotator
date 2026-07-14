@@ -413,6 +413,35 @@ except Exception as e:
     # Handle gracefully instead of crashing
 ```
 
+### YOLO-Pose Single-Schema-Per-Dataset (issue #35 PR-2)
+
+**Problem**: A YOLO-pose dataset's `data.yaml` has ONE global `kpt_shape`/
+`flip_idx`, not one per class — exporting a mix of pose classes with
+different K, or a pose class alongside a non-pose class, would silently
+produce inconsistent label-line token counts with no matching schema.
+
+**Solution** — validate before writing anything to disk, same
+`ValueError` → `QMessageBox.warning` surfacing as the YOLO model/data
+mismatch above:
+```python
+# io/export_formats.py
+def _pose_export_check(all_annotations, class_mapping, keypoint_schemas):
+    ...
+    if inconsistent or len(distinct_k) > 1 or non_pose_classes:
+        raise ValueError("YOLO-pose export requires every exported class "
+                          "to share exactly one keypoint schema (K) ...")
+    return k, flip_idx
+
+# controllers/io_controller.py
+try:
+    output_dir, yaml_path = export_yolo_v5plus(..., keypoint_schemas=mw.keypoint_schemas)
+except ValueError as e:
+    QMessageBox.warning(mw, "Export Error", str(e))
+    return
+```
+`_pose_export_check` runs first, before `os.makedirs` — a rejected export
+leaves zero output on disk.
+
 ## Multi-dimensional Image Slicing
 
 ### Dimension Assignment

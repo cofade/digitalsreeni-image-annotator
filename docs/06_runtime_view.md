@@ -175,6 +175,52 @@ Editing (select the instance, idle mode):
 
 Merge and cross-schema change-class are blocked for keypoint instances. See ADR-029.
 
+## Exporting / Importing a Pose Class (issue #35 PR-2, ADR-029)
+
+```
+Export → COCO JSON:
+    export_coco_json(..., keypoint_schemas=mw.keypoint_schemas)
+        ├─ per pose class: category gains "keypoints" (names), "skeleton"
+        │      (0-based → 1-based per COCO spec), "flip_idx" (app extension,
+        │      kept 0-based)
+        └─ per instance: create_coco_annotation() checks "keypoints" in ann
+               FIRST (before segmentation/bbox) → keypoints/num_keypoints/bbox,
+               no "segmentation" key
+
+Export → YOLO (v5+):
+    export_yolo_v5plus(..., keypoint_schemas=mw.keypoint_schemas)
+        ├─ _pose_export_check() scans the annotations actually being exported
+        │      ├─ no keypoints anywhere → ordinary export, unchanged
+        │      ├─ exactly one (K, flip_idx) shared by every exported class
+        │      │      → proceed: label lines gain 3K trailing (x,y,v) tokens,
+        │      │        data.yaml gains kpt_shape:[K,3] + flip_idx
+        │      └─ >1 distinct K, or a pose class mixed with a non-pose class
+        │             → raise ValueError BEFORE any file is written
+        └─ io_controller.export_annotations catches ValueError →
+               QMessageBox.warning("Export Error", ...) (same pattern as the
+               existing YOLO import-error surfacing)
+
+Import (COCO or YOLO v5+):
+    import_coco_json() / import_yolo_v5plus() → uniformly return
+        (annotations, image_info, keypoint_schemas) — {} where nothing recovered
+            ├─ COCO: schema recovered per category carrying "keypoints"
+            │      (skeleton 1-based → 0-based; flip_idx read straight through)
+            └─ YOLO-pose: one schema (generic kp0..kp{K-1} names, no skeleton)
+                   from data.yaml's kpt_shape/flip_idx, applied to EVERY class
+                   in `names` (kpt_shape is dataset-global, not per-class)
+    │
+    io_controller.import_annotations():
+        ├─ _rebuild_imported_annotation(ann, ...) — a keypoint-shaped result
+        │      gets a FULLY SEPARATE dict (no "segmentation"/"type" keys at
+        │      all), never a shared base dict with those keys set to None.
+        │      Existence-only checks elsewhere ("segmentation" in annotation,
+        │      not a None-guard — draw_annotations, start_polygon_edit,
+        │      eraser_tool.py) would otherwise misfire on a None-valued key.
+        └─ recovered schemas registered into mw.keypoint_schemas via
+               sanitize_schema() (malformed → dropped with a print, same
+               pattern as project load)
+```
+
 ## Adjusting Mask Complexity — Detail % (issue #24)
 
 The Annotations table carries a per-row **Detail %** spinbox (100 = raw). Dialing

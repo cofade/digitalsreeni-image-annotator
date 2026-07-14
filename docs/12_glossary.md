@@ -44,7 +44,17 @@ absence routes area/detail/render. Modelled on the COCO keypoint annotation.
 The per-class definition of a pose class: ordered point **names**, **skeleton** edges,
 and **flip_idx**. Stored in `ImageAnnotator.keypoint_schemas` (one schema per class,
 per the COCO rule) and embedded in the `.iap` project on each class entry. Validated by
-`core/keypoint_schema.py`; edited via the Keypoint Schema dialog.
+`core/keypoint_schema.py`; edited via the Keypoint Schema dialog. On COCO export
+(issue #35 PR-2) it becomes a category's `"keypoints"` (names) / `"skeleton"`
+(1-based) / `"flip_idx"` (app extension, 0-based) fields; on YOLO-pose export it
+becomes `data.yaml`'s dataset-global `kpt_shape` + `flip_idx`.
+
+### kpt_shape
+The YOLO-pose `data.yaml` key `[K, 3]` declaring the dataset's keypoint count and
+per-point field width (x, y, v) — one value for the **whole dataset**, not per class
+(issue #35 PR-2). `export_yolo_v5plus` refuses to write a dataset whose exported
+classes would need more than one distinct `kpt_shape`. See
+[`_pose_export_check`](08_crosscutting_concepts.md#yolo-pose-single-schema-per-dataset-issue-35-pr-2).
 
 ### Pose Class
 A class that carries a keypoint schema (i.e. `class_name in keypoint_schemas`). Normal

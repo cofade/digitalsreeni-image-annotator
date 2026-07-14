@@ -15,6 +15,7 @@ from PyQt6.QtGui import QColor
 from PyQt6.QtWidgets import QFileDialog, QInputDialog, QMessageBox
 
 from ..core.constants import default_class_color
+from ..core.keypoint_schema import sanitize_schema
 
 from ..io.export_formats import (
     export_coco_json,
@@ -43,6 +44,39 @@ def prompt_validation_split(parent):
     )
 
 
+def _rebuild_imported_annotation(ann, category_name, number):
+    """Rebuild one imported annotation into the app's internal dict shape,
+    keeping only known keys. A keypoint instance gets a FULLY SEPARATE shape
+    (no ``segmentation``/``type`` keys at all) rather than a shared base dict
+    with those keys conditionally added — several existence-only checks
+    elsewhere (``"segmentation" in annotation``, not a None-guard) in
+    ``image_label.py::draw_annotations``/``start_polygon_edit`` and
+    ``eraser_tool.py`` would misfire on a `None`-valued ``segmentation`` key,
+    blanking a pose instance's rendering or crashing on the next double-click
+    anywhere on the canvas. See ADR-029. (issue #35 PR-2)
+    """
+    if "keypoints" in ann:
+        return {
+            "keypoints": ann["keypoints"],
+            "num_keypoints": ann.get(
+                "num_keypoints",
+                sum(1 for j in range(2, len(ann["keypoints"]), 3) if ann["keypoints"][j] > 0),
+            ),
+            "bbox": ann.get("bbox", [0, 0, 0, 0]),
+            "category_id": ann["category_id"],
+            "category_name": category_name,
+            "number": number,
+        }
+    return {
+        "segmentation": ann.get("segmentation"),
+        "bbox": ann.get("bbox"),
+        "category_id": ann["category_id"],
+        "category_name": category_name,
+        "number": number,
+        "type": ann.get("type", "polygon"),
+    }
+
+
 def import_annotations(mw):
     if not mw.image_label.check_unsaved_changes():
         return
@@ -61,7 +95,11 @@ def import_annotations(mw):
         print(f"Selected file: {file_name}")
         json_dir = os.path.dirname(file_name)
         images_dir = os.path.join(json_dir, "images")
-        imported_annotations, image_info = import_coco_json(file_name, mw.class_mapping)
+        try:
+            imported_annotations, image_info, recovered_schemas = import_coco_json(file_name, mw.class_mapping)
+        except ValueError as e:
+            QMessageBox.warning(mw, "Import Error", str(e))
+            return
 
     elif import_format in ["YOLO (v4 and earlier)", "YOLO (v5+)"]:
         yaml_file, _ = QFileDialog.getOpenFileName(
@@ -73,7 +111,7 @@ def import_annotations(mw):
 
         print(f"Selected YAML file: {yaml_file}")
         try:
-            imported_annotations, image_info = process_import_format(
+            imported_annotations, image_info, recovered_schemas = process_import_format(
                 import_format, yaml_file, mw.class_mapping
             )
             yaml_dir = os.path.dirname(yaml_file)
@@ -157,14 +195,7 @@ def import_annotations(mw):
         for category_name, category_annotations in annotations.items():
             mw.all_annotations[image_name][category_name] = []
             for i, ann in enumerate(category_annotations, start=1):
-                new_ann = {
-                    "segmentation": ann.get("segmentation"),
-                    "bbox": ann.get("bbox"),
-                    "category_id": ann["category_id"],
-                    "category_name": category_name,
-                    "number": i,
-                    "type": ann.get("type", "polygon"),
-                }
+                new_ann = _rebuild_imported_annotation(ann, category_name, i)
                 mw.all_annotations[image_name][category_name].append(new_ann)
 
     for annotations in mw.all_annotations.values():
@@ -175,6 +206,17 @@ def import_annotations(mw):
                 mw.image_label.class_colors[category_name] = QColor(
                     default_class_color(new_id - 1)
                 )
+
+    # Register any keypoint schemas recovered from the import (COCO
+    # categories, or YOLO-pose's data.yaml kpt_shape/flip_idx). Defensive
+    # re-sanitize mirrors project_controller.py's load-time pattern.
+    # (issue #35 PR-2)
+    for class_name, schema in recovered_schemas.items():
+        sanitized = sanitize_schema(schema)
+        if sanitized is not None:
+            mw.keypoint_schemas[class_name] = sanitized
+        else:
+            print(f"  Skipped malformed keypoint schema recovered for class '{class_name}' during import.")
 
     print("Updating UI")
     mw.update_class_list()
@@ -260,6 +302,7 @@ def export_annotations(mw):
             mw.image_slices,
             output_dir,
             json_filename,
+            keypoint_schemas=mw.keypoint_schemas,
         )
         message = "Annotations have been exported successfully in COCO JSON format.\n"
         message += f"JSON file: {json_file}\nImages directory: {images_dir}"
@@ -278,15 +321,20 @@ def export_annotations(mw):
         message += f"Labels: {labels_dir}\nYAML: {yaml_path}\nValidation split: {val_split}%"
 
     elif export_format == "YOLO (v5+)":
-        output_dir, yaml_path = export_yolo_v5plus(
-            mw.all_annotations,
-            mw.class_mapping,
-            mw.image_paths,
-            mw.slices,
-            mw.image_slices,
-            file_name,
-            val_split,
-        )
+        try:
+            output_dir, yaml_path = export_yolo_v5plus(
+                mw.all_annotations,
+                mw.class_mapping,
+                mw.image_paths,
+                mw.slices,
+                mw.image_slices,
+                file_name,
+                val_split,
+                keypoint_schemas=mw.keypoint_schemas,
+            )
+        except ValueError as e:
+            QMessageBox.warning(mw, "Export Error", str(e))
+            return
         message = "Annotations have been exported successfully in YOLO (v5+) format.\n"
         message += f"Output directory: {output_dir}\nYAML: {yaml_path}\nValidation split: {val_split}%"
 

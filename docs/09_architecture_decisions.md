@@ -1280,7 +1280,7 @@ math/bookkeeping is unit-tested without torch, Qt, or a real run
 
 ## ADR-029: Keypoint / Pose Annotation — Per-Class Schema, COCO Instance Model, 3-State Visibility
 
-**Status**: Accepted (issue bnsreenu#35, PR-1 of 3)
+**Status**: Accepted (issue bnsreenu#35, PR-1 + PR-2 of 3)
 
 **Context**: The app annotated polygons, rectangles, and paint masks (+ SAM/DINO) but
 had no way to place **keypoints** — the primitive for pose estimation and landmark
@@ -1338,6 +1338,40 @@ visibility, and (later PRs) COCO/YOLO-pose export-import + YOLO-pose training. T
 - **Area = bbox area (not 0).** `calculate_area` returns the stored box's `w*h` for a
   keypoint instance — deliberate, so sort-by-area behaves consistently with imported
   bbox annotations rather than dumping all poses to the end.
+- **Export/import (PR-2).** COCO categories gain `keypoints`/`skeleton` (**1-based**,
+  per spec) plus an app-only `flip_idx` extension key (kept **0-based** — no COCO
+  precedent, and it's consumed only by our own importer / the PR-3 trainer, both
+  0-based; converting it would just add a pointless round-trip). `create_coco_annotation`
+  and `export_yolo_v5plus`'s per-annotation writer both check `"keypoints" in ann`
+  *before* segmentation/bbox, mirroring the rendering dispatch order — a pose instance
+  also carries a `bbox`, so checking bbox first would make the keypoints branch
+  unreachable. YOLO-pose (`data.yaml`: `kpt_shape: [K, 3]`, `flip_idx`) is
+  **dataset-global**, so `export_yolo_v5plus` refuses (`ValueError` → `QMessageBox`, via
+  `_pose_export_check`) a mix of >1 distinct `(K, flip_idx)` schema or a mix of pose and
+  non-pose classes among the annotations actually being written; detection is
+  data-driven (based on which annotations carry `keypoints`), not solely on
+  `keypoint_schemas`, so a caller that doesn't thread schemas through (e.g. the not-yet-
+  migrated PR-3 training call site) still gets a correct K. All four `io.import_formats`
+  entry points (`import_coco_json`, `import_yolo_v4`, `import_yolo_v5plus`, and
+  `process_import_format`'s pass-through) now uniformly return
+  `(annotations, image_info, keypoint_schemas)` — `{}` where nothing was recovered — so
+  `io_controller.py` has one contract regardless of format. YOLO-pose import applies its
+  one recovered schema (generic `kp0..kp{K-1}` names, no skeleton) to **every** class
+  declared in `data.yaml`'s `names`, not just classes observed with pose-shaped lines,
+  since `kpt_shape`/`flip_idx` are dataset-global. **The rebuild step in
+  `io_controller.import_annotations` (`_rebuild_imported_annotation`) builds a fully
+  separate dict shape for keypoint vs. non-keypoint annotations** — it must never attach
+  a `None`-valued `segmentation`/`type` key to a keypoint annotation. Several
+  existence-only checks (`"segmentation" in annotation`, not a truthiness/None guard) in
+  `image_label.py::draw_annotations`, `image_label.py::start_polygon_edit` (the
+  double-click handler, which iterates every annotation across every class), and
+  `widgets/tools/eraser_tool.py` would otherwise misfire: a pose instance would render
+  nothing, and any double-click anywhere on the canvas would raise
+  `TypeError: 'NoneType' object is not subscriptable` as soon as one keypoint instance
+  exists in the current image. `AnnotationController._keypoint_instance_bbox` was
+  relocated to `utils.keypoint_instance_bbox` (delegate kept for `finish_keypoint`) so
+  COCO import can reuse the same bbox-from-labelled-points fallback instead of a second
+  copy.
 
 **Why pure helpers** (`core/keypoint_schema.py`, `utils.clamp_keypoints`,
 `ImageLabel._keypoint_bounds/_scale_keypoints/_translate_keypoints`): schema
@@ -1358,12 +1392,16 @@ offscreen window (`test_keypoint_controller.py`).
 
 **Consequences**:
 - ✅ Pose classes can be defined, annotated, edited, saved/reloaded; the data model is
-  COCO/YOLO-pose-shaped for the export-import (PR-2) and training (PR-3) phases.
+  COCO/YOLO-pose-shaped, and PR-2 confirms it round-trips through both formats losslessly
+  (mod point names, which YOLO-pose doesn't carry). Training (PR-3) is still pending.
 - ⚠️ Finishing early pads not-yet-placed points with v=0 at the origin; they don't
   render and (in PR-1) can't be relabelled via right-click (only v>0 points are
   hit-testable). Acceptable — v=0 means "not labelled" per COCO.
 - ⚠️ Old builds opening a project with keypoint instances preserve but don't render them
   (the old `if/elif` ignores the key); the schema and instances survive a save.
+- ⚠️ A YOLO-pose dataset built outside this app that genuinely mixes pose and non-pose
+  classes, or hand-edits per-class `kpt_shape`, is out of scope — import applies one
+  recovered schema uniformly to every declared class, and export refuses to mix them.
 
 This builds on **ADR-022/023** (canvas selection + #40 handle editing), **ADR-024**
 (bounds clamping), and **ADR-026** (snapshot undo) — see those for the machinery reused.

@@ -1,5 +1,6 @@
 import json
 from PyQt6.QtGui import QImage
+from ..core.keypoint_schema import schema_k
 from ..utils import calculate_area, calculate_bbox
 import yaml
 import hashlib
@@ -16,9 +17,9 @@ from PIL import Image
 
 
 # Utility function to handle the COCO conversion for all export formats
-def convert_to_coco(all_annotations, class_mapping, image_paths, slices, image_slices):
+def convert_to_coco(all_annotations, class_mapping, image_paths, slices, image_slices, keypoint_schemas=None):
     with tempfile.TemporaryDirectory() as temp_dir:
-        json_file_path, images_dir = export_coco_json(all_annotations, class_mapping, image_paths, slices, image_slices, temp_dir)
+        json_file_path, images_dir = export_coco_json(all_annotations, class_mapping, image_paths, slices, image_slices, temp_dir, keypoint_schemas=keypoint_schemas)
         
         with open(json_file_path, 'r', encoding='utf-8') as f:
             coco_data = json.load(f)
@@ -27,10 +28,26 @@ def convert_to_coco(all_annotations, class_mapping, image_paths, slices, image_s
 
 
 
-def export_coco_json(all_annotations, class_mapping, image_paths, slices, image_slices, output_dir, json_filename=None):
+def _coco_category(name, cat_id, keypoint_schemas):
+    """A plain {id, name} category, plus COCO-keypoints fields for a pose
+    class. ``skeleton`` is 1-based per the COCO ``person_keypoints`` spec;
+    ``flip_idx`` has no COCO precedent and is kept 0-based (its only
+    consumers — this app's own importer and the PR-3 trainer — are
+    0-based, so converting it would just add a pointless round-trip).
+    (issue #35 PR-2)"""
+    cat = {"id": cat_id, "name": name}
+    schema = (keypoint_schemas or {}).get(name)
+    if schema:
+        cat["keypoints"] = list(schema["names"])
+        cat["skeleton"] = [[a + 1, b + 1] for a, b in schema["skeleton"]]
+        cat["flip_idx"] = list(schema["flip_idx"])
+    return cat
+
+
+def export_coco_json(all_annotations, class_mapping, image_paths, slices, image_slices, output_dir, json_filename=None, keypoint_schemas=None):
     coco_format = {
         "images": [],
-        "categories": [{"id": id, "name": name} for name, id in class_mapping.items()],
+        "categories": [_coco_category(name, id, keypoint_schemas) for name, id in class_mapping.items()],
         "annotations": []
     }
     
@@ -134,12 +151,26 @@ def create_coco_annotation(ann, image_id, annotation_id, class_name, class_mappi
         "iscrowd": 0
     }
     
-    if "segmentation" in ann:
+    if "keypoints" in ann:
+        # Checked before segmentation/bbox — a keypoint instance also
+        # carries a bbox, so bbox must not be checked first. No
+        # "segmentation" key: the app has no mask for a pose instance
+        # (ADR-029). (issue #35 PR-2)
+        flat = list(ann["keypoints"])
+        for i in range(2, len(flat), 3):
+            flat[i] = int(flat[i])  # pycocotools expects an int visibility flag
+        coco_ann["keypoints"] = flat
+        coco_ann["num_keypoints"] = int(ann.get(
+            "num_keypoints",
+            sum(1 for i in range(2, len(flat), 3) if flat[i] > 0),
+        ))
+        coco_ann["bbox"] = ann.get("bbox", [0, 0, 0, 0])
+    elif "segmentation" in ann:
         coco_ann["segmentation"] = [ann["segmentation"]]
         coco_ann["bbox"] = calculate_bbox(ann["segmentation"])
     elif "bbox" in ann:
         coco_ann["bbox"] = ann["bbox"]
-    
+
     return coco_ann
 
 
@@ -275,7 +306,69 @@ def export_yolo_v4(all_annotations, class_mapping, image_paths, slices, image_sl
 
 
 
-def export_yolo_v5plus(all_annotations, class_mapping, image_paths, slices, image_slices, output_dir, val_split=0):
+def _pose_export_check(all_annotations, class_mapping, keypoint_schemas):
+    """None for an ordinary (non-pose) export. Otherwise ``(K, flip_idx)`` —
+    the single schema every exported class must share. Raises ``ValueError``
+    if the exported data mixes more than one distinct K, or mixes pose and
+    non-pose classes: a YOLO-pose dataset's data.yaml has ONE global
+    kpt_shape/flip_idx, not one per class.
+
+    Detection is based on the actual ``keypoints`` key on each annotation
+    being exported, not solely on ``keypoint_schemas`` — so a caller that
+    omits ``keypoint_schemas`` (e.g. the PR-3 training dataset-prep call
+    site) still gets a correct K (flip_idx degrades to identity) instead of
+    writing pose-shaped label lines with no matching data.yaml key.
+    (issue #35 PR-2)
+    """
+    per_class_k = {}
+    non_pose_classes = set()
+    any_keypoints = False
+    for image_annotations in all_annotations.values():
+        for class_name, anns in image_annotations.items():
+            if class_name not in class_mapping or not anns:
+                continue
+            has_plain = False
+            for ann in anns:
+                if ann.get('keypoints'):
+                    any_keypoints = True
+                    per_class_k.setdefault(class_name, set()).add(len(ann['keypoints']) // 3)
+                else:
+                    has_plain = True
+            if has_plain:
+                non_pose_classes.add(class_name)
+
+    if not any_keypoints:
+        return None
+
+    inconsistent = {c: ks for c, ks in per_class_k.items() if len(ks) > 1}
+    distinct_k = {next(iter(ks)) for ks in per_class_k.values()}
+    if inconsistent or len(distinct_k) > 1 or non_pose_classes:
+        lines = [
+            f"  - {name}: K={next(iter(ks))}" + (" (also has non-keypoint instances)" if name in non_pose_classes else "")
+            for name, ks in per_class_k.items()
+        ]
+        msg = (
+            "YOLO-pose export requires every exported class to share exactly one "
+            "keypoint schema (K) — a dataset's data.yaml has a single global "
+            "kpt_shape, not one per class.\n\nPose classes found:\n" + "\n".join(lines)
+        )
+        purely_non_pose = non_pose_classes - set(per_class_k)
+        if purely_non_pose:
+            msg += "\n\nNon-pose classes with annotations (no keypoints): " + ", ".join(sorted(purely_non_pose))
+        msg += "\n\nExport only the pose class(es) that share one schema, or split the export."
+        raise ValueError(msg)
+
+    k = next(iter(distinct_k))
+    flip_idx = None
+    for class_name in per_class_k:
+        schema = (keypoint_schemas or {}).get(class_name)
+        if schema and schema_k(schema) == k:
+            flip_idx = list(schema["flip_idx"])
+            break
+    return k, (flip_idx or list(range(k)))
+
+
+def export_yolo_v5plus(all_annotations, class_mapping, image_paths, slices, image_slices, output_dir, val_split=0, keypoint_schemas=None):
     """
     Export annotations in YOLO v5+ format.
     Directory structure:
@@ -288,6 +381,10 @@ def export_yolo_v5plus(all_annotations, class_mapping, image_paths, slices, imag
             ├── train/
             └── val/
     """
+    # Validate before writing anything to disk — a rejected export must
+    # leave zero output (issue #35 PR-2).
+    pose_info = _pose_export_check(all_annotations, class_mapping, keypoint_schemas)
+
     # Create output directories with new structure
     images_train_dir = os.path.join(output_dir, 'images', 'train')
     images_val_dir = os.path.join(output_dir, 'images', 'val')
@@ -380,7 +477,23 @@ def export_yolo_v5plus(all_annotations, class_mapping, image_paths, slices, imag
                     continue
                 class_index = class_to_index[class_name]
                 for ann in class_annotations:
-                    if 'segmentation' in ann and ann['segmentation']:
+                    if 'keypoints' in ann and ann['keypoints']:
+                        # Checked first — a pose instance also carries a bbox
+                        # (issue #35 PR-2), matching the COCO ordering.
+                        flat = ann['keypoints']
+                        x, y, w, h = ann.get('bbox') or [0, 0, 0, 0]
+                        x_center = (x + w/2) / img_width
+                        y_center = (y + h/2) / img_height
+                        w_n = w / img_width
+                        h_n = h / img_height
+                        tokens = [f"{x_center:.6f}", f"{y_center:.6f}", f"{w_n:.6f}", f"{h_n:.6f}"]
+                        for i in range(0, len(flat), 3):
+                            tokens.append(f"{flat[i] / img_width:.6f}")
+                            tokens.append(f"{flat[i + 1] / img_height:.6f}")
+                            tokens.append(str(int(flat[i + 2])))
+                        f.write(f"{class_index} " + " ".join(tokens) + "\n")
+                        ann_lines += 1
+                    elif 'segmentation' in ann and ann['segmentation']:
                         polygon = ann['segmentation']
                         normalized_polygon = [coord / img_width if i % 2 == 0 else coord / img_height
                                            for i, coord in enumerate(polygon)]
@@ -411,6 +524,10 @@ def export_yolo_v5plus(all_annotations, class_mapping, image_paths, slices, imag
         'nc': len(names),
         'names': names
     }
+    if pose_info is not None:
+        k, flip_idx = pose_info
+        yaml_data['kpt_shape'] = [k, 3]
+        yaml_data['flip_idx'] = flip_idx
 
     # Save YAML file in the output directory
     yaml_path = os.path.join(output_dir, 'data.yaml')

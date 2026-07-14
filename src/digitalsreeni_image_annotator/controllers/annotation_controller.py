@@ -46,11 +46,13 @@ from ..core.constants import (
     ANNOT_COL_ID,
     default_class_color,
 )
+from ..io.export_formats import create_coco_annotation as _export_create_coco_annotation
 from ..utils import (
     calculate_area,
     calculate_bbox,
     clamp_bbox,
     clamp_keypoints,
+    keypoint_instance_bbox,
     simplify_polygon,
 )
 from .annotation_history import AnnotationHistory
@@ -73,21 +75,14 @@ class AnnotationController(QObject):
     # --- COCO conversion helper ---
 
     def create_coco_annotation(self, ann, image_id, annotation_id):
-        coco_ann = {
-            "id": annotation_id,
-            "image_id": image_id,
-            "category_id": ann["category_id"],
-            "area": calculate_area(ann),
-            "iscrowd": 0,
-        }
-
-        if "segmentation" in ann:
-            coco_ann["segmentation"] = [ann["segmentation"]]
-            coco_ann["bbox"] = calculate_bbox(ann["segmentation"])
-        elif "bbox" in ann:
-            coco_ann["bbox"] = ann["bbox"]
-
-        return coco_ann
+        """Delegate to the live io.export_formats implementation (issue #35
+        PR-2 review) — this method used to be a near-duplicate that had
+        drifted keypoint-blind. Reconstructs a single-entry class_mapping
+        from the ann's own category fields since callers here don't have
+        one handy."""
+        class_name = ann.get("category_name")
+        class_mapping = {class_name: ann["category_id"]}
+        return _export_create_coco_annotation(ann, image_id, annotation_id, class_name, class_mapping)
 
     # --- List widget updates ---
 
@@ -1233,18 +1228,9 @@ class AnnotationController(QObject):
     @staticmethod
     def _keypoint_instance_bbox(flat, width, height, margin=6):
         """Bounding box [x, y, w, h] around a pose instance's labelled (v>0)
-        points, padded by ``margin`` and clamped to the image when its size is
-        known. Falls back to a zero box if nothing is labelled."""
-        xs = [flat[i] for i in range(0, len(flat), 3) if flat[i + 2] > 0]
-        ys = [flat[i + 1] for i in range(0, len(flat), 3) if flat[i + 2] > 0]
-        if not xs or not ys:
-            return [0, 0, 0, 0]
-        x0, y0 = min(xs) - margin, min(ys) - margin
-        x1, y1 = max(xs) + margin, max(ys) + margin
-        bbox = [x0, y0, x1 - x0, y1 - y0]
-        if width is not None and height is not None:
-            bbox = clamp_bbox(bbox, width, height)
-        return bbox
+        points. Delegates to utils.keypoint_instance_bbox, which COCO import
+        also uses (issue #35 PR-2) — single source of truth."""
+        return keypoint_instance_bbox(flat, width, height, margin)
 
     def add_annotation_to_list(self, annotation):
         class_name = annotation["category_name"]

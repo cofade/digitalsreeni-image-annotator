@@ -359,7 +359,10 @@ render):
 The per-class schema (ordered point names, skeleton edges, flip_idx) lives in
 `ImageAnnotator.keypoint_schemas` and is embedded on each `classes[]` entry in
 the `.iap` file. Pure validation is in `core/keypoint_schema.py`; the editor is
-`dialogs/keypoint_schema_dialog.py::KeypointSchemaDialog`.
+`dialogs/keypoint_schema_dialog.py::KeypointSchemaDialog`. This shape also
+round-trips through COCO-keypoints and YOLO-pose export/import (issue #35
+PR-2) — see `io/export_formats.py`/`io/import_formats.py` and the ADR-029
+addendum.
 
 ### Multi-dimensional Image Handling
 

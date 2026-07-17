@@ -17,6 +17,7 @@ addressed from elsewhere as `main_window.X`, and `training_dialog` is
 referenced via `hasattr(self, "training_dialog")` to lazily initialize.
 """
 
+import copy
 import os
 
 import cv2
@@ -634,8 +635,67 @@ class YOLOController(QObject):
             scale_x = original_width / orig_width
             scale_y = original_height / orig_height
 
+            # A YOLO checkpoint is exclusively one task — pose models never
+            # also emit masks — so this is decided once for all results.
+            is_pose = getattr(self.mw.yolo_trainer.model, "task", None) == "pose"
+
             for result in results:
                 boxes = result.boxes
+
+                if is_pose:
+                    keypoints = result.keypoints
+                    if keypoints is None or len(result.boxes) == 0:
+                        continue
+                    for kpts, box in zip(keypoints, result.boxes):
+                        try:
+                            class_id = int(box.cls)
+                            class_name = self.mw.yolo_trainer.class_names[class_id]
+                            score = float(box.conf)
+
+                            xy = kpts.xy.cpu().numpy()[0]  # (K, 2) pixel coords, Ultralytics orig_img space
+                            flat = []
+                            for x, y in xy:
+                                # Ultralytics gives a per-point presence confidence, not a true
+                                # 3-state COCO occlusion signal, and the instance already passed
+                                # the box-level conf_threshold gate -- thresholding per point again
+                                # would just be noise dressed up as meaningful occlusion data.
+                                # Always mark visible (v=2); the user can hand-correct via the
+                                # existing right-click-to-toggle-visibility edit gesture on review.
+                                flat.extend([float(x) * scale_x, float(y) * scale_y, 2])
+
+                            x1, y1, x2, y2 = box.xyxy.cpu().numpy()[0]
+                            bbox = [x1 * scale_x, y1 * scale_y, (x2 - x1) * scale_x, (y2 - y1) * scale_y]
+
+                            temp_class_name = f"Temp-{class_name}"
+                            schema = self.mw.yolo_trainer.prediction_keypoint_schema
+                            if schema is not None and temp_class_name not in self.mw.keypoint_schemas:
+                                self.mw.keypoint_schemas[temp_class_name] = copy.deepcopy(schema)
+
+                            if temp_class_name not in temp_annotations:
+                                temp_annotations[temp_class_name] = []
+                            temp_annotations[temp_class_name].append({
+                                "keypoints": flat,
+                                # num_keypoints == K (all points), correct only
+                                # because every point is force-stamped v=2 above.
+                                # If the "always v=2" simplification is ever
+                                # relaxed to emit v=0, this must become the COCO
+                                # count of labelled (v>0) points instead.
+                                "num_keypoints": len(xy),
+                                "bbox": bbox,
+                                "category_name": temp_class_name,
+                                "score": score,
+                                "temp": True,
+                            })
+                        except IndexError:
+                            QMessageBox.warning(
+                                self.mw,
+                                "Class Mismatch",
+                                "There is a mismatch between the model and the YAML file classes. "
+                                "Please check that the YAML file corresponds to the loaded model.",
+                            )
+                            return
+                    continue  # a pose result has no masks; nothing else to do for it
+
                 masks = result.masks
 
                 if masks is None:

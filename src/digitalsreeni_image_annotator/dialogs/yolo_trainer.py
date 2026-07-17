@@ -7,6 +7,7 @@ import numpy as np
 from pathlib import Path
 from ..io.export_formats import export_yolo_v5plus
 from ..utils import models_base_dir
+from ..core.keypoint_schema import sanitize_schema
 
 
 from collections import deque
@@ -237,6 +238,10 @@ class YOLOTrainer(QObject):
         self.conf_threshold = 0.25
         self.stop_training = False
         self.class_names = None
+        # Reconstructed keypoint schema for the loaded prediction model (#35
+        # PR-3), set in load_prediction_model(); always present (None until a
+        # prediction model is loaded) so callers never need a hasattr guard.
+        self.prediction_keypoint_schema = None
         # Set by train_model() once a run finishes, so the controller can tell
         # the user where the checkpoint landed and offer it for prediction.
         self.last_saved_model_path = None
@@ -266,6 +271,7 @@ class YOLOTrainer(QObject):
             self.main_window.image_slices,
             self.dataset_path,
             val_split,
+            keypoint_schemas=self.main_window.keypoint_schemas,
         )
 
         yaml_path = Path(yaml_path)
@@ -346,7 +352,9 @@ class YOLOTrainer(QObject):
             # box_loss is always present (detection head); seg_loss only for
             # segmentation runs. Keys here carry no special chars, so match exact.
             for key, label in (("val/box_loss", "val_box_loss"),
-                               ("val/seg_loss", "val_seg_loss")):
+                               ("val/seg_loss", "val_seg_loss"),
+                               ("val/pose_loss", "val_pose_loss"),
+                               ("val/kobj_loss", "val_kobj_loss")):
                 val_loss = metrics.get(key)
                 if val_loss is not None:
                     parts.append(f"{label}={float(val_loss):.4f}")
@@ -442,6 +450,23 @@ class YOLOTrainer(QObject):
             # wrote (see _resolve_training_yaml for the data-root invariant).
             yaml_content = _resolve_training_yaml(yaml_dir, yaml_content)
 
+            model_task = getattr(self.model, "task", None)
+            yaml_is_pose = "kpt_shape" in yaml_content
+            if model_task == "pose" and not yaml_is_pose:
+                raise ValueError(
+                    "The loaded model is a pose model, but the prepared dataset has no "
+                    "keypoint annotations (no kpt_shape in data.yaml). Annotate at least "
+                    "one pose instance and re-run 'Prepare YOLO Dataset', or load a "
+                    "detection/segmentation model instead."
+                )
+            if model_task != "pose" and yaml_is_pose:
+                raise ValueError(
+                    "The prepared dataset contains keypoint (pose) annotations, but the "
+                    "loaded model is not a pose model. Load a '*-pose.pt' checkpoint (or "
+                    "a previously trained pose model), or re-prepare the dataset from a "
+                    "project without pose classes."
+                )
+
             # Create the val directory structure if it doesn't exist
             val_img_dir = yaml_dir / 'images' / 'val'
             val_label_dir = yaml_dir / 'labels' / 'val'
@@ -507,9 +532,29 @@ class YOLOTrainer(QObject):
             # and this yaml describes a *trained model*, not a dataset — it must
             # NOT carry train/val/path pointers (they'd be stale the moment the
             # dataset moves). Don't "helpfully" add them.
+            yaml_out_data = {"names": names, "nc": len(names)}
+            # Carry pose metadata (issue #35 PR-3) so a later prediction load can
+            # reconstruct a keypoint schema. Prefer the real, hand-authored schema
+            # (richer than YOLO-pose's bare K/flip_idx) when every trained class
+            # shares one identical schema in this session's main_window.keypoint_schemas;
+            # always fall back to bare kpt_shape/flip_idx so an externally-loaded pose
+            # yaml still degrades gracefully at prediction-load time.
+            try:
+                if self.yaml_path and Path(self.yaml_path).exists():
+                    with open(self.yaml_path, 'r', encoding='utf-8') as f:
+                        train_yaml = yaml.safe_load(f) or {}
+                    kpt_shape = train_yaml.get('kpt_shape')
+                    if kpt_shape:
+                        yaml_out_data['kpt_shape'] = kpt_shape
+                        yaml_out_data['flip_idx'] = train_yaml.get('flip_idx')
+                        schemas = [self.main_window.keypoint_schemas.get(n) for n in names.values()]
+                        if schemas and all(s is not None for s in schemas) and all(s == schemas[0] for s in schemas):
+                            yaml_out_data['keypoint_schema'] = schemas[0]
+            except Exception as exc:
+                print(f"Could not carry pose metadata into registered model yaml: {exc}")
             yaml_out = best.parent.parent / "data.yaml"
             with yaml_out.open("w", encoding="utf-8") as f:
-                yaml.dump({"names": names, "nc": len(names)}, f, default_flow_style=False)
+                yaml.dump(yaml_out_data, f, default_flow_style=False)
             self.last_saved_model_path = str(best)
             self.last_saved_yaml_path = str(yaml_out)
             print(f"Trained YOLO model registered: {best}")
@@ -651,10 +696,22 @@ class YOLOTrainer(QObject):
             
             if 'names' not in self.prediction_yaml:
                 raise ValueError("The YAML file does not contain a 'names' section for class names.")
-            
+
             self.class_names = self.prediction_yaml['names']
             print(f"Loaded class names: {self.class_names}")
-            
+
+            self.prediction_keypoint_schema = None
+            full_schema = self.prediction_yaml.get('keypoint_schema')
+            if full_schema:
+                self.prediction_keypoint_schema = sanitize_schema(full_schema)
+            elif self.prediction_yaml.get('kpt_shape'):
+                k = int(self.prediction_yaml['kpt_shape'][0])
+                self.prediction_keypoint_schema = sanitize_schema({
+                    "names": [f"kp{i}" for i in range(k)],
+                    "skeleton": [],
+                    'flip_idx': self.prediction_yaml.get('flip_idx'),
+                })
+
             # Verify that the number of classes in the YAML matches the model
             if len(self.class_names) != len(self.model.names):
                 mismatch_message = (f"Warning: Number of classes in YAML ({len(self.class_names)}) "
@@ -675,7 +732,7 @@ class YOLOTrainer(QObject):
         from ..core.torch_utils import resolve_torch_device
         device, _ = resolve_torch_device()
         if isinstance(input_data, (str, np.ndarray)):
-            results = self.model(input_data, task='segment', conf=self.conf_threshold, save=False, show=False, device=device)
+            results = self.model(input_data, conf=self.conf_threshold, save=False, show=False, device=device)
         else:
             raise ValueError("Invalid input type. Expected file path or numpy array.")
         

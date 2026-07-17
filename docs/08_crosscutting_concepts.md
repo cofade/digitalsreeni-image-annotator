@@ -572,6 +572,50 @@ Consequences this codebase has tripped over:
   slices either silently no-op'd or showed the first regular
   image's masks on a slice.
 
+### Two Temp-Annotation Mechanisms
+
+The name "temp annotation" refers to **two unrelated mechanisms** in
+this codebase. They look similar (both are pending, unsaved
+detections shown for accept/reject review) and are easy to confuse,
+but they live in different data structures, render through different
+code paths, and are reviewed through different UI. When touching
+prediction-review code, check which one you're actually in.
+
+**Mechanism A — `ImageLabel.temp_annotations` (a list).** Populated
+*only* by DINO's own single/batch detect-then-SAM flow (see above).
+Rendered by a dedicated `ImageLabel.draw_temp_annotations` method,
+which has no keypoints branch — it only understands `"segmentation"`
+and `"bbox"`. Reviewed via the application-wide
+`DINOReviewEventFilter` (ADR-015), keyed on Enter/Escape. Nothing in
+YOLO uses this path.
+
+**Mechanism B — `"Temp-{class}"` entries inside `image_label.annotations`
+(a dict).** These are ordinary-looking annotation-dict entries, just
+filed under a class name prefixed `"Temp-"`. Populated by
+`add_temp_classes()` and used by **both** DINO's promote-to-permanent-
+class flow **and** all of YOLO's box/mask/pose prediction review
+(`YOLOController.process_yolo_results` builds the same `{class_name:
+[annotation, ...]}` shape DINO does and calls `self.mw.add_temp_classes(...)`
+directly). Because these entries sit in the real `annotations` dict,
+they render through the ordinary `draw_annotations` — already
+keypoint-aware since PR-1 (the `elif "keypoints"` branch) — so pose
+predictions display correctly without any special-casing. Accept/reject
+go through `accept_visible_temp_classes()` / `reject_visible_temp_classes()`,
+which only move dict entries and rename keys — they do **not** call
+`calculate_area`, `simplify_polygon`, or `create_coco_annotation`, and
+have no existence-only `"segmentation" in annotation` checks, so
+keypoint-shaped (segmentation-less) candidates pass through safely.
+`accept_visible_temp_classes()` additionally carries over any
+`keypoint_schemas["Temp-{class}"]` entry to the permanent class name
+(warning and keeping the existing schema on a K mismatch instead of
+overwriting); `reject_visible_temp_classes()` pops the orphaned
+`"Temp-{class}"` schema entry.
+
+**YOLO-pose prediction (issue #35 PR-3) uses only Mechanism B** — it
+never touches `ImageLabel.temp_annotations` or
+`DINOReviewEventFilter`. See [ADR-029](09_architecture_decisions.md#adr-029-keypoint--pose-annotation--per-class-schema-coco-instance-model-3-state-visibility)
+for the pose instance schema itself.
+
 ## Multi-dimensional TIFF Axis Defaults
 
 `load_tiff` extracts `tif.series[0].axes` (e.g. `"TZCYX"`) and maps

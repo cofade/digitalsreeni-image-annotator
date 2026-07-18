@@ -246,6 +246,10 @@ class YOLOTrainer(QObject):
         # the user where the checkpoint landed and offer it for prediction.
         self.last_saved_model_path = None
         self.last_saved_yaml_path = None
+        # Path the training model was loaded from, so train_model() can reload a
+        # pristine object per run (Ultralytics mutates a YOLO object's overrides
+        # during train(), breaking a second train() on the same instance).
+        self.loaded_model_path = None
         # Latched so the per-epoch callback emits the MLflow link only once.
         self._mlflow_url_emitted = False
 
@@ -257,6 +261,7 @@ class YOLOTrainer(QObject):
         if model_path:
             try:
                 self.model = YOLO(model_path)
+                self.loaded_model_path = model_path
                 return True
             except Exception as e:
                 QMessageBox.critical(self.main_window, "Error Loading Model", f"Could not load the model. Error: {str(e)}")
@@ -417,6 +422,18 @@ class YOLOTrainer(QObject):
             raise ValueError("No model loaded. Please load a model first.")
         if self.yaml_path is None or not Path(self.yaml_path).exists():
             raise FileNotFoundError("Dataset YAML not found. Please prepare or load a dataset first.")
+
+        # Reload a pristine model from the loaded checkpoint before every run.
+        # Ultralytics mutates the YOLO object's `overrides` during train() (it
+        # drops the 'model' key), so a SECOND train() on the same instance
+        # raises KeyError('model') at engine/model.py. Reloading also clears any
+        # accumulated trainer state / stacked callbacks, so each run is
+        # independent and reproducible (fine-tunes the loaded pre-trained model,
+        # not the previous run's output). See issue #35 PR-3 manual-testing fix.
+        if self.loaded_model_path:
+            from ultralytics import YOLO
+
+            self.model = YOLO(self.loaded_model_path)
 
         # Warmup over the first ~10% of epochs (the issue's recipe) unless the
         # caller overrode it. Floor (lrf) defaults to 10% of the peak LR.

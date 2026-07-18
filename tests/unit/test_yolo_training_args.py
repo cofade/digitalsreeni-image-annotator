@@ -72,6 +72,7 @@ def _make_trainer(tmp_path, monkeypatch, yaml_text=None):
     trainer.stop_training = False
     trainer.epoch_info = deque(maxlen=10)
     trainer._mlflow_url_emitted = False
+    trainer.loaded_model_path = None  # no reload by default (see the reload test)
     trainer.model = _FakeModel()
 
     monkeypatch.setattr(trainer, "_register_trained_model", lambda: None)
@@ -249,6 +250,54 @@ def test_fit_line_pose_map_key_paren_suffixed(qtbot, tmp_path):
         "val/box_loss": 0.5, "metrics/mAP50(P)": 0.6123, "metrics/mAP50-95(P)": 0.4321,
     })
     assert "mAP50=0.6123" in line and "mAP50-95=0.4321" in line
+
+
+# ── consecutive-run reload (#35 PR-3 manual-testing fix) ─────────────────────
+
+def test_train_model_reloads_pristine_model_each_run(tmp_path, monkeypatch):
+    """Ultralytics drops overrides['model'] during train(), so a second train()
+    on the same YOLO object raises KeyError('model'). train_model reloads a
+    pristine model from loaded_model_path before every run so consecutive
+    trainings work."""
+    import ultralytics
+
+    trainer = _make_trainer(tmp_path, monkeypatch)
+    trainer.loaded_model_path = "pretrained-pose.pt"
+
+    reloaded = []
+
+    def _fake_yolo(path):
+        reloaded.append(path)
+        return _FakeModel()
+
+    # train_model does `from ultralytics import YOLO` at call time, so patching
+    # the ultralytics module attribute takes effect.
+    monkeypatch.setattr(ultralytics, "YOLO", _fake_yolo)
+
+    trainer.train_model(epochs=3, imgsz=640)
+    first_model = trainer.model
+    trainer.train_model(epochs=3, imgsz=640)
+
+    # Reloaded from the pristine checkpoint before BOTH runs, and each run got a
+    # fresh object (the second run is NOT the first run's mutated instance).
+    assert reloaded == ["pretrained-pose.pt", "pretrained-pose.pt"]
+    assert trainer.model is not first_model
+    assert trainer.model.train_kwargs is not None
+
+
+def test_train_model_no_reload_when_path_unset(tmp_path, monkeypatch):
+    """Defensive: if no load path was recorded, keep the existing model object
+    (no crash, no reload attempt)."""
+    import ultralytics
+
+    trainer = _make_trainer(tmp_path, monkeypatch)
+    trainer.loaded_model_path = None
+    original = trainer.model
+    monkeypatch.setattr(ultralytics, "YOLO", lambda *a, **k: pytest.fail("must not reload"))
+
+    trainer.train_model(epochs=3, imgsz=640)
+
+    assert trainer.model is original
 
 
 # ── predict() no longer hardcodes task= (#35 PR-3) ────────────────────────────

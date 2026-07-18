@@ -422,6 +422,10 @@ class YOLOController(QObject):
     def start_training(self, epochs, imgsz, train_opts=None):
         if not hasattr(self.mw, "training_dialog"):
             self.mw.training_dialog = TrainingInfoDialog(self.mw)
+        # Clear last run's log so consecutive runs don't stack (mirrors the SAM
+        # fine-tune dialog; otherwise a new run's output appends under the old,
+        # making a fresh run look like it resumed mid-way). Issue #35 PR-3.
+        self.mw.training_dialog.info_text.clear()
         self.mw.training_dialog.show()
         # Re-show/enable Stop for this run (training_finished hides it).
         self.mw.training_dialog.stop_button.setEnabled(True)

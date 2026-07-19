@@ -36,6 +36,51 @@ For detailed architecture and design information, see **[docs/](docs/)**:
 
 See [docs/README.md](docs/README.md) for full documentation index.
 
+## Fork Roadmap Backlog (TEMPORARY section — self-deleting)
+
+**Deletion hook:** When a PR resolves one of the items below, DELETE its row
+from this table **in the same PR** (and its draft file under `.github/roadmap/`).
+When the last row is gone, delete this entire section so CLAUDE.md returns to
+its clean state. Never let a finished item linger here.
+
+Issue numbers refer to **this fork's** tracker,
+https://github.com/cofade/digitalsreeni-image-annotator/issues (NOT upstream —
+do not confuse fork #35 below with upstream #35/keypoints in the next section).
+Validated 2026-07-19 from a full codebase audit. Every issue body is a
+self-contained full spec (context, verified file refs, design, steps,
+acceptance criteria, test plan, docs, pitfalls) — mirrored in
+`.github/roadmap/<code>.md`. Phases: A Foundation → B Robustness/UX →
+C Video → D SAM 3 (encoded as `phase:*` labels; respect blockers, otherwise
+pick in table order).
+
+| Issue | Size | Task |
+|-------|------|------|
+| #33 (A1) | large | Central logging: new `core/logging_config.py`, migrate all ~307 `print()` + 12 `traceback.print_exc()` in `src/` per the recipe in the issue; zero `print(` left; QMessageBox behavior unchanged |
+| #34 (A2) | blocked | Fix 7 silent `except: pass` sites (sam_utils 365/404, dino_utils 135, sam_trainer 245, mlflow_tracker 158/202, dicom_converter 171 bare) + OOM-friendly SAM-load dialog in `sam_controller.change_sam_model`; error convention → docs/08. Blocked on #33 (needs loggers) |
+| #35 (A3) | medium | Tests: ProjectController `.iap` save/load roundtrip + ClassController CRUD; fixture pattern from `tests/integration/test_sam_train_controller.py`; beware offscreen dialog traps listed in the issue |
+| #36 (A4) | medium | Tests: ImageController multi-dim slicing via synthetic `tifffile` stacks (naming is extension-stripped, **1-based**: `stack5d_T1_Z2_C1`) + SAMController debounce/in-flight (ADR-013) |
+| #37 (A5) | medium | Tests: DINOController workflows, mocked at `dino_utils.detect`/`sam_utils.apply_sam_predictions_batch` boundary; auto-accept asserted in BOTH single and batch; temp-bleed regression |
+| #38 (A6) | quick win | PEP 621 `pyproject.toml` replaces setup.py; `imagecodecs` into the single dep source; ultralytics `>=8.3.27,<9`; dev extra; CI cache key + install step |
+| #39 (A7) | medium | README rewritten for the fork (features, shortcuts, no PyPI install) + ADR-004 superseded + docs/01 features + docs/11 fork-divergence placeholder + new CHANGELOG.md |
+| #40 (A8) | quick win | Dev tooling: `.claude/settings.json` allowlist, fix senior-reviewer.md stale "no automated tests" (line 28), add run-app skill (offscreen launch + smoke) |
+| #41 (B1) | medium | Autosave recovery file before first manual save (`project_controller.auto_save` ~548 currently no-ops unsaved projects); recovery offer on launch; never open dialogs from the timer |
+| #42 (B2) | medium | Relative paths in `.iap`: dual abs+rel storage, rel→abs→`images/`-convention→prompt resolution, load-time sanity validation; ADR-003 superseded |
+| #43 (B3) | large | Image-list annotation-status badges + flat grouping. Do NOT introduce header rows/tree — `dino_controller` 586-601 and `annotation_controller` 520-521 read `item(i).text()` as filenames and COCO import relies on positional `all_images[i] ↔ item(i)` |
+| #44 (B4) | quick win | Guard mixed pose/non-pose classes both directions (`keypoint_schema_dialog`, `class_controller`); `_pose_export_check` untouched |
+| #45 (B5) | blocked | Lazy slice loading: SliceProvider + bounded LRU replacing eager `create_slices` QImages; consumer-compat table in issue. Blocked on #36 (test safety net) |
+| #46 (B6) | large | Behavior-preserving split of `image_label.py` (1850 lines) into `canvas_renderer.py` + `edit_gestures.py`; keep test-called statics (`_bbox_handle_points`, `_resize_bbox`, …) as `ImageLabel` aliases; recommended before #48/#51 |
+| #47 (C1) | blocked | Video loading: `core/video_handler.py` (cv2, BGR→RGB), frames as slices `{base}_F#####` via existing `create_slices` naming, lazy decode + `.iap` `video_metadata`. Blocked on #36; #45 recommended first |
+| #48 (C2) | blocked | Video timeline widget (`widgets/video_timeline.py`) + annotated-frame marks (hook `update_slice_list_colors`) + lazy frame export. Blocked on #47 |
+| #49 (D1) | quick win | SAM 3 spike: research-only, deliverable = draft ADR (Status: Proposed) answering availability (Ultralytics vs facebookresearch), text-prompt + tracking APIs, license, sizes; zero `src/` changes |
+| #50 (D2) | blocked | SAM 3 text-prompt segmentation: `inference/sam3_utils.py` mirroring SAMUtils, routed through the existing DINO review pipeline; widen `DINOReviewEventFilter` `source == "dino"` check. Blocked on #49 |
+| #51 (D3) | blocked | SAM 3 video tracking: TrackingController, per-frame commits via `_commit_dino_results` pattern, track-run bulk undo, uncertain frames → review. Blocked on #47 + #50 |
+
+Deliberately NOT tracked here (decided 2026-07-19): i18n (very low prio),
+type hints (ongoing convention), refactors of annotation_controller /
+annotator_window / export_formats (stable, high regression risk), annotation
+propagation / QC tools / export templates (prd.md Phase 3 — revisit after C/D),
+3D viewer / collaboration / cloud (prd.md open questions).
+
 ## Upstream Issue Backlog (TEMPORARY section — self-deleting)
 
 **Deletion hook:** When a PR resolves one of the items below, DELETE its row

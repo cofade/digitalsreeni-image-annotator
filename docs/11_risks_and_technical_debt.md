@@ -353,8 +353,28 @@ the orchestrator wires each to the matching controller slot.
 - Periodically review upstream
 - Consider contributing changes back
 
-**Current Fork-Specific Changes**:
-- (Document any fork-specific features here)
+**Current Fork-Specific Changes** (derived from the merge history and ADR index):
+- PyQt6 migration replacing PyQt5 (ADR-014), with a torch-before-Qt DLL
+  load-order guard in `main.py` (ADR-017).
+- In-process SAM 2 / Grounding-DINO inference on a `QThread` with a re-entrancy
+  guard, replacing the old subprocess workers (ADR-013).
+- Grounding-DINO text-prompted detection — single image and batch — with an
+  Enter/Escape review-and-accept overlay.
+- SAM 2 fine-tuning via a custom loop over the Ultralytics SAM2 module (ADR-021),
+  with always-on MLflow experiment tracking (ADR-027).
+- YOLO training + prediction for detection, segmentation, and pose (issue #35).
+- Keypoint / pose annotation: per-class named schema + skeleton (COCO instance
+  model), with COCO-keypoints and YOLO-pose export/import (ADR-029).
+- Undo / redo via per-image annotation snapshots (ADR-026).
+- Canvas selection unified with the annotations table + handle-based shape
+  editing and vertex editing (ADR-022 / 023 / 025), with bounds clamping and
+  augmentation clipping (ADR-024).
+- Modular architecture: thin `ImageAnnotator` orchestrator + per-responsibility
+  controllers + per-tool handlers (ADR-018 / 019).
+- Central stdlib `logging` framework (ADR-030) and a written error-handling
+  convention (ADR-031).
+- A pytest + pytest-qt automated test suite run in CI on 3 OS × Python
+  3.10-3.14, superseding the original manual-testing-only decision (ADR-004).
 
 ---
 

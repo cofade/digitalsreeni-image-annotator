@@ -6,7 +6,7 @@
 
 **Original decision (historical)**: Use PyQt5 5.15.11. Chosen because the upstream project used PyQt5, PyQt5's ecosystem was more mature at the time, and migration carried risk.
 
-**Superseding decision**: The project migrated to PyQt6 6.7+ in the same PR that introduced in-process AI inference. See [ADR-014](#adr-014-migrate-from-pyqt5-to-pyqt6) for the rationale (mainly: PyQt6 eliminated the WinError 1114 DLL load-order conflict that motivated ADR-011, unblocking the subprocess removal in ADR-013).
+**Superseding decision**: The project migrated to PyQt6 6.7+ in the same PR that introduced in-process AI inference. See [ADR-014](#adr-014-migrate-from-pyqt5-to-pyqt6) for the rationale. The migration unblocked the subprocess removal in [ADR-013](#adr-013-in-process-inference-with-qthread-wrapping); note, however, that PyQt6 did **not** by itself eliminate the WinError 1114 DLL load-order conflict — that conflict persists and is handled by importing torch before Qt in `main.py` (see [ADR-017](#adr-017-eager-torch-import-in-mainpy-before-qapplication-creation)).
 
 ---
 
@@ -61,6 +61,19 @@ documented against, capped below the next major. The SAM fine-tuning loop
 ---
 
 ## ADR-004: No Automated Testing Framework
+
+**Status**: Superseded — the project now has a pytest + pytest-qt suite
+
+**Superseding note**: This decision no longer holds. The repository has a real
+automated test suite under `tests/` (`unit`, `integration`, `ui`) — boot smoke,
+coordinate conversions, export/import round-trips, controller state machines,
+project save/load, multi-dim slicing, and the DINO/SAM/YOLO wiring — run in CI
+on 3 OS × Python 3.10-3.14 (`.github/workflows/tests.yml`). An AST-based
+inline-import gate guards refactors (see
+[ADR-016](#adr-016-static-ast-inspection-of-inline-imports-as-quality-gate-for-refactor-prs)).
+Run headless with `QT_QPA_PLATFORM=offscreen pytest tests/ -v`.
+
+### Original decision (historical)
 
 **Status**: Accepted (Technical Debt)
 
@@ -310,7 +323,7 @@ Migrating the GUI from PyQt5 to PyQt6 (same PR) was expected to eliminate the DL
 **Rationale**:
 - Two coupled changes share most of their cost (touching every file that imports PyQt5) so doing them in one PR avoids paying the migration tax twice.
 - Most PyQt5→PyQt6 differences are enum namespacing (`Qt.AlignCenter` → `Qt.AlignmentFlag.AlignCenter`) and module relocations (`QAction` moves from `QtWidgets` to `QtGui`) — mechanical, codemod-able. The behavioural risk is in event APIs (`event.pos()` → `event.position()`, returning `QPointF` not `QPoint`) and a handful of removed widgets (`QDesktopWidget` → `QGuiApplication.primaryScreen()`).
-- The existing test suite (65 pytest-qt tests, mostly exercising coordinate transforms) serves as the regression safety net.
+- The pytest-qt suite (coordinate transforms, export/import round-trips, controller state machines, and boot smoke) serves as the regression safety net.
 
 **Consequences**:
 - ✅ Subprocess workers retired; inference is in-process with cached models (see [ADR-013](#adr-013-in-process-inference-with-qthread-wrapping)).
@@ -1562,24 +1575,6 @@ both reset the model selector.
 ---
 
 ## Decisions Under Consideration
-
-### Consider pytest-qt for Utility Testing
-
-**Status**: Under Consideration
-
-**Proposal**: Add unit tests for non-GUI utilities (calculate_area, coordinate conversions, export functions)
-
-**Pros**:
-- Catch regressions in utility functions
-- Build confidence for refactoring
-- Document expected behavior
-
-**Cons**:
-- Setup overhead
-- Maintenance burden
-- May not catch most bugs (which are in GUI)
-
----
 
 ### Consider Relative Paths with Image Copying
 

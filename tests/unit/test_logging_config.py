@@ -70,9 +70,44 @@ def test_get_logger_is_namespaced():
 
 
 def test_pkg_root_derived_from_module_name():
-    # Root is derived from __name__, not hardcoded, so it tracks the import
-    # root the app was loaded under (installed vs. the `python -m src...` path).
-    assert logging_config._PKG == logging_config.__name__.rsplit(".", 2)[0]
+    # This test module imports the package under its installed (non-``src``)
+    # name, so the derived root must be exactly this concrete value — pins the
+    # value rather than re-deriving the implementation and comparing to itself.
+    assert logging_config._PKG == "digitalsreeni_image_annotator"
+
+
+def test_src_prefixed_import_root_also_routes(monkeypatch):
+    """Directly exercise the regressed path: when the app is loaded as
+    ``src.digitalsreeni_image_annotator`` (the ``python -m src...main``
+    launcher), ``configure()`` must root the handler at ``src.<pkg>`` and a
+    child record must reach it. This test module itself imports the non-``src``
+    root, so the ``src`` variant is imported explicitly here."""
+    _clean_env(monkeypatch)
+    import importlib
+    src_lc = importlib.import_module(
+        "src.digitalsreeni_image_annotator.core.logging_config"
+    )
+    assert src_lc._PKG == "src.digitalsreeni_image_annotator"
+
+    src_root = logging.getLogger(src_lc._PKG)
+    saved = (src_root.handlers[:], src_root.level, src_root.propagate)
+    src_root.handlers = []
+    src_root.setLevel(logging.NOTSET)
+    src_root.propagate = True
+    try:
+        root = src_lc.configure()
+        records = []
+        handler = logging.Handler()
+        handler.emit = lambda r: records.append(r.getMessage())
+        root.addHandler(handler)
+        try:
+            child = src_lc.get_logger(src_lc._PKG + ".io.import_formats")
+            child.info("src-route")
+        finally:
+            root.removeHandler(handler)
+        assert any("src-route" in m for m in records)
+    finally:
+        src_root.handlers, src_root.level, src_root.propagate = saved
 
 
 def test_child_logger_record_reaches_installed_handler(monkeypatch):

@@ -221,6 +221,79 @@ Import (COCO or YOLO v5+):
                pattern as project load)
 ```
 
+## Training + Predicting with a Pose Model (issue #35 PR-3, ADR-029)
+
+Reuses the existing in-app YOLO train/predict loop (see "In-app YOLO Training"
+below) end to end; pose only changes what the dataset/registered-model yaml
+carries and how a "pose" result is unpacked into a temp annotation.
+
+```
+Prepare YOLO Dataset:
+    YOLOTrainer.prepare_dataset()
+        └─> export_yolo_v5plus(..., keypoint_schemas=mw.keypoint_schemas)
+              (schema-aware export, PR-2) — data.yaml gains kpt_shape/
+              flip_idx IFF a pose class is among the exported annotations
+
+Load Model (Training menu): a '*-pose.pt' checkpoint → model.task == "pose"
+    │
+Train Model → YOLOTrainer.train_model() pre-flight guard, BEFORE any
+    training work starts:
+        model.task == "pose"  XOR  "kpt_shape" in the prepared yaml
+            → raise ValueError (both directions guarded — a pose model on a
+              non-pose dataset, and vice versa) → TrainingThread.run() →
+              training_finished() → QMessageBox.critical("Training Error")
+    │
+model.train(...) proceeds — on_fit_epoch_end() also surfaces val/pose_loss
+    + val/kobj_loss in the progress dialog (same pattern as the existing
+    val/box_loss / val/seg_loss for detect/segment runs)
+    │
+_register_trained_model(): sibling data.yaml gets kpt_shape/flip_idx read
+    back from the training yaml, PLUS — best-effort — a full
+    "keypoint_schema" key when every trained class shares one identical
+    schema in mw.keypoint_schemas (richer than bare kpt_shape/flip_idx, so
+    a later prediction load doesn't fall back to generic point names)
+    │
+    ... later, possibly a new session ...
+    │
+Prediction Settings > Load Model → load_prediction_model(model_path, yaml)
+    └─> prediction_keypoint_schema reconstructed from the registered yaml:
+            "keypoint_schema" present → sanitize_schema(that)       (rich)
+            else "kpt_shape" present  → sanitize_schema(generic
+                                          kp0..kp{K-1} names, no skeleton)
+            else                      → None (not a pose model)
+    │
+"Predict with YOLO Model" dialog → Predict on the current image
+    └─> YOLOTrainer.predict() — no hardcoded task='segment' any more, so a
+          pose checkpoint's result carries .keypoints instead of .masks
+        └─> YOLOController.process_yolo_results():
+              is_pose = (yolo_trainer.model.task == "pose")
+              ├─ pose: build one temp instance per detection —
+              │      {keypoints: flat [x,y,v]*K (v ALWAYS 2 — Ultralytics
+              │      gives no true 3-state occlusion signal), num_keypoints,
+              │      bbox, category_name: "Temp-<class>", score, temp: True}
+              │      — deliberately NO "segmentation" key (ADR-029
+              │      discriminator, unchanged)
+              │      seed mw.keypoint_schemas["Temp-<class>"] from
+              │      prediction_keypoint_schema if not already present
+              └─ detect/segment: unchanged box/polygon temp-annotation path
+    │
+Review (shared Temp-* machinery, DINOReviewEventFilter):
+    rendering: draw_annotations "keypoints" branch — markers + skeleton
+        lines if the seeded schema carries skeleton edges, points only
+        otherwise, plus the faint instance box
+    ├─ Enter → DINOController.accept_visible_temp_classes():
+    │      "Temp-<class>" → "<class>"; a seeded schema is carried to the
+    │      permanent class name (warns and keeps the existing schema
+    │      instead of overwriting it if K differs)
+    └─ Esc   → DINOController.reject_visible_temp_classes(): temp
+               annotations dropped, any orphaned "Temp-<class>" schema
+               entry popped too
+```
+
+Output lands in the same `models/yolo/custom/<project>/weights/best.pt`
+location as any other YOLO run — only the sibling `data.yaml` gains the pose
+keys. See ADR-029.
+
 ## Adjusting Mask Complexity — Detail % (issue #24)
 
 The Annotations table carries a per-row **Detail %** spinbox (100 = raw). Dialing

@@ -142,6 +142,178 @@ def test_register_noop_when_no_checkpoint(tmp_path, qapp):
     assert t.last_saved_yaml_path is None
 
 
+# --- _register_trained_model: pose metadata (#35 PR-3) ---------------------
+
+def test_register_carries_kpt_shape_and_flip_idx(tmp_path, qapp):
+    run = tmp_path / "models" / "yolo" / "custom" / "pose_proj"
+    (run / "weights").mkdir(parents=True)
+    best = run / "weights" / "best.pt"
+    best.write_bytes(b"fake")
+
+    train_yaml_path = tmp_path / "train_data.yaml"
+    train_yaml_path.write_text(yaml_lib.dump({
+        "names": {0: "person"},
+        "nc": 1,
+        "kpt_shape": [3, 3],
+        "flip_idx": [0, 2, 1],
+    }))
+
+    t = _trainer(tmp_path, qapp)
+    # No matching main_window.keypoint_schemas entries -> keypoint_schema key
+    # must be omitted, but kpt_shape/flip_idx still carry over unconditionally.
+    t.main_window = types.SimpleNamespace(keypoint_schemas={})
+    t.yaml_path = str(train_yaml_path)
+    t.model = types.SimpleNamespace(
+        names={0: "person"},
+        trainer=types.SimpleNamespace(best=str(best), save_dir=str(run)),
+    )
+    t._register_trained_model()
+
+    written = yaml_lib.safe_load((run / "data.yaml").read_text())
+    assert written["kpt_shape"] == [3, 3]
+    assert written["flip_idx"] == [0, 2, 1]
+    assert "keypoint_schema" not in written
+
+
+def test_register_embeds_keypoint_schema_when_all_classes_match(tmp_path, qapp):
+    run = tmp_path / "models" / "yolo" / "custom" / "pose_proj2"
+    (run / "weights").mkdir(parents=True)
+    best = run / "weights" / "best.pt"
+    best.write_bytes(b"fake")
+
+    train_yaml_path = tmp_path / "train_data2.yaml"
+    train_yaml_path.write_text(yaml_lib.dump({
+        "names": {0: "person", 1: "robot"},
+        "nc": 2,
+        "kpt_shape": [3, 3],
+        "flip_idx": [0, 2, 1],
+    }))
+
+    schema = {
+        "names": ["nose", "left_eye", "right_eye"],
+        "skeleton": [[0, 1], [0, 2]],
+        "flip_idx": [0, 2, 1],
+    }
+    t = _trainer(tmp_path, qapp)
+    t.main_window = types.SimpleNamespace(
+        keypoint_schemas={"person": schema, "robot": dict(schema)}
+    )
+    t.yaml_path = str(train_yaml_path)
+    t.model = types.SimpleNamespace(
+        names={0: "person", 1: "robot"},
+        trainer=types.SimpleNamespace(best=str(best), save_dir=str(run)),
+    )
+    t._register_trained_model()
+
+    written = yaml_lib.safe_load((run / "data.yaml").read_text())
+    assert written["keypoint_schema"] == schema
+
+
+def test_register_no_kpt_shape_yields_names_only_yaml(tmp_path, qapp):
+    # Non-pose run: training yaml has no kpt_shape -> no pose keys leak in,
+    # confirming no regression for plain detect/segment training.
+    run = tmp_path / "models" / "yolo" / "custom" / "detect_proj"
+    (run / "weights").mkdir(parents=True)
+    best = run / "weights" / "best.pt"
+    best.write_bytes(b"fake")
+
+    train_yaml_path = tmp_path / "train_data3.yaml"
+    train_yaml_path.write_text(yaml_lib.dump({"names": {0: "cell"}, "nc": 1}))
+
+    t = _trainer(tmp_path, qapp)
+    t.main_window = types.SimpleNamespace(keypoint_schemas={})
+    t.yaml_path = str(train_yaml_path)
+    t.model = types.SimpleNamespace(
+        names={0: "cell"},
+        trainer=types.SimpleNamespace(best=str(best), save_dir=str(run)),
+    )
+    t._register_trained_model()
+
+    written = yaml_lib.safe_load((run / "data.yaml").read_text())
+    assert "kpt_shape" not in written
+    assert "flip_idx" not in written
+    assert "keypoint_schema" not in written
+    assert written["names"] == {0: "cell"}
+
+
+# --- load_prediction_model: pose schema reconstruction (#35 PR-3) ----------
+
+class _FakeYOLOModel:
+    """Stand-in for ultralytics.YOLO(model_path) — only `.names` is read."""
+
+    def __init__(self, model_path):
+        self.names = {0: "person"}
+
+
+def test_load_prediction_model_uses_rich_keypoint_schema(tmp_path, qapp, monkeypatch):
+    monkeypatch.setattr("ultralytics.YOLO", _FakeYOLOModel)
+    schema = {
+        "names": ["nose", "left_eye", "right_eye"],
+        "skeleton": [[0, 1], [0, 2]],
+        "flip_idx": [0, 2, 1],
+    }
+    yaml_path = tmp_path / "data.yaml"
+    yaml_path.write_text(yaml_lib.dump({
+        "names": {0: "person"},
+        "kpt_shape": [3, 3],
+        "flip_idx": [0, 2, 1],
+        "keypoint_schema": schema,
+    }))
+
+    t = _trainer(tmp_path, qapp)
+    ok, msg = t.load_prediction_model(str(tmp_path / "best.pt"), str(yaml_path))
+
+    assert ok is True and msg is None
+    assert t.prediction_keypoint_schema == schema
+
+
+def test_load_prediction_model_falls_back_to_generic_names(tmp_path, qapp, monkeypatch):
+    monkeypatch.setattr("ultralytics.YOLO", _FakeYOLOModel)
+    yaml_path = tmp_path / "data.yaml"
+    yaml_path.write_text(yaml_lib.dump({
+        "names": {0: "person"},
+        "kpt_shape": [3, 3],
+        "flip_idx": [0, 2, 1],
+    }))
+
+    t = _trainer(tmp_path, qapp)
+    ok, msg = t.load_prediction_model(str(tmp_path / "best.pt"), str(yaml_path))
+
+    assert ok is True and msg is None
+    assert t.prediction_keypoint_schema == {
+        "names": ["kp0", "kp1", "kp2"],
+        "skeleton": [],
+        "flip_idx": [0, 2, 1],
+    }
+
+
+def test_load_prediction_model_none_schema_for_non_pose_yaml(tmp_path, qapp, monkeypatch):
+    monkeypatch.setattr("ultralytics.YOLO", _FakeYOLOModel)
+    yaml_path = tmp_path / "data.yaml"
+    yaml_path.write_text(yaml_lib.dump({"names": {0: "person"}}))
+
+    t = _trainer(tmp_path, qapp)
+    ok, msg = t.load_prediction_model(str(tmp_path / "best.pt"), str(yaml_path))
+
+    assert ok is True and msg is None
+    assert t.prediction_keypoint_schema is None
+
+
+def test_load_prediction_model_sets_loaded_model_path(tmp_path, qapp, monkeypatch):
+    # loaded_model_path must track EVERY self.model assignment so train_model's
+    # per-run reload trains the model the user actually loaded last, not a stale
+    # earlier one (senior-review P1, #35 PR-3).
+    monkeypatch.setattr("ultralytics.YOLO", _FakeYOLOModel)
+    yaml_path = tmp_path / "data.yaml"
+    yaml_path.write_text(yaml_lib.dump({"names": {0: "person"}}))
+    model_path = str(tmp_path / "best.pt")
+
+    t = _trainer(tmp_path, qapp)
+    t.load_prediction_model(model_path, str(yaml_path))
+
+    assert t.loaded_model_path == model_path
+
+
 # --- _prune_run_artifacts ---------------------------------------------------
 
 def _make_full_run_dir(tmp_path):

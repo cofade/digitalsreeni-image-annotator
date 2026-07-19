@@ -1280,7 +1280,7 @@ math/bookkeeping is unit-tested without torch, Qt, or a real run
 
 ## ADR-029: Keypoint / Pose Annotation — Per-Class Schema, COCO Instance Model, 3-State Visibility
 
-**Status**: Accepted (issue bnsreenu#35, PR-1 + PR-2 of 3)
+**Status**: Accepted (issue bnsreenu#35, PR-1 + PR-2 + PR-3 — complete)
 
 **Context**: The app annotated polygons, rectangles, and paint masks (+ SAM/DINO) but
 had no way to place **keypoints** — the primitive for pose estimation and landmark
@@ -1350,8 +1350,10 @@ visibility, and (later PRs) COCO/YOLO-pose export-import + YOLO-pose training. T
   `_pose_export_check`) a mix of >1 distinct `(K, flip_idx)` schema or a mix of pose and
   non-pose classes among the annotations actually being written; detection is
   data-driven (based on which annotations carry `keypoints`), not solely on
-  `keypoint_schemas`, so a caller that doesn't thread schemas through (e.g. the not-yet-
-  migrated PR-3 training call site) still gets a correct K. All four `io.import_formats`
+  `keypoint_schemas`, so a caller that doesn't thread schemas through still gets a
+  correct K (PR-3's `prepare_dataset` does thread `keypoint_schemas` through, for the
+  richer `flip_idx`/skeleton data — see the PR-3 addendum below). All four
+  `io.import_formats`
   entry points (`import_coco_json`, `import_yolo_v4`, `import_yolo_v5plus`, and
   `process_import_format`'s pass-through) now uniformly return
   `(annotations, image_info, keypoint_schemas)` — `{}` where nothing was recovered — so
@@ -1372,6 +1374,59 @@ visibility, and (later PRs) COCO/YOLO-pose export-import + YOLO-pose training. T
   relocated to `utils.keypoint_instance_bbox` (delegate kept for `finish_keypoint`) so
   COCO import can reuse the same bbox-from-labelled-points fallback instead of a second
   copy.
+- **Training + prediction (PR-3).** `YOLOTrainer.prepare_dataset` threads
+  `main_window.keypoint_schemas` into `export_yolo_v5plus` so the prepared `data.yaml`
+  carries `kpt_shape`/`flip_idx` whenever the exported set is pose-shaped. `train_model`
+  adds a pre-flight guard — before Ultralytics ever starts, it compares the loaded
+  model's `.task` (`"pose"` or not) against whether the prepared yaml has a `kpt_shape`
+  key, and raises `ValueError` on a mismatch in either direction (pose model /
+  non-pose dataset, or vice versa). No new UI code: the existing `TrainingThread`
+  exception-to-`QMessageBox` path already surfaces any exception `train_model` raises,
+  so this fails loud with a plain-language message instead of Ultralytics throwing a
+  cryptic shape error mid-epoch. `on_fit_epoch_end` also surfaces `val/pose_loss` and
+  `val/kobj_loss` alongside the existing `val/box_loss`/`val/seg_loss`, following the
+  same defensive "missing key never disturbs the run" pattern. `predict()` no longer
+  hardcodes `task='segment'` on the `self.model(...)` call — that would have silently
+  mis-decoded pose outputs — so the task is whatever the loaded model actually is.
+  Schema round-trips through **two tiers**: `_register_trained_model` writes the
+  richer, hand-authored `keypoint_schema` (names + skeleton) into the registered
+  model's `data.yaml` only when every trained class shares one identical schema in
+  this session's `keypoint_schemas`; otherwise (or for a model trained outside this
+  app) it still carries the bare `kpt_shape`/`flip_idx`, and `load_prediction_model`
+  falls back to reconstructing a generic `kp0..kp{K-1}`-named schema
+  (`sanitize_schema`'d, so a malformed yaml degrades to `None` rather than crashing)
+  from those. `YOLOController.process_yolo_results` gains an `is_pose` branch —
+  decided once per result set from `yolo_trainer.model.task`, since one checkpoint is
+  exclusively one task — that builds temp instance dicts
+  (`{"keypoints", "num_keypoints", "bbox", "category_name": "Temp-<class>", "score",
+  "temp": True}`, deliberately **no `segmentation` key**, matching the discriminator
+  everywhere else in this ADR) and seeds `keypoint_schemas["Temp-<class>"]` from
+  `yolo_trainer.prediction_keypoint_schema` the first time that temp class appears.
+  Every predicted point is stamped **v=2 (visible)**, a deliberate simplification:
+  Ultralytics exposes only a per-point presence confidence, not a true COCO 3-state
+  occlusion signal, and the instance already cleared the box-level `conf_threshold`
+  gate, so a second per-point threshold would just be noise dressed up as occlusion
+  data — the user hand-corrects via the existing right-click visibility toggle on
+  review. The one real gap this closed in the otherwise-already-keypoint-safe
+  Temp-class review path: `accept_visible_temp_classes` now carries a
+  `"Temp-<class>"` schema over to the permanent class name on accept (if the
+  permanent class already has a schema with a different K, it warns and keeps the
+  existing one rather than silently overwriting), and `reject_visible_temp_classes`
+  pops any orphaned `"Temp-<class>"` schema entry on reject — without this, rejected
+  or renamed temp poses would leak stale schema entries into `keypoint_schemas`.
+- **Consecutive runs reload a pristine model (PR-3 manual-testing fix).** Ultralytics
+  mutates a `YOLO` object's `overrides` during `train()` (it drops the `'model'` key),
+  so a *second* `train()` on the same instance raises `KeyError('model')`. `train_model`
+  therefore reloads a fresh `YOLO(self.loaded_model_path)` at the start of every run
+  (with a best-effort GPU reclaim first, per the "Releasing Model GPU Memory" rule).
+  `loaded_model_path` is kept in sync with **every** `self.model` assignment — both
+  `load_model` and `load_prediction_model` set it — so it is a single source of truth
+  for "the model to train" (loading a trained `best.pt` for prediction and then hitting
+  Train continues from *it*, not the stale original pretrained). Semantics: each run
+  fine-tunes the **loaded** checkpoint, not the previous run's output; to continue
+  training from a run's result, load its `best.pt` (Prediction Settings → Load Model, or
+  the trained-model dropdown) and train again. The Training Progress log is also cleared
+  at the start of each run so consecutive runs don't visually stack.
 
 **Why pure helpers** (`core/keypoint_schema.py`, `utils.clamp_keypoints`,
 `ImageLabel._keypoint_bounds/_scale_keypoints/_translate_keypoints`): schema
@@ -1393,7 +1448,16 @@ offscreen window (`test_keypoint_controller.py`).
 **Consequences**:
 - ✅ Pose classes can be defined, annotated, edited, saved/reloaded; the data model is
   COCO/YOLO-pose-shaped, and PR-2 confirms it round-trips through both formats losslessly
-  (mod point names, which YOLO-pose doesn't carry). Training (PR-3) is still pending.
+  (mod point names, which YOLO-pose doesn't carry). PR-3 closes the loop end-to-end:
+  a pose-shaped dataset can be exported, trained as a YOLO-pose model, and the
+  resulting checkpoint used for prediction, with predicted instances flowing through
+  the same Temp-class accept/reject review as every other detector.
+- ⚠️ Predicted keypoints always come back v=2 (visible) — Ultralytics doesn't expose
+  a true 3-state occlusion signal at inference — so occluded points must be
+  hand-corrected via the right-click toggle after accepting.
+- ⚠️ Each "Train Model" run restarts from the currently-loaded checkpoint (Ultralytics
+  can't reliably re-train the same in-memory object), not from the previous run's
+  weights — to continue a run, load its `best.pt` and train again.
 - ⚠️ Finishing early pads not-yet-placed points with v=0 at the origin; they don't
   render and (in PR-1) can't be relabelled via right-click (only v>0 points are
   hit-testable). Acceptable — v=0 means "not labelled" per COCO.

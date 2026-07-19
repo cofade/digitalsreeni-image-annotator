@@ -362,7 +362,9 @@ the `.iap` file. Pure validation is in `core/keypoint_schema.py`; the editor is
 `dialogs/keypoint_schema_dialog.py::KeypointSchemaDialog`. This shape also
 round-trips through COCO-keypoints and YOLO-pose export/import (issue #35
 PR-2) — see `io/export_formats.py`/`io/import_formats.py` and the ADR-029
-addendum.
+addendum. `YOLOTrainer.predict()` and `YOLOController.process_yolo_results()`
+are task-aware (detect/segment/pose) rather than hardcoded to
+segmentation-only output (issue #35 PR-3).
 
 ### Multi-dimensional Image Handling
 

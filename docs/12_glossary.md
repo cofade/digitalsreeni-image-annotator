@@ -56,6 +56,16 @@ per-point field width (x, y, v) — one value for the **whole dataset**, not per
 classes would need more than one distinct `kpt_shape`. See
 [`_pose_export_check`](08_crosscutting_concepts.md#yolo-pose-single-schema-per-dataset-issue-35-pr-2).
 
+### kobj_loss
+Ultralytics YOLO-pose per-epoch validation loss metric key (`val/kobj_loss`) —
+keypoint-objectness loss. Surfaced in the training progress window alongside the
+existing `val/box_loss` / `val/seg_loss` (issue #35 PR-3).
+
+### pose_loss
+Ultralytics YOLO-pose per-epoch validation loss metric key (`val/pose_loss`) —
+keypoint-regression loss. Surfaced in the training progress window alongside the
+existing `val/box_loss` / `val/seg_loss` (issue #35 PR-3).
+
 ### Pose Class
 A class that carries a keypoint schema (i.e. `class_name in keypoint_schemas`). Normal
 classes are unchanged; only pose classes can be annotated with the Keypoint tool.

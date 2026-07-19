@@ -1414,6 +1414,19 @@ visibility, and (later PRs) COCO/YOLO-pose export-import + YOLO-pose training. T
   existing one rather than silently overwriting), and `reject_visible_temp_classes`
   pops any orphaned `"Temp-<class>"` schema entry on reject — without this, rejected
   or renamed temp poses would leak stale schema entries into `keypoint_schemas`.
+- **Consecutive runs reload a pristine model (PR-3 manual-testing fix).** Ultralytics
+  mutates a `YOLO` object's `overrides` during `train()` (it drops the `'model'` key),
+  so a *second* `train()` on the same instance raises `KeyError('model')`. `train_model`
+  therefore reloads a fresh `YOLO(self.loaded_model_path)` at the start of every run
+  (with a best-effort GPU reclaim first, per the "Releasing Model GPU Memory" rule).
+  `loaded_model_path` is kept in sync with **every** `self.model` assignment — both
+  `load_model` and `load_prediction_model` set it — so it is a single source of truth
+  for "the model to train" (loading a trained `best.pt` for prediction and then hitting
+  Train continues from *it*, not the stale original pretrained). Semantics: each run
+  fine-tunes the **loaded** checkpoint, not the previous run's output; to continue
+  training from a run's result, load its `best.pt` (Prediction Settings → Load Model, or
+  the trained-model dropdown) and train again. The Training Progress log is also cleared
+  at the start of each run so consecutive runs don't visually stack.
 
 **Why pure helpers** (`core/keypoint_schema.py`, `utils.clamp_keypoints`,
 `ImageLabel._keypoint_bounds/_scale_keypoints/_translate_keypoints`): schema
@@ -1442,6 +1455,9 @@ offscreen window (`test_keypoint_controller.py`).
 - ⚠️ Predicted keypoints always come back v=2 (visible) — Ultralytics doesn't expose
   a true 3-state occlusion signal at inference — so occluded points must be
   hand-corrected via the right-click toggle after accepting.
+- ⚠️ Each "Train Model" run restarts from the currently-loaded checkpoint (Ultralytics
+  can't reliably re-train the same in-memory object), not from the previous run's
+  weights — to continue a run, load its `best.pt` and train again.
 - ⚠️ Finishing early pads not-yet-placed points with v=0 at the origin; they don't
   render and (in PR-1) can't be relabelled via right-click (only v>0 points are
   hit-testable). Acceptable — v=0 means "not labelled" per COCO.

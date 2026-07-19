@@ -299,6 +299,21 @@ def test_load_prediction_model_none_schema_for_non_pose_yaml(tmp_path, qapp, mon
     assert t.prediction_keypoint_schema is None
 
 
+def test_load_prediction_model_sets_loaded_model_path(tmp_path, qapp, monkeypatch):
+    # loaded_model_path must track EVERY self.model assignment so train_model's
+    # per-run reload trains the model the user actually loaded last, not a stale
+    # earlier one (senior-review P1, #35 PR-3).
+    monkeypatch.setattr("ultralytics.YOLO", _FakeYOLOModel)
+    yaml_path = tmp_path / "data.yaml"
+    yaml_path.write_text(yaml_lib.dump({"names": {0: "person"}}))
+    model_path = str(tmp_path / "best.pt")
+
+    t = _trainer(tmp_path, qapp)
+    t.load_prediction_model(model_path, str(yaml_path))
+
+    assert t.loaded_model_path == model_path
+
+
 # --- _prune_run_artifacts ---------------------------------------------------
 
 def _make_full_run_dir(tmp_path):

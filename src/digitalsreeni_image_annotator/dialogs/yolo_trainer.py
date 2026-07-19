@@ -33,6 +33,27 @@ def _sanitize_run_name(name):
     return safe or "model"
 
 
+def _reclaim_gpu():
+    """Best-effort GPU/host reclaim between training runs.
+
+    Ultralytics keeps a model<->trainer reference cycle that pins CUDA
+    tensors, so dropping the Python reference alone leaves a stale copy on
+    the device until cyclic GC happens to run (see CLAUDE.md "Releasing
+    Model GPU Memory"). Force a collect + empty_cache so a reload doesn't
+    stack a second copy on the GPU. Never raises — reclaim is best-effort.
+    """
+    import gc
+
+    gc.collect()
+    try:
+        import torch
+
+        if torch.cuda.is_available():
+            torch.cuda.empty_cache()
+    except Exception:
+        pass
+
+
 def list_custom_yolo_models() -> dict:
     """``{display_name: (model_path, yaml_path)}`` for trained YOLO models.
 
@@ -433,6 +454,11 @@ class YOLOTrainer(QObject):
         if self.loaded_model_path:
             from ultralytics import YOLO
 
+            # Drop the previous object and reclaim before reloading — the old
+            # model<->trainer cycle pins CUDA tensors, so clearing the ref alone
+            # shows no GPU drop (CLAUDE.md "Releasing Model GPU Memory").
+            self.model = None
+            _reclaim_gpu()
             self.model = YOLO(self.loaded_model_path)
 
         # Warmup over the first ~10% of epochs (the issue's recipe) unless the
@@ -708,6 +734,12 @@ class YOLOTrainer(QObject):
 
         try:
             self.model = YOLO(model_path)
+            # Keep loaded_model_path in sync with EVERY self.model assignment
+            # (load_model sets it too) so train_model's reload trains the model
+            # the user actually loaded last — loading a trained best.pt here and
+            # then hitting Train Model continues from it, not the stale original
+            # pretrained. Single source of truth for "the model to train".
+            self.loaded_model_path = model_path
             with open(yaml_path, 'r', encoding='utf-8') as f:
                 self.prediction_yaml = yaml.safe_load(f)
             

@@ -300,6 +300,28 @@ def test_train_model_no_reload_when_path_unset(tmp_path, monkeypatch):
     assert trainer.model is original
 
 
+def test_train_model_guard_runs_against_reloaded_model(tmp_path, monkeypatch):
+    """The pre-flight task guard must validate the RELOADED model (reload runs
+    first). A pose yaml + a reloaded NON-pose model must raise, even though the
+    pre-reload model claimed pose — proving the guard sees the reloaded one."""
+    import ultralytics
+
+    trainer = _make_trainer(tmp_path, monkeypatch, yaml_text=_POSE_YAML)
+    trainer.loaded_model_path = "some-detect-model.pt"
+    trainer.model.task = "pose"  # pre-reload model would PASS the guard
+
+    def _fake_yolo(path):
+        m = _FakeModel()
+        m.task = "segment"  # reloaded model must FAIL the pose-yaml guard
+        return m
+
+    monkeypatch.setattr(ultralytics, "YOLO", _fake_yolo)
+
+    with pytest.raises(ValueError):
+        trainer.train_model(epochs=5, imgsz=640)
+    assert trainer.model.train_kwargs is None  # never reached model.train()
+
+
 # ── predict() no longer hardcodes task= (#35 PR-3) ────────────────────────────
 
 def test_predict_does_not_pass_task_kwarg(tmp_path, monkeypatch):

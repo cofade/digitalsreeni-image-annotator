@@ -557,9 +557,11 @@ package logger `digitalsreeni_image_annotator`. `print()` is **banned in
   `QApplication` is created. It installs a single stderr `StreamHandler` on
   the package logger, sets the level, and is **idempotent** (a second call
   adds no second handler — important for tests and re-entry).
-- `get_logger(__name__)` — every module's logger. Because every module name
-  starts with `digitalsreeni_image_annotator.`, all loggers inherit the one
-  package handler/level automatically.
+- `get_logger(__name__)` — every module's logger. `configure()` derives the
+  package root from its own `__name__`, so all loggers share that root and
+  inherit its handler/level automatically — this holds whether the app is
+  imported as `digitalsreeni_image_annotator` (installed / `sreeni`) or
+  `src.digitalsreeni_image_annotator` (the `python -m src...` launcher).
 
 ### Level policy
 
@@ -586,7 +588,7 @@ The default level is INFO. DEBUG is enabled by either:
 New code uses `logger = get_logger(__name__)`, never `print()`. User-facing
 messaging still goes through `QMessageBox` / dialogs — logging is the
 diagnostic channel, dialogs are the user channel; the two are independent
-(see the Error-Handling Convention below).
+(see the Error-Handling Convention above).
 
 ## DINO Temp Annotations — Single Field, Many Images
 

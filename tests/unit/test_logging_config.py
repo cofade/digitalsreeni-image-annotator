@@ -13,7 +13,9 @@ import pytest
 
 from digitalsreeni_image_annotator.core import logging_config
 
-_PKG = "digitalsreeni_image_annotator"
+# Track whichever import root this test process loaded the package under
+# (``configure()`` derives the same value from its own ``__name__``).
+_PKG = logging_config._PKG
 
 
 @pytest.fixture(autouse=True)
@@ -65,3 +67,29 @@ def test_configure_is_idempotent(monkeypatch):
 def test_get_logger_is_namespaced():
     child = logging_config.get_logger(_PKG + ".foo")
     assert child.parent is logging.getLogger(_PKG)
+
+
+def test_pkg_root_derived_from_module_name():
+    # Root is derived from __name__, not hardcoded, so it tracks the import
+    # root the app was loaded under (installed vs. the `python -m src...` path).
+    assert logging_config._PKG == logging_config.__name__.rsplit(".", 2)[0]
+
+
+def test_child_logger_record_reaches_installed_handler(monkeypatch):
+    """End-to-end: after configure(), an INFO record on a child logger actually
+    reaches the installed handler. Guards the "_PKG must match the real import
+    root" contract -- a hardcoded root silently drops every record under the
+    ``python -m src....main`` launcher, where get_logger(__name__) is rooted at
+    ``src.<pkg>`` rather than the configured tree."""
+    _clean_env(monkeypatch)
+    records = []
+    root = logging_config.configure()
+    handler = logging.Handler()
+    handler.emit = lambda r: records.append(r.getMessage())
+    root.addHandler(handler)
+    try:
+        child = logging_config.get_logger(_PKG + ".sub.module")
+        child.info("hello-e2e")
+    finally:
+        root.removeHandler(handler)
+    assert any("hello-e2e" in m for m in records)

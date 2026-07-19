@@ -1508,8 +1508,10 @@ target to migrate to.
   package logger `digitalsreeni_image_annotator`, is idempotent (a second call
   adds no second handler), and is called once from `main.py:main()` **before**
   `QApplication` is created.
-- Every module does `logger = get_logger(__name__)`; because module names sit
-  under the package root, all loggers inherit the one handler/level.
+- Every module does `logger = get_logger(__name__)`; `configure()` derives the
+  package root from its own `__name__` (not a hardcoded string), so all loggers
+  share that root and inherit its handler/level whether the app is imported as
+  `digitalsreeni_image_annotator` or `src.digitalsreeni_image_annotator`.
 - Default level INFO; `--debug` argv flag or `IMAGE_ANNOTATOR_DEBUG` env var
   switches to DEBUG.
 - No third-party logging dependency. `print()` is banned in `src/` and enforced

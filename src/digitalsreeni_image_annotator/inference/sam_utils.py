@@ -392,7 +392,10 @@ class SAMUtils(QObject):
             if self._model is not None and hasattr(self._model, "model"):
                 self._model.model.cpu()
         except Exception:
-            logger.exception("unload: moving model to CPU")
+            logger.warning(
+                "unload: moving model to CPU failed; GPU memory may not be "
+                "fully released", exc_info=True,
+            )
         self._model = None
         self.current_sam_model = None
         self._loaded_model_file = None

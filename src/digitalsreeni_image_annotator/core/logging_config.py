@@ -13,7 +13,14 @@ import logging
 import os
 import sys
 
-_PKG = "digitalsreeni_image_annotator"
+# Derived from this module's own dotted name so the handler attaches to the SAME
+# package root the app was imported under -- ``digitalsreeni_image_annotator``
+# (installed / the ``sreeni`` entry point) OR ``src.digitalsreeni_image_annotator``
+# (the documented ``python -m src.digitalsreeni_image_annotator.main`` launcher).
+# This module lives at ``<root>.core.logging_config``, so the root is ``__name__``
+# minus its last two components. Hardcoding one string silently dropped every
+# record under the other import root.
+_PKG = __name__.rsplit(".", 2)[0]
 
 
 def configure(level=None):
@@ -36,7 +43,9 @@ def configure(level=None):
 
 
 def get_logger(name):
-    """Return a logger for ``name`` (pass ``__name__``). Because every module
-    name starts with ``digitalsreeni_image_annotator.``, the returned logger
-    inherits the package handler/level configured by :func:`configure`."""
+    """Return a logger for ``name`` (pass ``__name__``). Every module shares the
+    package root that :func:`configure` derives from ``__name__``, so the
+    returned logger inherits that root's handler/level automatically — whether
+    the app is imported as ``digitalsreeni_image_annotator`` or
+    ``src.digitalsreeni_image_annotator``."""
     return logging.getLogger(name)

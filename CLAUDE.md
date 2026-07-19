@@ -280,4 +280,5 @@ See [Risks and Technical Debt](docs/11_risks_and_technical_debt.md) for full lis
 - Polygon area uses shoelace formula (utils.py)
 - Export formats copy images to output directory
 - Dark mode changes annotation colors for visibility
+- Headless launch + smoke check: see the `run-app` skill (`.claude/skills/run-app/`)
 - Snake game is hidden Easter egg 🐍

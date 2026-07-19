@@ -511,16 +511,45 @@ def generate_slice_name(filename, t, z, c, s):
 
 ## Logging and Debug Output
 
-### Print Statements
+The application logs through the stdlib `logging` module, rooted at the
+package logger `digitalsreeni_image_annotator`. `print()` is **banned in
+`src/`** (see ADR-030). Configuration lives in
+[`core/logging_config.py`](../src/digitalsreeni_image_annotator/core/logging_config.py):
 
-Current implementation uses `print()` for debugging:
-```python
-print(f"Changed SAM model to: {model_name}")
-print(f"SAM input points: {all_points}, labels: {all_labels}")
-print(f"Loading project from: {project_path}")
-```
+- `configure(level=None)` — called once from `main.py:main()` **before**
+  `QApplication` is created. It installs a single stderr `StreamHandler` on
+  the package logger, sets the level, and is **idempotent** (a second call
+  adds no second handler — important for tests and re-entry).
+- `get_logger(__name__)` — every module's logger. Because every module name
+  starts with `digitalsreeni_image_annotator.`, all loggers inherit the one
+  package handler/level automatically.
 
-**Note**: No formal logging framework is used. Output goes to console.
+### Level policy
+
+| Level | Use for | Examples |
+|-------|---------|----------|
+| `debug` | Diagnostic chatter: array shapes/dtypes, metadata dumps, coordinate/point dumps, per-slice / per-file loop progress | "input points: …", "slice 5/12 written" |
+| `info` | State changes a user might care about | "SAM model loaded: …", "Project auto-saved.", "Created N slices for …" |
+| `warning` | Soft failures / ignored conditions **not** in an `except` ("Skipped …", "… not found", failed user action that returns) | "No SAM model selected." |
+| `exception` / `error(exc_info=True)` | Inside an `except` block — appends the traceback | "Error applying SAM points" |
+
+When in doubt between debug and info, choose **debug**: the default INFO level
+must stay quiet enough for daily use, and a per-slice INFO line on a 2560-slice
+stack is unusable. `logger.exception(...)` may only be called inside an
+`except` block; outside one use `logger.error(..., exc_info=True)`.
+
+### The debug switch
+
+The default level is INFO. DEBUG is enabled by either:
+- `--debug` on the command line (`python -m src.digitalsreeni_image_annotator.main --debug`), or
+- `IMAGE_ANNOTATOR_DEBUG=1` in the environment.
+
+### Rule for new code
+
+New code uses `logger = get_logger(__name__)`, never `print()`. User-facing
+messaging still goes through `QMessageBox` / dialogs — logging is the
+diagnostic channel, dialogs are the user channel; the two are independent
+(see the Error-Handling Convention below).
 
 ## DINO Temp Annotations — Single Field, Many Images
 

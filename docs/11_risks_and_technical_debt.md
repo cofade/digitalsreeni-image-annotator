@@ -167,19 +167,16 @@ return None
 
 ### Print Statements for Logging
 
-**Debt Level**: Low
+**Status**: ✅ Resolved (issue #33)
 
-**Description**: Uses `print()` instead of proper logging framework
-
-**Impact**:
-- Cannot control log levels
-- Cannot redirect logs
-- Hard to debug production issues
-- Console spam
-
-**Effort to Resolve**: Low (days)
-
-**Priority**: Low
+**Description**: Historically used `print()` instead of a logging framework.
+All ~307 `print()` calls and 12 `traceback.print_exc()` sites in `src/` were
+migrated to the stdlib `logging` module: one package-level logger tree rooted
+at `digitalsreeni_image_annotator`, configured once in
+`core/logging_config.py`, with a `--debug` / `IMAGE_ANNOTATOR_DEBUG` level
+switch. `print()` is now banned in `src/` (ADR-030). See the
+"Logging and Debug Output" section in
+[docs/08](08_crosscutting_concepts.md#logging-and-debug-output).
 
 **Plan**: Replace with `logging` module
 

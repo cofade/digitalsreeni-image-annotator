@@ -18,6 +18,11 @@
 
 **Decision**: Use Ultralytics library instead of direct SAM2 installation
 
+**Version bound** (reconciled in the pyproject migration, #38): pinned as
+`ultralytics>=8.3.27,<9` in `pyproject.toml` — the lowest version the code is
+documented against, capped below the next major. The SAM fine-tuning loop
+(ADR-021) was verified on 8.4.51, which remains satisfiable.
+
 **Rationale**:
 - Simplifies SAM model loading (single line)
 - Includes PyTorch dependencies
@@ -1129,8 +1134,8 @@ invites "why is there no run?" confusion.
 
 **Decision**:
 
-- **Core dependency.** MLflow is in `install_requires` (and uncommented in
-  `requirements.txt`), not an extra — a fresh `pip install` always has it. `import
+- **Core dependency.** MLflow is in the `pyproject.toml` runtime `dependencies`
+  list, not an optional extra — a fresh `pip install` always has it. `import
   mlflow` still happens only inside the methods of `training/mlflow_tracker.py`
   (never at module top), so app startup stays fast and a *broken* install can't stop
   the GUI from launching — but tracking is never *expected* to be absent.
@@ -1469,6 +1474,50 @@ offscreen window (`test_keypoint_controller.py`).
 
 This builds on **ADR-022/023** (canvas selection + #40 handle editing), **ADR-024**
 (bounds clamping), and **ADR-026** (snapshot undo) — see those for the machinery reused.
+
+---
+
+## ADR-030: Centralized stdlib `logging`; `print()` Banned in `src/`
+
+**Status**: Accepted (issue #33)
+
+**Context**: The codebase had ~307 `print()` calls and 12 `traceback.print_exc()`
+sites across 23 files and no use of the stdlib `logging` module. Log level could
+not be controlled, output could not be redirected or silenced, and diagnosing a
+user report meant asking them to copy console spam. It also blocked the
+error-handling cleanup (ADR-031): silent `except` sites had no `logger.exception`
+target to migrate to.
+
+**Decision**: Adopt stdlib `logging` with a single package-level console handler.
+
+- New module `core/logging_config.py` exposes `configure(level=None)` and
+  `get_logger(name)`. `configure()` installs one stderr `StreamHandler` on the
+  package logger `digitalsreeni_image_annotator`, is idempotent (a second call
+  adds no second handler), and is called once from `main.py:main()` **before**
+  `QApplication` is created.
+- Every module does `logger = get_logger(__name__)`; because module names sit
+  under the package root, all loggers inherit the one handler/level.
+- Default level INFO; `--debug` argv flag or `IMAGE_ANNOTATOR_DEBUG` env var
+  switches to DEBUG.
+- No third-party logging dependency. `print()` is banned in `src/` and enforced
+  in review.
+- Level policy: debug = diagnostic chatter (per-item loop progress, shape/metadata
+  dumps), info = user-relevant state changes, warning = soft failures outside
+  `except`, `logger.exception` / `error(exc_info=True)` = inside `except`. See the
+  level table in [docs/08](08_crosscutting_concepts.md#logging-and-debug-output).
+
+**Consequences**:
+- One switch turns diagnostic chatter on/off; every log line carries its module
+  name (`%(name)s`).
+- `QMessageBox` / dialog behaviour is unchanged — logging is the diagnostic
+  channel, dialogs are the user channel. The migration touched only the output
+  channel of existing prints, never user-visible messaging.
+- Enables ADR-031 (error-handling convention): swallowed exceptions now have a
+  `logger.exception` target.
+- Tests configure the package logger explicitly
+  (`tests/unit/test_logging_config.py`); package loggers have `propagate = False`
+  after `configure()`, so `caplog` tests must enable propagation on the specific
+  logger or attach `caplog.handler`.
 
 ---
 

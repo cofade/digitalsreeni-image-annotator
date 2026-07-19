@@ -31,6 +31,10 @@ from ..training.sam_trainer import (
     make_custom_filename,
 )
 
+from ..core.logging_config import get_logger
+
+logger = get_logger(__name__)
+
 
 class SAMTrainingThread(QThread):
     """Runs a fine-tuning job off the GUI thread. Emits the result dict on
@@ -51,8 +55,7 @@ class SAMTrainingThread(QThread):
             result = self.trainer.train(self.base_model, self.groups, **self.config)
             self.finished.emit(result)
         except Exception as e:  # surfaced to the GUI thread by training_finished
-            import traceback
-            traceback.print_exc()
+            logger.exception("SAM fine-tuning failed")
             self.finished.emit(str(e))
 
 
@@ -251,7 +254,7 @@ class SAMTrainController(QObject):
             else:
                 webbrowser.open(url)
         except Exception as exc:
-            print(f"Could not open MLflow UI for the run: {exc}")
+            logger.exception("Could not open MLflow UI for the run")
 
     def _gpu_gate(self) -> bool:
         """Warn (and let the user back out) when no usable GPU is present."""

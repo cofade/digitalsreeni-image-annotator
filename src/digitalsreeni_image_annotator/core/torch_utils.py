@@ -9,6 +9,9 @@ dies with "CUDA error: no kernel image is available for execution on
 the device"). This module detects that mismatch up front and falls back
 to CPU with an actionable warning instead of a cryptic crash mid-inference.
 """
+from .logging_config import get_logger
+
+logger = get_logger(__name__)
 
 _cached_result = None
 
@@ -25,7 +28,7 @@ def resolve_torch_device():
     if _cached_result is None:
         _cached_result = _resolve()
         if _cached_result[1]:
-            print(f"[torch] {_cached_result[1]}")
+            logger.warning(_cached_result[1])
     return _cached_result
 
 

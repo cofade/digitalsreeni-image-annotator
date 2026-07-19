@@ -23,6 +23,10 @@ from PyQt6.QtWidgets import QFileDialog, QInputDialog, QMessageBox
 from ..core import image_utils
 from ..core.keypoint_schema import sanitize_schema as _sanitize_keypoint_schema
 
+from ..core.logging_config import get_logger
+
+logger = get_logger(__name__)
+
 
 class ProjectController(QObject):
     def __init__(self, main_window):
@@ -70,12 +74,12 @@ class ProjectController(QObject):
             self.update_window_title()
 
     def open_project(self):
-        print("open_project method called")
+        logger.debug("open_project method called")
         self.mw.remove_all_temp_annotations()
         project_file, _ = QFileDialog.getOpenFileName(
             self.mw, "Open Project", "", "Image Annotator Project (*.iap)"
         )
-        print(f"Selected project file: {project_file}")
+        logger.debug(f"Selected project file: {project_file}")
         if project_file:
             try:
                 self.backup_project_before_open(project_file)
@@ -89,7 +93,7 @@ class ProjectController(QObject):
                     f"The project file has been restored from backup.",
                 )
         else:
-            print("No project file selected")
+            logger.debug("No project file selected")
 
     def backup_project_before_open(self, project_file):
         """Create a backup of the project file before opening it."""
@@ -107,12 +111,12 @@ class ProjectController(QObject):
         if self.mw.backup_project_path and os.path.exists(self.mw.backup_project_path):
             try:
                 shutil.copy2(self.mw.backup_project_path, self.mw.current_project_file)
-                print(f"Project restored from backup: {self.mw.backup_project_path}")
+                logger.info(f"Project restored from backup: {self.mw.backup_project_path}")
             except Exception as e:
-                print(f"Failed to restore from backup: {str(e)}")
+                logger.exception("Failed to restore from backup")
 
     def open_specific_project(self, project_file):
-        print(f"Opening specific project: {project_file}")
+        logger.debug(f"Opening specific project: {project_file}")
         if os.path.exists(project_file):
             try:
                 self.mw.is_loading_project = True
@@ -150,13 +154,13 @@ class ProjectController(QObject):
                 # No success dialog — the loaded canvas + updated window title
                 # already make a successful open obvious; a modal just adds a
                 # click. Errors below still surface as dialogs.
-                print(f"Project opened successfully: {project_file}")
+                logger.info(f"Project opened successfully: {project_file}")
 
             except Exception as e:
                 self.mw.is_loading_project = False
                 raise e
         else:
-            print(f"Project file not found: {project_file}")
+            logger.warning(f"Project file not found: {project_file}")
             QMessageBox.critical(
                 self.mw, "Error", f"Project file not found: {project_file}"
             )
@@ -175,8 +179,8 @@ class ProjectController(QObject):
             if schema is not None:
                 self.mw.keypoint_schemas[class_info["name"]] = schema
             elif class_info.get("keypoint_schema") is not None:
-                print(f"  Skipped malformed keypoint schema for class "
-                      f"'{class_info['name']}'.")
+                logger.warning(f"Skipped malformed keypoint schema for class "
+                               f"'{class_info['name']}'.")
 
         self.mw.all_images = project_data.get("images", [])
         self.mw.image_paths = project_data.get("image_paths", {})
@@ -217,8 +221,8 @@ class ProjectController(QObject):
         if phrases:
             kept = {k: v for k, v in phrases.items() if k in valid_classes}
             for orphan in phrases.keys() - kept.keys():
-                print(f"  Skipped saved DINO phrases for unknown class "
-                      f"'{orphan}' — class is not in the current project.")
+                logger.warning(f"Skipped saved DINO phrases for unknown class "
+                               f"'{orphan}' — class is not in the current project.")
             self.mw.dino_phrase_panel.set_phrases(kept)
 
         for cls_name, thr in dino_cfg.get("thresholds", {}).items():
@@ -229,8 +233,8 @@ class ProjectController(QObject):
                 thr.get("nms", 0.50),
             )
             if not ok:
-                print(f"  Skipped saved DINO thresholds for unknown class "
-                      f"'{cls_name}' — class is not in the current project.")
+                logger.warning(f"Skipped saved DINO thresholds for unknown class "
+                               f"'{cls_name}' — class is not in the current project.")
 
         self.mw.update_ui()
 
@@ -564,4 +568,4 @@ class ProjectController(QObject):
 
         if hasattr(self.mw, "current_project_file"):
             self.save_project(show_message=False)
-            print("Project auto-saved.")
+            logger.info("Project auto-saved.")

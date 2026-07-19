@@ -173,8 +173,11 @@ class DicomConverter(QDialog):
         try:
             if hasattr(ds, 'WindowCenter') and hasattr(ds, 'WindowWidth'):
                 return apply_voi_lut(image, ds)
-        except:
-            pass
+        except Exception:
+            logger.warning(
+                "DICOM window/level could not be applied; using raw pixel data",
+                exc_info=True,
+            )
         return image
 
 

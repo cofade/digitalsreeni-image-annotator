@@ -37,6 +37,9 @@
 - Documentation recommends tiny/small models
 - UI warns about large model
 - Autosave reduces data loss
+- Out-of-memory on model load now shows an actionable "pick a smaller model"
+  dialog instead of a generic error (`core/torch_utils._is_oom` +
+  `SAMController.change_sam_model`, issue #34)
 
 **Future Action**:
 - Add RAM detection and warning
@@ -136,9 +139,18 @@ controller slot) and the SAM/DINO/YOLO inference paths.
 
 ### Inconsistent Error Handling
 
-**Debt Level**: Medium
+**Status**: ✅ Resolved with a written convention (issue #34)
 
-**Description**: Mix of exceptions, return values, and UI warnings
+**Debt Level**: Medium (historical)
+
+**Resolution**: A single error-handling convention now governs the codebase —
+core/inference/io/training raise; controllers/dialogs catch, `logger.exception`,
+and surface a `QMessageBox`; catch the narrowest type; never `pass` silently;
+bare `except:` banned. Seven silent `except: pass` sites were fixed and the one
+bare `except:` removed. See ADR-031 and the Error-Handling Convention in
+[docs/08](08_crosscutting_concepts.md#error-handling-convention-issue-34).
+
+**Description (historical)**: Mix of exceptions, return values, and UI warnings
 
 **Examples**:
 ```python

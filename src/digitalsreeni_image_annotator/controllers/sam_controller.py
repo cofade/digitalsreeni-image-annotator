@@ -186,13 +186,24 @@ class SAMController(QObject):
         try:
             self.mw.sam_utils.change_sam_model(model_name)
         except Exception as e:
-            QMessageBox.critical(
-                self.mw,
-                "SAM Model Error",
-                f"Failed to load SAM model '{model_name}':\n\n{str(e)}\n\n"
-                "Check that the model weights are downloadable and that torch "
-                "is correctly installed for your platform / GPU."
-            )
+            from ..core.torch_utils import _is_oom
+            logger.exception("Failed to load SAM model '%s'", model_name)
+            if _is_oom(e):
+                QMessageBox.critical(
+                    self.mw,
+                    "Not Enough Memory",
+                    f"Not enough GPU/system memory to load '{model_name}'.\n\n"
+                    "Close other applications or pick a smaller model "
+                    "(SAM 2 tiny or small are recommended)."
+                )
+            else:
+                QMessageBox.critical(
+                    self.mw,
+                    "SAM Model Error",
+                    f"Failed to load SAM model '{model_name}':\n\n{str(e)}\n\n"
+                    "Check that the model weights are downloadable and that torch "
+                    "is correctly installed for your platform / GPU."
+                )
             self.mw.sam_model_selector.setCurrentIndex(0)
             return
 

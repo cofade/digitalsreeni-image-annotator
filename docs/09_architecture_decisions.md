@@ -1521,6 +1521,46 @@ target to migrate to.
 
 ---
 
+## ADR-031: Raise in Core, Catch + Dialog at the UI Boundary, No Silent `pass`
+
+**Status**: Accepted (issue #34)
+
+**Context**: `docs/11`'s "Inconsistent Error Handling" debt — a mix of raised
+exceptions, message boxes, and silent `return None`, plus several
+`except Exception: pass` and one bare `except:` that swallowed real failures
+(CUDA cleanup, a broken MLflow log sink, DICOM VOI-LUT) with no log line. A
+swallowed error left nothing in the bug report.
+
+**Decision**: Adopt one convention (also written into docs/08):
+1. Core / inference / io / training modules **raise**; they never dialog and
+   never return `None` to signal a failed user action.
+2. Controllers / dialogs (the UI boundary) **catch**, `logger.exception(...)`,
+   and surface a `QMessageBox`.
+3. Catch the **narrowest** exception type. `except Exception` only at a UI
+   boundary or a documented crash-safety barrier.
+4. **Never `pass` silently** — log (`exc_info=True` / `.exception`) or use a
+   narrow type + `# reason` comment.
+5. Bare `except:` is **banned**.
+
+Concrete changes: the seven enumerated silent sites now log; the one bare
+`except:` (`dicom_converter.apply_window_level`) became `except Exception` +
+`logger.warning`. A friendly OOM dialog rides along: `core/torch_utils._is_oom`
+(torch-free, unit-tested) drives a "pick a smaller model" message in
+`SAMController.change_sam_model`, while non-OOM failures keep the generic dialog;
+both reset the model selector.
+
+**Consequences**:
+- Every swallowed exception is now visible (logged) or surfaced (dialog).
+- The three deliberate narrow catches stay as the convention's positive
+  examples: `except TypeError: pass  # already disconnected` (yolo /
+  sam_train controllers) and `except ImportError` in `main.py`.
+- `mlflow_tracker`'s outer `except Exception` ("never let tracking abort
+  training") and the ADR-013 `InferenceBusyError` re-entrancy swallow are
+  documented barriers, not silent-swallow sites, and are unchanged.
+- Depends on ADR-030 (logging) for the `logger.exception` target.
+
+---
+
 ## Decisions Under Consideration
 
 ### Consider pytest-qt for Utility Testing

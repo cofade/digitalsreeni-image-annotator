@@ -390,6 +390,43 @@ on every run.
 
 ## Error Handling
 
+### Error-Handling Convention (issue #34)
+
+Where an exception is caught and what happens to it is a decision, not an
+accident. The rules, enforced in review:
+
+1. **Core / inference / io / training modules raise.** They never show dialogs
+   and never return `None` to signal failure of a user-initiated action.
+2. **Controllers / dialogs (the UI boundary) catch**, `logger.exception(...)`,
+   and surface via `QMessageBox` when a user action failed.
+3. **Catch the narrowest exception type** that models the expected failure.
+   `except Exception` is allowed only at a UI boundary or a documented
+   crash-safety barrier (e.g. `mlflow_tracker` "never let tracking abort
+   training").
+4. **Never `pass` silently.** Every swallowed exception must either log
+   (`logger.exception(...)` / `logger.warning(..., exc_info=True)`) or carry a
+   narrow type plus a `# reason` comment.
+5. **Bare `except:` is banned** (it also traps `KeyboardInterrupt` / `SystemExit`).
+
+```python
+# Good — narrow, documented no-op
+except TypeError:
+    pass  # signal already disconnected
+
+# Good — swallow but stay visible
+except Exception:
+    logger.warning("CUDA cache cleanup failed during unload", exc_info=True)
+
+# Bad — silent, untyped
+except Exception:
+    pass
+```
+
+The OOM-on-model-load path is a worked example: `core/torch_utils._is_oom`
+(torch-free) lets `SAMController.change_sam_model` show a tailored "pick a
+smaller model" dialog for out-of-memory failures while keeping the generic
+download/torch message for everything else. See ADR-031.
+
 ### YOLO Model/Data Mismatch
 
 **Problem**: Loading YOLO model trained on different classes

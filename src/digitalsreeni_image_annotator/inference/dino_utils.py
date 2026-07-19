@@ -137,7 +137,10 @@ class DINOUtils(QObject):
                 torch.cuda.empty_cache()
                 torch.cuda.ipc_collect()
         except Exception:
-            pass
+            logger.warning(
+                "CUDA cache cleanup failed during unload; GPU memory may not "
+                "be fully released", exc_info=True,
+            )
         logger.info("unload complete")
 
     # ── inference ─────────────────────────────────────────────────────

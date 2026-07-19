@@ -365,7 +365,7 @@ class SAMUtils(QObject):
             else:
                 logger.info("Running on CPU")
         except Exception:
-            pass
+            logger.debug("could not query torch device", exc_info=True)
 
     def unload(self) -> None:
         """Free GPU/CPU memory held by the loaded model.
@@ -404,7 +404,10 @@ class SAMUtils(QObject):
                 torch.cuda.empty_cache()
                 torch.cuda.ipc_collect()
         except Exception:
-            pass
+            logger.warning(
+                "CUDA cache cleanup failed during unload; GPU memory may not "
+                "be fully released", exc_info=True,
+            )
         logger.info("unload complete")
 
     # ── inference ──────────────────────────────────────────────────────

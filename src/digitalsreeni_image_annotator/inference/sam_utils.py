@@ -391,7 +391,7 @@ class SAMUtils(QObject):
         try:
             if self._model is not None and hasattr(self._model, "model"):
                 self._model.model.cpu()
-        except Exception as e:
+        except Exception:
             logger.exception("unload: moving model to CPU")
         self._model = None
         self.current_sam_model = None

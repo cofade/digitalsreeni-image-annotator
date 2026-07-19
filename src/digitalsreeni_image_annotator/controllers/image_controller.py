@@ -487,7 +487,7 @@ class ImageController(QObject):
                     else:
                         unknown = [a for a in series_axes if axis_map.get(a) is None]
                         logger.debug(f"TIFF series axes had unknown labels {unknown}, no hint applied")
-            except Exception as e:
+            except Exception:
                 logger.exception("Could not read TIFF series axes")
 
             if len(tif.pages) > 1:

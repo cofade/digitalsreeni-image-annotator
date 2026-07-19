@@ -273,7 +273,7 @@ class ImageAugmenterDialog(QDialog):
                     self.progress_bar.setValue(i * self.aug_count_spin.value() + j + 1)
                     QApplication.processEvents()
     
-                except Exception as e:
+                except Exception:
                     logger.exception(f"Error processing {image_file} (augmentation {j+1})")
                     continue  # Skip this augmentation and continue with the next
     

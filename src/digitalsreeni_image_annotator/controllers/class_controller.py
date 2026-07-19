@@ -187,7 +187,7 @@ class ClassController(QObject):
 
             if not self.mw.is_loading_project:
                 self.mw.auto_save()
-        except Exception as e:
+        except Exception:
             logger.exception("Error adding class")
 
     def update_class_item_color(self, item, color):

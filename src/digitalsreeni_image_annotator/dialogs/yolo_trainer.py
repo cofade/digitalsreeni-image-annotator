@@ -412,7 +412,7 @@ class YOLOTrainer(QObject):
 
             if len(parts) > 1:  # something beyond the epoch tag was available
                 self.progress_signal.emit("  ".join(parts))
-        except Exception as exc:
+        except Exception:
             logger.exception("Could not surface YOLO val metrics")
 
     def _emit_mlflow_url(self):
@@ -438,7 +438,7 @@ class YOLOTrainer(QObject):
             self.mlflow_run_url.emit(
                 run_ui_url(run.info.experiment_id, run.info.run_id)
             )
-        except Exception as exc:
+        except Exception:
             logger.exception("Could not resolve MLflow run link for YOLO training")
     
     def train_model(self, epochs=100, imgsz=640, *, cos_lr=True, lr0=0.01,
@@ -597,7 +597,7 @@ class YOLOTrainer(QObject):
                         schemas = [self.main_window.keypoint_schemas.get(n) for n in names.values()]
                         if schemas and all(s is not None for s in schemas) and all(s == schemas[0] for s in schemas):
                             yaml_out_data['keypoint_schema'] = schemas[0]
-            except Exception as exc:
+            except Exception:
                 logger.exception("Could not carry pose metadata into registered model yaml")
             yaml_out = best.parent.parent / "data.yaml"
             with yaml_out.open("w", encoding="utf-8") as f:
@@ -606,7 +606,7 @@ class YOLOTrainer(QObject):
             self.last_saved_yaml_path = str(yaml_out)
             logger.info(f"Trained YOLO model registered: {best}")
             self._prune_run_artifacts(best.parent.parent, best, yaml_out)
-        except Exception as exc:
+        except Exception:
             logger.exception("Could not register trained YOLO model")
 
     def _prune_run_artifacts(self, run_dir, best, data_yaml):
@@ -638,7 +638,7 @@ class YOLOTrainer(QObject):
                 if path.is_dir() and not any(path.iterdir()):
                     path.rmdir()
             logger.info(f"Pruned YOLO run dir to best.pt + data.yaml (diagnostics in MLflow): {run_dir}")
-        except Exception as exc:
+        except Exception:
             logger.exception("Could not prune YOLO run artifacts")
 
     def verify_dataset_structure(self):

@@ -112,7 +112,7 @@ class ProjectController(QObject):
             try:
                 shutil.copy2(self.mw.backup_project_path, self.mw.current_project_file)
                 logger.info(f"Project restored from backup: {self.mw.backup_project_path}")
-            except Exception as e:
+            except Exception:
                 logger.exception("Failed to restore from backup")
 
     def open_specific_project(self, project_file):

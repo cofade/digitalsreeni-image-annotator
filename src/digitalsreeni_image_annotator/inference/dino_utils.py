@@ -123,7 +123,7 @@ class DINOUtils(QObject):
         try:
             if self._model is not None:
                 self._model.cpu()
-        except Exception as e:
+        except Exception:
             logger.exception("unload: moving model to CPU")
         self._proc = None
         self._model = None

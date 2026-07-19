@@ -268,7 +268,7 @@ class SliceRegistrationTool(QDialog):
     
             # Store original properties
             original_dtype = img0.dtype
-            logger.debug(f"Original image properties:")
+            logger.debug("Original image properties:")
             logger.debug(f"Dtype: {original_dtype}")
             logger.debug(f"Range: {img0.min()} - {img0.max()}")
             logger.debug(f"Shape: {img0.shape}")
@@ -319,7 +319,7 @@ class SliceRegistrationTool(QDialog):
             # Convert back to original dtype without changing values
             out_registered = out_registered.astype(original_dtype)
     
-            logger.debug(f"Output image properties:")
+            logger.debug("Output image properties:")
             logger.debug(f"Dtype: {out_registered.dtype}")
             logger.debug(f"Range: {out_registered.min()} - {out_registered.max()}")
             logger.debug(f"Shape: {out_registered.shape}")
@@ -427,7 +427,7 @@ class SliceRegistrationTool(QDialog):
                 logger.debug(f"Final stack shape: {stack.shape}")
                 return stack
                 
-        except Exception as e:
+        except Exception:
             logger.exception("Error in load_images")
             raise
 

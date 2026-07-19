@@ -93,7 +93,7 @@ class ProjectSearchDialog(QDialog):
                         
                         if self.project_matches(project_data, query, start_date, end_date):
                             self.results_list.addItem(project_path)
-                    except Exception as e:
+                    except Exception:
                         logger.exception(f"Error reading project file {filename}")
 
         if self.results_list.count() == 0:

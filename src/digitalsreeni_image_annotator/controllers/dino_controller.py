@@ -305,7 +305,7 @@ class DINOController(QObject):
             logger.debug(f"detect_single: auto_accept=True, committing {len(results)} result(s)")
             try:
                 self._commit_dino_results(image_name, results, sam_results)
-            except Exception as e:
+            except Exception:
                 logger.exception("_commit_dino_results failed")
             n_committed = sum(1 for s in sam_results if "error" not in s)
             self.mw.image_label.temp_annotations = []
@@ -416,7 +416,7 @@ class DINOController(QObject):
                     model_name=model_name,
                     custom_model_path=self.mw.dino_custom_model_path,
                 )
-            except Exception as e:
+            except Exception:
                 logger.exception(f"DINO failed for {image_name}")
                 continue
 
@@ -428,7 +428,7 @@ class DINOController(QObject):
                 sam_results = self.mw.sam_utils.apply_sam_predictions_batch(
                     qimage, bboxes
                 )
-            except Exception as e:
+            except Exception:
                 logger.exception(f"SAM failed for {image_name}")
                 continue
             if sam_results is None:
@@ -490,7 +490,7 @@ class DINOController(QObject):
                         QImage.Format.Format_RGB888,
                     )
                     items.append((file_name, qimage))
-                except Exception as e:
+                except Exception:
                     logger.exception(f"Skipping '{file_name}': failed to load.")
         logger.debug(f"batch work items: {len(items)} total")
         return items

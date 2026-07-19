@@ -78,7 +78,7 @@ def import_coco_json(file_path, class_mapping):
                     'path': image_path,
                     'id': int(image['id'])
                 }
-            except KeyError as e:
+            except KeyError:
                 logger.exception("Missing required field in image data")
                 continue
 
@@ -167,7 +167,7 @@ def import_coco_json(file_path, class_mapping):
 
                 imported_annotations[file_name][category_name].append(annotation)
                 
-            except (KeyError, ValueError, TypeError) as e:
+            except (KeyError, ValueError, TypeError):
                 logger.exception("Error processing annotation")
                 continue
 

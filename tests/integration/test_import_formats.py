@@ -7,7 +7,6 @@ for full round-trips.
 """
 
 import json
-import os
 
 import pytest
 import yaml as yaml_lib

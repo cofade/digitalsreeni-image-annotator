@@ -484,7 +484,7 @@ class YOLOController(QObject):
                 QTimer.singleShot(2500 if ok else 0, lambda: webbrowser.open(url))
             else:
                 webbrowser.open(url)
-        except Exception as exc:
+        except Exception:
             logger.exception("Could not open MLflow UI for the run")
 
     def training_finished(self, results):

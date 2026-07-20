@@ -50,8 +50,8 @@ def build_sidebar(window):
     # below) and the sidebar scrolls vertically when the window is too short,
     # instead of the Annotations table collapsing to just its header row on
     # small screens or at large UI font sizes. Horizontal scrolling is off:
-    # with setWidgetResizable(True) the content tracks the viewport width, so
-    # it wraps rather than scrolls sideways.
+    # with setWidgetResizable(True) the content is resized to the viewport
+    # width rather than scrolling sideways.
     window.sidebar_scroll = QScrollArea()
     window.sidebar_scroll.setWidgetResizable(True)
     window.sidebar_scroll.setHorizontalScrollBarPolicy(
@@ -60,6 +60,10 @@ def build_sidebar(window):
     window.sidebar_scroll.setVerticalScrollBarPolicy(
         Qt.ScrollBarPolicy.ScrollBarAsNeeded
     )
+    # Preserve the window-width floor the sidebar's own minimumSizeHint used to
+    # impose (a width-resizable scroll area with horizontal scroll off would
+    # otherwise let the window shrink until the multi-button rows clip).
+    window.sidebar_scroll.setMinimumWidth(260)
     # Structural only (no background/border literals) so the active stylesheet
     # still paints the sidebar; a visible frame would punch a box into the
     # soft-dark sidebar. See "No Hardcoded Colors Rule" in CLAUDE.md.
@@ -99,8 +103,8 @@ def build_sidebar(window):
     # ImageAnnotator.__init__ post-setup_ui; moved here to live next
     # to the widget construction.
     window.class_list.itemChanged.connect(window.toggle_class_visibility)
-    # Usable minimum so the class list can't be squeezed to nothing when the
-    # sidebar scrolls (#88); the scroll area supplies scrolling instead.
+    # Usable minimum (~4 rows) so the class list can't be squeezed to nothing
+    # when the sidebar scrolls (#88); the scroll area supplies scrolling.
     window.class_list.setMinimumHeight(100)
     window.sidebar_layout.addWidget(window.class_list)
 
@@ -219,12 +223,12 @@ def build_sidebar(window):
     window.dino_class_table.itemSelectionChanged.connect(
         window.on_dino_class_row_changed
     )
-    window.dino_class_table.setMinimumHeight(80)  # keep usable when scrolled (#88)
+    window.dino_class_table.setMinimumHeight(80)  # ~3 rows, usable when scrolled (#88)
     dino_layout.addWidget(window.dino_class_table)
 
     # Phrase editor
     window.dino_phrase_panel = PhraseEditorPanel()
-    window.dino_phrase_panel.setMinimumHeight(100)  # keep usable when scrolled (#88)
+    window.dino_phrase_panel.setMinimumHeight(100)  # ~4 rows, usable when scrolled (#88)
     dino_layout.addWidget(window.dino_phrase_panel)
 
     # Detect buttons
@@ -291,8 +295,8 @@ def build_sidebar(window):
     # themes. See dino_phrase_editor.ClassThresholdTable.
     table.setStyleSheet("QHeaderView::section { font-weight: bold; padding: 2px; }")
     window.annotation_list = table
-    # Usable minimum so the Annotations table can't collapse to its header row
-    # when the DINO panel expands (#88); the sidebar scrolls instead.
+    # Usable minimum (~5 rows) so the Annotations table can't collapse to its
+    # header row when the DINO panel expands (#88); the sidebar scrolls instead.
     window.annotation_list.setMinimumHeight(140)
     window.annotation_list.itemSelectionChanged.connect(
         window.update_highlighted_annotations

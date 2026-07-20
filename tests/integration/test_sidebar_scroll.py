@@ -32,19 +32,28 @@ def test_sidebar_wrapped_in_scroll_area(window):
     assert window.sidebar_scroll.widget() is window.sidebar
 
 
-def test_sidebar_has_no_horizontal_scroll(window):
+def test_sidebar_scroll_policies_and_parenting(window):
     from PyQt6.QtCore import Qt
 
     assert (
         window.sidebar_scroll.horizontalScrollBarPolicy()
         == Qt.ScrollBarPolicy.ScrollBarAlwaysOff
     )
+    assert (
+        window.sidebar_scroll.verticalScrollBarPolicy()
+        == Qt.ScrollBarPolicy.ScrollBarAsNeeded
+    )
+    # The scroll area (not the bare sidebar) is what sits in the main layout.
+    assert window.layout.indexOf(window.sidebar_scroll) != -1
+    assert window.layout.indexOf(window.sidebar) == -1
 
 
 def test_key_sections_keep_a_usable_minimum_height(window):
-    # Each vertically-competing section keeps a minimum so it can't be
+    # Each vertically-competing section keeps a real minimum so it can't be
     # squeezed to a header row; the scroll area supplies scrolling instead.
-    assert window.class_list.minimumHeight() > 0
-    assert window.annotation_list.minimumHeight() > 0
-    assert window.dino_class_table.minimumHeight() > 0
-    assert window.dino_phrase_panel.minimumHeight() > 0
+    # Assert the intended floors, not just > 0, so a later fat-finger to 1px
+    # that reintroduces the collapse is caught.
+    assert window.class_list.minimumHeight() >= 100
+    assert window.dino_class_table.minimumHeight() >= 80
+    assert window.dino_phrase_panel.minimumHeight() >= 100
+    assert window.annotation_list.minimumHeight() >= 140

@@ -306,7 +306,9 @@ row. The fix is structural, not per-widget:
   (`window.sidebar_scroll`, `setWidgetResizable(True)`) that is what gets
   added to the main layout — `window.sidebar` itself is the scroll area's
   inner widget. Horizontal scrolling is `ScrollBarAlwaysOff`; because the
-  area is width-resizable the content tracks the viewport width and wraps.
+  area is width-resizable the content is resized to the viewport width. A
+  `setMinimumWidth` on the scroll area preserves the window-width floor the
+  sidebar's own `minimumSizeHint` used to impose.
 - Each vertically-competing section (`class_list`, `dino_class_table`,
   `dino_phrase_panel`, `annotation_list`) carries a `setMinimumHeight(...)`
   so it keeps a usable size. The sum of those minimums is what makes the

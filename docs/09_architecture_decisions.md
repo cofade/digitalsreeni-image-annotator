@@ -1733,8 +1733,9 @@ non-structural overlays on the existing sort/filter machinery:
   derived by `sorted({...})`). Grouped images cluster via the sort key
   `(group.casefold(), name.casefold(), name)`; the group is shown only in the row
   tooltip so item text stays the bare file name. A second combo filters by group,
-  OR-combined with the status filter. Persisted in the `.iap` (dual with a load-time
-  restoration loop because this fork rebuilds `all_images` on load).
+  OR-combined with the status filter. Persisted in the `.iap`; no load-time
+  restoration is needed because `load_project_data` aliases `all_images` to the
+  parsed `images` list and the load loop doesn't rebuild it.
 
 **Consequences**:
 - ✅ Both features ride the `update_slice_list_colors → apply_image_filter` contract,
@@ -1744,6 +1745,9 @@ non-structural overlays on the existing sort/filter machinery:
 - ✅ No hardcoded colours (painted pixmaps + palette-safe dot colours), dark-mode safe.
 - ⚠️ Groups are a flat single-level tag, not nested folders — sufficient for the PRD
   US-1 remainder; a real hierarchy would need the tree widget this ADR rejects.
+- Status-badge colours are theme-tuned (a brighter green / lighter gray on the dark
+  sidebar), so the `(annotated, dark_mode)` cache dimension and the `on_theme_changed`
+  rebuild produce genuinely different pixmaps — not dead machinery.
 
 ---
 

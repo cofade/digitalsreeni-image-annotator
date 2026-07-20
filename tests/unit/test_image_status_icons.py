@@ -72,11 +72,15 @@ def test_icons_are_cached_per_state(qt_application):
     window.deleteLater()
 
 
-def test_theme_flip_rebuilds_cache(qt_application):
+def test_theme_flip_repaints_icons_with_theme_tuned_colors(qt_application):
+    # The badge colours are theme-tuned, so a dark-mode flip must produce a
+    # visibly DIFFERENT pixmap (not just a rebuilt cache key). This defends
+    # against the dark-mode machinery silently becoming inert.
     window = _make_window()
     _add_image(window, "a.png")  # un-annotated
 
     window.image_controller.refresh_image_status_icons()
+    light_img = window.image_list.item(0).icon().pixmap(12, 12).toImage()
     assert (False, False) in window.image_controller._status_icon_cache
 
     window.dark_mode = True
@@ -85,5 +89,8 @@ def test_theme_flip_rebuilds_cache(qt_application):
     cache = window.image_controller._status_icon_cache
     assert (False, True) in cache  # rebuilt for the dark theme
     assert (False, False) not in cache  # stale light-theme entry cleared
+
+    dark_img = window.image_list.item(0).icon().pixmap(12, 12).toImage()
+    assert dark_img != light_img  # the dot actually recolours per theme
 
     window.deleteLater()

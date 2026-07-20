@@ -219,8 +219,10 @@ class ImageController(QObject):
             active_group = group_combo.currentText()
 
         if mode == 0 and active_group is None:
-            # Default case runs on every update_slice_list_colors —
-            # keep it a plain unhide pass with no annotation scans.
+            # Default case runs on every update_slice_list_colors — skip the
+            # per-row hide computation (nothing is filtered) but still refresh
+            # the status badges, which necessarily scan annotation state per
+            # row (unavoidable: badges must stay current after every mutation).
             for i in range(self.mw.image_list.count()):
                 self.mw.image_list.setRowHidden(i, False)
             self.refresh_image_status_icons()
@@ -248,8 +250,9 @@ class ImageController(QObject):
         Filled green dot = the image (or, for a multi-dim stack, any of
         its slices) has annotations; hollow gray dot = none. Both states
         are derived — nothing is stored. Icons are cached per (annotated,
-        dark_mode) and only painted once; on_theme_changed clears the
-        cache when the theme flips so they recolour.
+        dark_mode) and painted once; the colours are theme-tuned (brighter
+        on the dark sidebar), so on_theme_changed clears the cache on a
+        dark-mode flip to force a repaint at the new theme's colours.
 
         Called at the end of apply_image_filter (so it refreshes on every
         annotation mutation via update_slice_list_colors) and after
@@ -267,28 +270,35 @@ class ImageController(QObject):
         key = (annotated, dark)
         icon = self._status_icon_cache.get(key)
         if icon is None:
-            icon = self._build_status_icon(annotated)
+            icon = self._build_status_icon(annotated, dark)
             self._status_icon_cache[key] = icon
         return icon
 
     @staticmethod
-    def _build_status_icon(annotated):
-        """Paint a 12x12 status dot into a QIcon.
+    def _build_status_icon(annotated, dark):
+        """Paint a 12x12 status dot into a QIcon, tuned for the theme.
 
         These are painted PIXMAPS, not stylesheet colours, so the "No
-        Hardcoded Colors Rule" does not apply. The two colours are chosen
-        to read on both the light and soft-dark sidebar backgrounds.
+        Hardcoded Colors Rule" (which targets setStyleSheet literals) does
+        not apply. The colours are picked per theme: a brighter green /
+        lighter gray on the soft-dark sidebar for adequate contrast, a
+        deeper pair on the light one. That difference is what makes the
+        (annotated, dark) cache dimension and on_theme_changed do real work.
         """
+        if annotated:
+            fill = QColor(63, 185, 80) if dark else QColor(46, 160, 67)
+        else:
+            outline = QColor(155, 155, 155) if dark else QColor(120, 120, 120)
         pixmap = QPixmap(12, 12)
         pixmap.fill(Qt.GlobalColor.transparent)
         painter = QPainter(pixmap)
         painter.setRenderHint(QPainter.RenderHint.Antialiasing, True)
         if annotated:
             painter.setPen(Qt.PenStyle.NoPen)
-            painter.setBrush(QColor(46, 160, 67))  # green fill
+            painter.setBrush(fill)  # filled dot
             painter.drawEllipse(2, 2, 8, 8)
         else:
-            pen = QPen(QColor(140, 140, 140))  # mid-gray outline
+            pen = QPen(outline)  # hollow outline dot
             pen.setWidthF(1.5)
             painter.setPen(pen)
             painter.setBrush(Qt.BrushStyle.NoBrush)
@@ -321,6 +331,11 @@ class ImageController(QObject):
         if info is None:
             return
         normalized = group.strip() if isinstance(group, str) else None
+        normalized = normalized or None
+        # No-op if nothing actually changes (e.g. "Remove from group" on an
+        # already-ungrouped image) so we don't re-sort + auto_save for nothing.
+        if normalized == info.get("group"):
+            return
         if normalized:
             info["group"] = normalized
         else:

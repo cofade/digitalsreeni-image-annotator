@@ -826,7 +826,10 @@ rows**:
   (`on_theme_changed`, called from `ui/theme.py::toggle_dark_mode`). The
   refresh runs at the end of `apply_image_filter()` (so every annotation
   mutation repaints badges via the `update_slice_list_colors →
-  apply_image_filter` contract) and at the end of `sort_image_list()`.
+  apply_image_filter` contract) and at the end of `sort_image_list()`. The
+  dot colours are theme-tuned (a brighter green / lighter gray on the dark
+  sidebar), which is what makes the `(annotated, dark_mode)` cache dimension
+  and the `on_theme_changed` rebuild do real work.
 - **Named groups**: an optional `"group"` string key on each `all_images`
   entry (no registry; the group set is derived). `set_image_group` sets/clears
   it, re-sorts, and auto-saves (guarded by `is_loading_project`). The
@@ -839,9 +842,10 @@ rows**:
   group; `apply_image_filter` hides a row when **either** the status filter
   or the group filter excludes it (OR of the two hide flags), keeping index 0
   of both combos as the cheap "hide nothing" default. Groups persist in the
-  `.iap`; because this fork's `load_project_data` rebuilds `all_images` from
-  scratch (dropping extra keys), a small restoration loop copies saved
-  `"group"` values back after the image-load loop.
+  `.iap`; on load no restoration step is needed — `load_project_data` aliases
+  `all_images` to the parsed `project_data["images"]` and the load loop does
+  not rebuild it (`add_images_to_list` no-ops because `image_paths` is set
+  first), so the `"group"` keys survive as-is.
 
 ## Image List Sorting — Rebuild, Don't `setSortingEnabled`
 

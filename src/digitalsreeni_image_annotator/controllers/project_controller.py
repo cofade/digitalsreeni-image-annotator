@@ -220,19 +220,11 @@ class ProjectController(QObject):
             else:
                 self.mw.add_images_to_list([image_path])
 
-        # Restore per-image group tags (issue #43). add_images_to_list /
-        # load_multi_slice_image rebuild all_images from scratch and drop
-        # extra keys, so copy the saved "group" back onto the matching entry.
-        saved_groups = {
-            img["file_name"]: img["group"]
-            for img in project_data["images"]
-            if img.get("group")
-        }
-        if saved_groups:
-            for info in self.mw.all_images:
-                group = saved_groups.get(info["file_name"])
-                if group:
-                    info["group"] = group
+        # Per-image group tags (issue #43) need no restoration step: line ~193
+        # aliases self.mw.all_images to project_data["images"], and the load
+        # loop above does not rebuild it (add_images_to_list no-ops because
+        # image_paths[file_name] is set first, and load_multi_slice_image only
+        # loads slices), so the "group" keys parsed from JSON survive as-is.
 
         dino_cfg = project_data.get("dino_config", {})
         valid_classes = set(self.mw.class_mapping.keys())

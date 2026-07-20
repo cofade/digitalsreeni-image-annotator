@@ -178,9 +178,22 @@ class DINOController(QObject):
         self.mw.dino_phrase_panel.set_active_class(name)
 
     def _build_dino_class_configs(self):
-        """Build class_configs from threshold table + phrase panel."""
+        """Build class_configs from threshold table + phrase panel.
+
+        Pose classes are skipped: DINO produces plain (box/mask) annotations,
+        which must never land in a pose class — a class is pose OR regular, not
+        both (ADR-029 / #44). Honored here, the one builder both the single and
+        batch detection paths share.
+        """
         configs = []
         for cfg in self.mw.dino_class_table.get_class_configs():
+            if cfg["name"] in self.mw.keypoint_schemas:
+                logger.info(
+                    "Skipping pose class '%s' for DINO detection "
+                    "(pose classes take keypoints only).",
+                    cfg["name"],
+                )
+                continue
             phrases = self.mw.dino_phrase_panel.get_phrases_for(cfg["name"])
             configs.append({
                 "name": cfg["name"],

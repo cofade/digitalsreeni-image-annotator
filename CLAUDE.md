@@ -198,7 +198,7 @@ See [Runtime View](docs/06_runtime_view.md#multi-dimensional-image-loading) for 
 | 4 | Update arc42 docs if behavior changed | `docs/` — see Documentation section |
 | 5 | **Run senior reviewer agent** | `.claude/agents/senior-reviewer.md` — mandatory quality gate before every PR |
 | 6 | Commit: `feat: Description` or `fix: Description` | Clear, descriptive messages |
-| 7 | Push & create PR | `git push origin feature/branch` |
+| 7 | Push & create PR | `git push origin feature/branch`; open with `gh pr create --repo cofade/…` (the default targets the upstream parent!). **The PR body MUST include `Closes #NN` for every issue it resolves** — GitHub only auto-closes issues on merge when the body references them, and PR #52 forgot this, leaving #33–#40 open to be closed by hand. |
 
 ### Testing Checklist
 

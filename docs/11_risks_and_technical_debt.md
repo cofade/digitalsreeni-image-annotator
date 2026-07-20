@@ -49,11 +49,16 @@
 
 ### Project File Portability
 
-**Risk Level**: Low-Medium
+**Status**: Resolved (#42, ADR-033)
 
-**Description**: Projects store absolute paths, not portable between machines
+**Risk Level**: Low-Medium (historical)
 
-**Impact**:
+**Description**: ~~Projects store absolute paths, not portable between machines.~~
+`.iap` now stores portable `image_paths_rel` (POSIX separators) alongside the absolutes;
+`resolve_image_path()` resolves relative-first, so a moved or shared project folder opens
+without a missing-images prompt. v1 projects still resolve via the `images/` convention.
+
+**Original impact** (pre-#42):
 - Cannot share projects easily
 - Moving images breaks projects
 - Collaboration difficult
@@ -298,12 +303,12 @@ the orchestrator wires each to the matching controller slot.
 - A schema is **per class** (the COCO rule); all instances of a class share it.
 - A point set to *not labelled* (v=0) via "finish early" doesn't render and can't be
   relabelled with a right-click in PR-1 (only v>0 points are hit-testable).
-- **Defining a schema on a class that already holds normal (polygon/bbox) annotations
-  is unguarded** — nothing forbids a mixed pose + non-pose class. It renders/saves
-  fine, but the change-class guard then treats it inconsistently (a normal annotation
-  can no longer move into that class once it has a schema, even alongside its own
-  kind). Not fixed in PR-1; either forbid schema definition on a non-empty class or
-  explicitly relax the guard for the mixed case.
+- ~~**Defining a schema on a class that already holds normal (polygon/bbox) annotations
+  is unguarded**~~ **— Resolved (#44).** The UI now blocks *new* mixing in both
+  directions (schema-on-plain-class; shape/SAM-tool-on-pose-class;
+  pose-class-selection-while-a-tool-is-active; DINO skips pose classes); see ADR-029
+  Guards. Legacy-mixed classes still load/render/save, and `_pose_export_check` remains
+  the export backstop.
 - **Forthcoming** (PR-2/PR-3): YOLO-pose export requires a **single `kpt_shape` per
   dataset**, so a project mixing pose classes of different K (or pose + non-pose) can't
   export to YOLO-pose (COCO has no such limit). YOLO-pose *training* stays unsupported
@@ -327,13 +332,12 @@ the orchestrator wires each to the matching controller slot.
 
 ### Autosave Doesn't Ask for File Location
 
-**Status**: Known Behavior
+**Status**: Resolved (#41, ADR-032)
 
-**Description**: Autosave only works after first manual save
-
-**Impact**: New projects lose autosave protection until first save
-
-**Priority**: Low
+**Description**: ~~Autosave only works after first manual save.~~ Before the first save,
+`auto_save()` now writes a silent recovery snapshot (no dialog) that the app offers to
+restore on next launch; a real save clears it. New projects are protected from the first
+mutation.
 
 ---
 

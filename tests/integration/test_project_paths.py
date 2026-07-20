@@ -154,3 +154,38 @@ def test_autosave_with_no_project_writes_recovery(window, tmp_path, monkeypatch)
         data = json.load(f)
     assert "cell" in {c["name"] for c in data["classes"]}
     assert any(i["file_name"] == "a.png" for i in data["images"])
+
+
+def _redirect_recovery(tmp_path, monkeypatch):
+    from digitalsreeni_image_annotator.core import recovery
+
+    rec_dir = tmp_path / "rec"
+    rec_dir.mkdir()
+    ini = QSettings(str(tmp_path / "s.ini"), QSettings.Format.IniFormat)
+    monkeypatch.setattr(recovery, "recovery_dir", lambda: str(rec_dir))
+    monkeypatch.setattr(
+        recovery, "_settings",
+        lambda settings=None: settings if settings is not None else ini,
+    )
+    return recovery
+
+
+def test_offer_recovery_keeps_snapshot_on_successful_restore(window, tmp_path, monkeypatch):
+    # The restored project is still unsaved, so the snapshot must survive until
+    # the first real save — a re-crash before then can still re-offer it.
+    recovery = _redirect_recovery(tmp_path, monkeypatch)
+    recovery.write_recovery(
+        {"classes": [{"name": "cell", "color": "#ff0000"}], "images": []}
+    )
+    window.project_controller.offer_recovery()  # question() is patched to Yes
+    assert "cell" in window.class_mapping
+    assert recovery.pending_recovery() is not None
+
+
+def test_offer_recovery_clears_corrupt_snapshot(window, tmp_path, monkeypatch):
+    # A structurally broken snapshot is unusable — drop it so it isn't re-offered
+    # on every launch.
+    recovery = _redirect_recovery(tmp_path, monkeypatch)
+    recovery.write_recovery({"images": "nope"})  # validation will reject this
+    window.project_controller.offer_recovery()
+    assert recovery.pending_recovery() is None

@@ -1587,8 +1587,6 @@ both reset the model selector.
 
 ---
 
-## Decisions Under Consideration
-
 ## ADR-032: Silent Recovery Autosave for Unsaved Projects via a QSettings-Known Location
 
 **Status**: Accepted (issue #41)
@@ -1649,6 +1647,8 @@ error dialog) on a structurally broken file; it is deliberately lenient about un
   backward-compatible opening, and relative paths win on load.
 
 ---
+
+## Decisions Under Consideration
 
 ### Consider Relative Paths with Image Copying
 

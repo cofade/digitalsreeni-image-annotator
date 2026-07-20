@@ -648,6 +648,8 @@ class ProjectController(QObject):
             not self.mw.all_images
             and not self.mw.image_label.class_colors
             and not any(self.mw.all_annotations.values())
+            and not self.mw.dino_phrase_panel.get_all_phrases()
+            and not self.mw.dino_class_table.get_thresholds_dict()
         )
 
     def offer_recovery(self, settings=None):
@@ -680,7 +682,6 @@ class ProjectController(QObject):
             recovery.clear_recovery(settings)
             return
 
-        restored = False
         try:
             self.mw.is_loading_project = True
             with open(path, "r", encoding="utf-8") as f:
@@ -690,9 +691,13 @@ class ProjectController(QObject):
                 raise ValueError("\n".join(problems))
             self.mw.clear_all(show_messages=False)
             self.load_project_data(project_data)
-            restored = True
         except Exception:
+            # A decode/validation failure (or a partial load) means the snapshot
+            # is unusable — drop it so it isn't re-offered on every launch, and
+            # reset to a clean empty state rather than a half-loaded one.
             logger.exception("Failed to restore recovery snapshot.")
+            self.mw.clear_all(show_messages=False)
+            recovery.clear_recovery(settings)
             QMessageBox.warning(
                 self.mw,
                 "Restore Failed",
@@ -701,7 +706,7 @@ class ProjectController(QObject):
         finally:
             self.mw.is_loading_project = False
 
-        # Only drop the snapshot once it has been successfully consumed; a failed
-        # restore keeps the file so the data isn't lost to a transient error.
-        if restored:
-            recovery.clear_recovery(settings)
+        # On success the snapshot is deliberately KEPT: the restored project is
+        # still unsaved (current_project_file is unset), so the first real save
+        # retires it (save_project -> clear_recovery). Keeping it until then means
+        # a re-crash before that save can still re-offer the recovered work.

@@ -1612,6 +1612,12 @@ Project) calls `clear_recovery()`.
 **Consequences**:
 - ✅ Work is never silently lost before the first save; no modal ever fires from `auto_save`.
 - ✅ Restore reuses `load_project_data` unchanged (the snapshot has the `.iap` shape).
+- ✅ **Failure-path policy:** a *successful* restore **keeps** the snapshot (the project is
+  still unsaved) until the first real save retires it via `clear_recovery`, so a re-crash
+  before that save can still re-offer the work; a *corrupt or partially-loaded* snapshot is
+  **dropped** on the failed restore (with the UI reset to empty) so it can't nag on every
+  launch. A user who restores and then quits cleanly without editing is re-offered it next
+  launch — intentional, since the work is genuinely still unsaved.
 - ⚠️ The recovery pointer lives in per-user QSettings, so it is machine-local — acceptable,
   since a restore is always on the same machine that crashed.
 

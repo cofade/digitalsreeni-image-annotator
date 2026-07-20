@@ -25,7 +25,6 @@ but is now shared with DINO and most easily co-located.
 """
 
 import os
-import traceback
 
 from PyQt6.QtCore import QEvent, QObject, Qt, QTimer
 from PyQt6.QtGui import QColor, QImage
@@ -40,6 +39,10 @@ from PyQt6.QtWidgets import (
 
 from ..core.constants import default_class_color
 from ..core.keypoint_schema import schema_k
+
+from ..core.logging_config import get_logger
+
+logger = get_logger(__name__)
 
 
 class DINOReviewEventFilter(QObject):
@@ -232,7 +235,7 @@ class DINOController(QObject):
         self.mw.lbl_dino_status.setText("Detecting...")
         QApplication.processEvents()
 
-        print(f"[DINO] detect_single: model={model_name!r} class_configs={class_configs}")
+        logger.debug(f"detect_single: model={model_name!r} class_configs={class_configs}")
         try:
             results = self.mw.dino_utils.detect(
                 self.mw.current_image, class_configs,
@@ -240,7 +243,7 @@ class DINOController(QObject):
                 custom_model_path=self.mw.dino_custom_model_path,
             )
         except Exception as e:
-            traceback.print_exc()
+            logger.exception("DINO detect failed")
             QMessageBox.critical(self.mw, "DINO Error", str(e))
             self.mw.btn_detect_single.setEnabled(True)
             self.mw.btn_detect_batch.setEnabled(True)
@@ -251,14 +254,14 @@ class DINOController(QObject):
         self.mw.btn_detect_batch.setEnabled(True)
 
         if results is None:
-            print("[DINO] detect_single: results=None (model resolution failure)")
+            logger.warning("detect_single: results=None (model resolution failure)")
             self.mw.lbl_dino_status.setText("No detections.")
             return
 
-        print(f"[DINO] detect_single: got {len(results)} result(s)")
+        logger.debug(f"detect_single: got {len(results)} result(s)")
         if results:
             for i, r in enumerate(results[:3]):
-                print(f"[DINO]   result[{i}] class={r['class_name']!r} score={r['score']:.3f} bbox={r['bbox']}")
+                logger.debug(f"  result[{i}] class={r['class_name']!r} score={r['score']:.3f} bbox={r['bbox']}")
 
         if not results:
             self.mw.lbl_dino_status.setText("No detections found.")
@@ -268,19 +271,19 @@ class DINOController(QObject):
         QApplication.processEvents()
 
         bboxes = [r["bbox"] for r in results]
-        print(f"[SAM] batch call: {len(bboxes)} bbox(es), first 3 = {bboxes[:3]}")
+        logger.debug(f"batch call: {len(bboxes)} bbox(es), first 3 = {bboxes[:3]}")
         try:
             sam_results = self.mw.sam_utils.apply_sam_predictions_batch(
                 self.mw.current_image, bboxes
             )
         except Exception as e:
-            traceback.print_exc()
+            logger.exception("SAM batch failed")
             QMessageBox.critical(self.mw, "SAM Error", str(e))
             self.mw.lbl_dino_status.setText("SAM segmentation failed.")
             return
 
         if sam_results is None:
-            print("[SAM] batch returned None (no SAM model loaded)")
+            logger.warning("batch returned None (no SAM model loaded)")
             QMessageBox.warning(self.mw, "SAM Error",
                                 "Failed to segment detections with SAM.")
             self.mw.lbl_dino_status.setText("SAM segmentation failed.")
@@ -288,7 +291,7 @@ class DINOController(QObject):
 
         n_errors = sum(1 for s in sam_results if "error" in s)
         n_ok = sum(1 for s in sam_results if "segmentation" in s)
-        print(f"[SAM] batch returned {len(sam_results)} result(s): {n_ok} ok, {n_errors} error(s)")
+        logger.debug(f"batch returned {len(sam_results)} result(s): {n_ok} ok, {n_errors} error(s)")
 
         # Honor the batch-mode dropdown for the single-image case too:
         # "Auto-accept" means commit straight to annotations without
@@ -299,12 +302,11 @@ class DINOController(QObject):
             self.mw.dino_batch_mode.currentText() == "Auto-accept all detections"
         )
         if auto_accept:
-            print(f"[DINO] detect_single: auto_accept=True, committing {len(results)} result(s)")
+            logger.debug(f"detect_single: auto_accept=True, committing {len(results)} result(s)")
             try:
                 self._commit_dino_results(image_name, results, sam_results)
-            except Exception as e:
-                print(f"[DINO] _commit_dino_results failed: {e}")
-                traceback.print_exc()
+            except Exception:
+                logger.exception("_commit_dino_results failed")
             n_committed = sum(1 for s in sam_results if "error" not in s)
             self.mw.image_label.temp_annotations = []
             self.mw.image_label.update()
@@ -317,14 +319,14 @@ class DINOController(QObject):
             self.mw.lbl_dino_status.setText(
                 f"Loaded: {model_name}  |  {n_committed} mask(s) auto-accepted"
             )
-            print(f"[DINO] auto-accept: committed {n_committed} mask(s) to {image_name}")
+            logger.debug(f"auto-accept: committed {n_committed} mask(s) to {image_name}")
             return
 
         # Review mode
         temp_annotations = []
         for r, s in zip(results, sam_results):
             if "error" in s:
-                print(f"[SAM]   failed for {r['class_name']}: {s['error']}")
+                logger.debug(f"  failed for {r['class_name']}: {s['error']}")
                 continue
             temp_annotations.append({
                 "segmentation": s["segmentation"],
@@ -340,7 +342,7 @@ class DINOController(QObject):
         self.mw.lbl_dino_status.setText(
             f"Loaded: {model_name}  |  {len(temp_annotations)} mask(s) ready"
         )
-        print(f"[DINO] detection complete: {len(results)} boxes, {len(temp_annotations)} masks attached to canvas")
+        logger.debug(f"detection complete: {len(results)} boxes, {len(temp_annotations)} masks attached to canvas")
 
     def run_dino_detection_batch(self):
         if not self.mw.dino_model_loaded:
@@ -379,7 +381,7 @@ class DINOController(QObject):
         auto_accept = (
             self.mw.dino_batch_mode.currentText() == "Auto-accept all detections"
         )
-        print(f"[DINO] detect_batch: auto_accept={auto_accept}")
+        logger.debug(f"detect_batch: auto_accept={auto_accept}")
 
         # Build a flat list of (display_name, qimage) work items covering
         # both regular images (loaded from disk) and multi-dim image
@@ -414,8 +416,8 @@ class DINOController(QObject):
                     model_name=model_name,
                     custom_model_path=self.mw.dino_custom_model_path,
                 )
-            except Exception as e:
-                print(f"  DINO failed for {image_name}: {e}")
+            except Exception:
+                logger.exception(f"DINO failed for {image_name}")
                 continue
 
             if not results:
@@ -426,8 +428,8 @@ class DINOController(QObject):
                 sam_results = self.mw.sam_utils.apply_sam_predictions_batch(
                     qimage, bboxes
                 )
-            except Exception as e:
-                print(f"  SAM failed for {image_name}: {e}")
+            except Exception:
+                logger.exception(f"SAM failed for {image_name}")
                 continue
             if sam_results is None:
                 continue
@@ -467,16 +469,16 @@ class DINOController(QObject):
                 base_name = os.path.splitext(file_name)[0]
                 slices = self.mw.image_slices.get(base_name, [])
                 if not slices:
-                    print(f"  Skipping multi-slice image '{file_name}': "
-                          "no slices loaded (open the image first to "
-                          "materialise its slices).")
+                    logger.warning(f"Skipping multi-slice image '{file_name}': "
+                                   "no slices loaded (open the image first to "
+                                   "materialise its slices).")
                     continue
                 for slice_name, qimage in slices:
                     items.append((slice_name, qimage))
             else:
                 image_path = self.mw.image_paths.get(file_name)
                 if not image_path or not os.path.exists(image_path):
-                    print(f"  Skipping '{file_name}': missing image path.")
+                    logger.warning(f"Skipping '{file_name}': missing image path.")
                     continue
                 try:
                     pil_img = PILImage.open(image_path).convert("RGB")
@@ -488,9 +490,9 @@ class DINOController(QObject):
                         QImage.Format.Format_RGB888,
                     )
                     items.append((file_name, qimage))
-                except Exception as e:
-                    print(f"  Skipping '{file_name}': failed to load ({e}).")
-        print(f"[DINO] batch work items: {len(items)} total")
+                except Exception:
+                    logger.exception(f"Skipping '{file_name}': failed to load.")
+        logger.debug(f"batch work items: {len(items)} total")
         return items
 
     def _commit_dino_results(self, image_name, dino_results, sam_results):
@@ -520,7 +522,7 @@ class DINOController(QObject):
                 continue
             class_name = r["class_name"]
             if class_name not in self.mw.class_mapping:
-                print(f"  Skipping DINO result for unknown class '{class_name}'")
+                logger.warning(f"Skipping DINO result for unknown class '{class_name}'")
                 continue
             existing = target.get(class_name, [])
             number = max((a.get("number", 0) for a in existing), default=0) + 1
@@ -568,8 +570,8 @@ class DINOController(QObject):
             first = next(iter(self.mw.dino_batch_results))
             if self._navigate_to_image_or_slice(first):
                 return
-            print(f"[DINO] dropping orphan batch result for {first!r} "
-                  "(no matching image or slice in project)")
+            logger.warning(f"dropping orphan batch result for {first!r} "
+                           "(no matching image or slice in project)")
             self.mw.dino_batch_results.pop(first, None)
         QMessageBox.warning(
             self.mw, "Batch Detection",
@@ -631,8 +633,8 @@ class DINOController(QObject):
             QTimer.singleShot(0, self.mw.image_label.setFocus)
         else:
             if self.mw.image_label.temp_annotations:
-                print("[DINO] temp annotations cleared on switch "
-                      f"(no pending batch results for {new_image!r})")
+                logger.debug("temp annotations cleared on switch "
+                             f"(no pending batch results for {new_image!r})")
             self.mw.image_label.temp_annotations = []
         self.mw.image_label.update()
 
@@ -647,7 +649,7 @@ class DINOController(QObject):
         for ann in self.mw.image_label.temp_annotations:
             class_name = ann["category_name"]
             if class_name not in self.mw.class_mapping:
-                print(f"  Skipping DINO result for unknown class '{class_name}'")
+                logger.warning(f"Skipping DINO result for unknown class '{class_name}'")
                 continue
             new_ann = {
                 "segmentation": ann["segmentation"],
@@ -667,7 +669,7 @@ class DINOController(QObject):
         self.mw.update_slice_list_colors()
         self.mw.image_label.update()
         self.mw.lbl_dino_status.setText("Results accepted.")
-        print("DINO results accepted.")
+        logger.info("DINO results accepted.")
 
     def reject_dino_results(self):
         """Discard current temp_annotations."""
@@ -678,7 +680,7 @@ class DINOController(QObject):
             self._show_dino_batch_review()
         self.mw.image_label.update()
         self.mw.lbl_dino_status.setText("Results discarded.")
-        print("DINO results discarded.")
+        logger.info("DINO results discarded.")
 
     # --- Temp-class review workflow (shared with YOLO predictions) ---
 

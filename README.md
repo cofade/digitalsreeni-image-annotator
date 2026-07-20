@@ -1,265 +1,221 @@
-# DigitalSreeni Image Annotator and Toolkit
+# DigitalSreeni Image Annotator (cofade fork)
 
 ![Python Version](https://img.shields.io/badge/python-3.10%2B-blue)
 ![License](https://img.shields.io/badge/license-MIT-green)
-![PyPI version](https://img.shields.io/pypi/v/digitalsreeni-image-annotator.svg?style=flat-square)
 
-A powerful and user-friendly tool for annotating images with polygons and rectangles, built with PyQt6. Now with additional supporting tools for comprehensive image processing and dataset management.
-
-## Support the Project
-
-If you find this project helpful, consider supporting it:
-
-[![Donate](https://www.paypalobjects.com/en_US/i/btn/btn_donate_LG.gif)](https://www.paypal.com/donate/?business=FGQL3CNJGJP9C&no_recurring=0&item_name=If+you+find+this+Image+Annotator+project+helpful%2C+consider+supporting+it%3A&currency_code=USD)
+A PyQt6 desktop application for annotating images — manual tools plus AI-assisted
+segmentation (SAM 2), text-prompted detection (Grounding DINO), keypoint/pose
+annotation, and in-app model training. This is an actively-developed **fork** of
+[bnsreenu/digitalsreeni-image-annotator](https://github.com/bnsreenu/digitalsreeni-image-annotator)
+that adds in-process inference, DINO detection, SAM 2 fine-tuning with MLflow
+tracking, undo/redo, an annotations table with per-mask simplification,
+keypoint/pose annotation, canvas selection + handle editing, and a pytest +
+pytest-qt test suite running in CI. See
+[Fork attribution & upstream](#fork-attribution--upstream).
 
 ![DigitalSreeni Image Annotator Demo](screenshots/digitalsreeni-image-annotator-demo.gif)
 
-## Watch the demo (of v0.8.0):
+> Original tool and video walkthroughs by **@DigitalSreeni** — Dr. Sreenivas
+> Bhattiprolu (upstream author). The demo GIF above shows an earlier upstream
+> release; this fork's UI has since gained the features listed below.
 
-[![Watch the demo video](https://img.youtube.com/vi/aArn1f1YIQk/maxresdefault.jpg)](https://youtu.be/aArn1f1YIQk)
+## What is this
 
-@DigitalSreeni
-Dr. Sreenivas Bhattiprolu
+A scientific image-annotation desktop app: draw polygons / rectangles / paint
+masks, place keypoints, and let SAM 2 or Grounding DINO propose masks from a box,
+a few clicks, or a text prompt. It handles multi-dimensional images (TIFF stacks,
+CZI), round-trips COCO / YOLO / Pascal VOC, and can fine-tune SAM 2 or train YOLO
+directly from your annotations.
 
-## Features
+## Feature highlights
 
-- Semi-automated annotations with SAM-2 assistance (Segment Anything Model) — Because who doesn't love a helpful AI sidekick?
-- Manual annotations with polygons and rectangles — For when you want to show SAM-2 who's really in charge.
-- Paint brush and Eraser tools with adjustable pen sizes (use - and = on your keyboard)
-- Merge annotations - For when SAM-2's guesswork needs a little human touch.
-- Save and load projects for continued work.
-- Save As... and Autosave functionality.
-- A secret game, for when you are bored.
-- Import existing COCO JSON annotations with images.
-- Export annotations to various formats (COCO JSON, YOLO v8/v11, Labeled images, Semantic labels, Pascal VOC).
-- Handle multi-dimensional images (TIFF stacks and CZI files).
-- Zoom and pan for detailed annotations.
-- Support for multiple classes with customizable colors.
-- User-friendly interface with intuitive controls.
-- Change the application font size on the fly — Make your annotations as big or small as your caffeine level requires.
-- Dark mode for those late-night annotation marathons — Who needs sleep when you have dark mode?
-- Pick appropriate pre-trained SAM2 model for flexible and improved semi-automated annotations.
-- Change the class of an annotation to a different class.
-- Turn visibility of a class ON and OFF.
-- YOLO (beta) training using current annotations and loading trained model to segment images.
-- Area measurements for annotations displayed next to the Annotation name.
-- Sort annotations by name/number or area.
-- Additional supporting tools:
-  - Annotation statistics for current annotations
-  - COCO JSON combiner
-  - Dataset splitter
-  - Stack to slices converter
-  - Image patcher
-  - Image augmenter
-- Project Details: View and edit project metadata, including creation date, last modified date, image information, and custom notes.
-- Advanced Project Search: Search through multiple projects using complex queries with logical operators (AND, OR) and parentheses.
-- Slice Registration
-  - Align image slices in a stack with multiple registration methods
-  - Support for various reference frames and transformation types
-  - Stack Interpolation
-    - Adjust Z-spacing in image stacks
-    - Multiple interpolation methods with memory-efficient processing
-  - DICOM Converter
-    - Convert DICOM files to TIFF format (single stack or individual slices)
-    - Preserve metadata and physical dimensions
-    - Export metadata to JSON for reference
+**Annotation tools**
+- Polygon, rectangle, paint brush, and eraser (adjustable size with `-` / `=`)
+- Keypoint / pose annotation with a per-class named schema + skeleton (COCO
+  instance model, 3-state visibility)
+- Merge annotations; vertex editing (double-click) and handle-based resize/move
+  for any selected shape
+- Undo / redo (Ctrl+Z / Ctrl+Y)
 
-## Operating System Requirements
+**AI-assisted**
+- SAM 2 box and point prompts (pick tiny / small / large — tiny or small
+  recommended)
+- Grounding DINO text-prompted detection — single image or batch, with a
+  review / accept overlay
+- SAM 2 fine-tuning with MLflow experiment tracking
+- YOLO training and prediction (detection, segmentation, and pose)
 
-This application is built using PyQt6 and runs on macOS, Windows and Linux. On Linux you'll need the standard Qt 6 runtime libraries (notably `libxcb-cursor0`, `libegl1`, `libgl1`, and the XCB plugin set) — `sudo apt install libxcb-cursor0 libegl1 libgl1 libxcb-xinerama0 libxkbcommon-x11-0` covers the common ones on Debian/Ubuntu.
+**Images**
+- TIFF / CZI stacks with a dimension-assignment dialog and slice navigation
+- DICOM converter, slice registration, stack interpolation
+
+**Data management**
+- Export: COCO JSON, YOLO v8/v11, Pascal VOC, labeled images, semantic labels
+- Import: COCO JSON, YOLO datasets (detection + pose)
+- Dataset splitter, image patcher, image augmenter
+- Annotations table with Area and per-mask **Detail %** simplification
+- Multi-project search with AND/OR queries
+
+**UI**
+- Dark mode, on-the-fly font scaling, image-list filter / sort
+
+## Operating system requirements
+
+Built with PyQt6; runs on macOS, Windows, and Linux (CI exercises the test suite
+on all three). On Linux you need the standard Qt 6 runtime libraries (notably
+`libxcb-cursor0`, `libegl1`, `libgl1`, and the XCB plugin set) —
+`sudo apt install libxcb-cursor0 libegl1 libgl1 libxcb-xinerama0 libxkbcommon-x11-0`
+covers the common ones on Debian/Ubuntu.
 
 ## Installation
 
-### Watch the installation walkthough video:
-
-[![Watch the installation video](https://img.youtube.com/vi/VI6V95eUUpY/maxresdefault.jpg)](https://youtu.be/VI6V95eUUpY)
-
-You can install the DigitalSreeni Image Annotator directly from PyPI:
+This fork is **not published to PyPI** — install from source:
 
 ```bash
-pip install digitalsreeni-image-annotator
+git clone https://github.com/cofade/digitalsreeni-image-annotator.git
+cd digitalsreeni-image-annotator
+pip install -e .
 ```
 
-The application uses the Ultralytics library, so there's no need to separately install SAM2 or PyTorch, or download SAM2 models manually.
+The Ultralytics library pulls in SAM 2 and PyTorch; SAM 2 weights download
+automatically on first use — no separate SAM2 / PyTorch install needed.
 
 ### GPU acceleration (NVIDIA)
 
-The PyTorch wheel installed by default from PyPI is **CPU-only** on Windows. If you have an NVIDIA GPU, SAM and Grounding DINO will run dramatically faster on CUDA — reinstall PyTorch from the CUDA index:
+The PyTorch wheel installed by default from PyPI is **CPU-only** on Windows. If
+you have an NVIDIA GPU, SAM and Grounding DINO will run dramatically faster on
+CUDA — reinstall PyTorch from the CUDA index:
 
 ```bash
 pip uninstall -y torch torchvision
 pip install torch torchvision --index-url https://download.pytorch.org/whl/cu128
 ```
 
-If `cu128` errors as "no matching distribution", try `cu124` instead. Verify the install picked up your GPU:
+If `cu128` errors as "no matching distribution", try `cu124` instead. Verify the
+install picked up your GPU:
 
 ```bash
 python -c "import torch; print(torch.cuda.is_available(), torch.cuda.get_device_name(0))"
 ```
 
-You should see `True` and your GPU name. For other platforms or driver combinations, use the official selector at <https://pytorch.org/get-started/locally/>.
+You should see `True` and your GPU name. For other platforms or driver
+combinations, use the official selector at <https://pytorch.org/get-started/locally/>.
 
 #### Older NVIDIA GPUs (Pascal / Maxwell)
 
-PyTorch ≥ 2.8 wheels no longer include kernels for GPUs older than Volta (compute capability < 7.0), e.g. the GTX 10xx series (sm_61). On such cards the app detects the mismatch, warns once, and automatically runs inference on the CPU instead of crashing with `CUDA error: no kernel image is available`. To keep using the GPU, install an older PyTorch that still supports it:
+PyTorch ≥ 2.8 wheels no longer include kernels for GPUs older than Volta (compute
+capability < 7.0), e.g. the GTX 10xx series (sm_61). On such cards the app detects
+the mismatch, warns once, and automatically runs inference on the CPU instead of
+crashing with `CUDA error: no kernel image is available`. To keep using the GPU,
+install an older PyTorch that still supports it:
 
 ```bash
 pip install torch==2.4.1 torchvision==0.19.1 --index-url https://download.pytorch.org/whl/cu121
 ```
 
-## Usage
+## Quick start
 
-1. Run the DigitalSreeni Image Annotator application:
+Run the app:
 
-   ```bash
-   digitalsreeni-image-annotator
-   ```
+```bash
+digitalsreeni-image-annotator      # or:  sreeni      # or:  python -m digitalsreeni_image_annotator.main
+```
 
-   or
+Golden path:
 
-   ```bash
-   sreeni
-   ```
+1. **New Project** (Ctrl+N).
+2. **Add New Images** — including TIFF stacks and CZI files.
+3. **Add a class** and pick its colour.
+4. **Annotate** — draw manually, or pick a SAM model and use **SAM-box** /
+   **SAM-points** (Enter accepts the mask, Esc discards it). For text prompts,
+   use Grounding DINO detection.
+5. **Export Annotations** — COCO / YOLO / Pascal VOC / labeled / semantic.
 
-   or
+For SAM: prefer **SAM 2 tiny** or **small**; the large model can exhaust memory
+on modest machines (an out-of-memory load now shows a "pick a smaller model"
+dialog rather than crashing).
 
-   ```bash
-   python -m digitalsreeni_image_annotator.main
-   ```
+## Keyboard shortcuts
 
-2. Using the application:
+| Global | Action |
+|--------|--------|
+| Ctrl+N/O/S | New / Open / Save Project |
+| Ctrl+Z / Ctrl+Y (or Ctrl+Shift+Z) | Undo / redo annotation edit |
+| Ctrl+Shift+= / Ctrl+Shift+- | UI font bigger / smaller (8-24pt, persisted) |
+| Ctrl+Shift+0 | Reset UI font size |
+| F1 | Help |
 
-   - Click "New Project" or use Ctrl+N to start a new project.
-   - Use "Add New Images" to import images, including TIFF stacks and CZI files.
-   - Add classes using the "Add Classes" button.
-   - Select a class and use the Polygon or Rectangle or Paint Brush tool to create manual annotations.
-   - To use SAM2-assisted annotation:
-     - Select a model from the "Pick a SAM Model" dropdown. It's recommended to use smaller models like SAM2 tiny or SAM2 small. SAM2 large is not recommended as it may crash the application on systems with limited resources.
-     - Note: When you select a model for the first time, the application needs to download it. This process may take a few seconds to a minute, depending on your internet connection speed. Subsequent uses of the same model will be faster as it will already be cached locally, in your working directory.
-     - Click the "SAM-box" button and draw a rectangle around an object of interest, or click the "SAM-points" button and left-click points inside the object (right-click adds negative points to exclude regions).
-     - SAM2 displays the top-scoring mask as a temporary prediction — press Enter to accept it or Esc to discard it. If the desired result isn't achieved on the first try, draw the box again or adjust the points.
-     - For low-quality images where SAM2 may not auto-detect objects, manual tools may be necessary.
-     - When SAM2 auto-detect partial objects, use polygon or paint brush tools to manually define the remaining region and use the Merge tool to combine both annotations into one.
-     - When SAM2 over-annotates objects, extending the annotation beyond object's boundaries, use the Eraser tool to clean up the edges.
-     - Both paint brush and eraser tools can be adjusted for pen size by using - or = keys on your keyboard.
-   - Edit existing annotations by double-clicking on them.
-   - Edit existing annotations using the Eraser tool. Adjust the eraser size by using - or = keys on your keyboard.
-   - Merge connected annotations by selecting them from the Annotations list and clicking the Merge button.
-   - Change the class of an annotation to a different class.
-   - Turn visibility of a class ON and OFF.
-   - Use YOLO (beta) training with current annotations and load the trained model to segment images and convert segmentations to annotations. (Currently not implemented for slices or stacks, just single images.)
-   - Accept/reject one or select class predictions at a time to add them as annotations.
-   - View area measurements for annotations displayed next to the Annotation name.
-   - Sort annotations by name/number or area.
-   - Save your project using "Save Project" or Ctrl+S. Alternatively, you can use Save As... to save the project with a different name.
-   - Use "Open Project" or Ctrl+O to load a previously saved project.
-   - Click "Import Annotations with Images" to load existing COCO JSON annotations along with their images.
-   - Use "Export Annotations" to save annotations in various formats (COCO JSON, YOLO v8/v11, Labeled images, Semantic labels, Pascal VOC).
-     - Note: YOLO export (and import) is now compatible with YOLOv11 structure. (Project directory includes data.yaml, train, and valid directories, with train and valid both having images and labels subdirectories.)
-   - Project Details:
-     - Access project details by selecting "Project Details" from the Project menu.
-     - View project metadata such as creation date, last modified date, and image information.
-     - Add or edit custom project notes.
-     - Project details are automatically saved when you make changes to the notes.
-   - Advanced Project Search:
-     - Access the search functionality by selecting "Search Projects" from the Project menu.
-     - Search through multiple projects using complex queries.
-     - Use logical operators (AND, OR) and parentheses for advanced search criteria.
-     - Search covers project name, class names, image names, and project notes.
-     - Example queries:
-       - "cells AND dog": Find projects containing both "cells" and "dog"
-       - "cells OR bacteria": Find projects containing either "cells" or "bacteria"
-       - "cells AND (dog OR monkey)": Find projects containing "cells" and either "dog" or "monkey"
-       - "(project1 OR project2) AND (cells OR bacteria)": More complex nested queries
-     - Double-click on search results to open the corresponding project.
-   - Access additional tools under the Tools menu bar:
-     - Annotation Statistics
-     - COCO JSON Combiner
-     - Dataset Splitter
-     - Stack to Slices Converter
-     - Image Patcher
-     - Image Augmenter
-   - Each tool opens a separate UI to guide you through the respective task.
-   - Access the help documentation by clicking the "Help" button or pressing F1.
-   - Explore the interface – you might stumble upon some hidden gems and secret features!
+| Canvas | Action |
+|--------|--------|
+| Ctrl+Wheel | Zoom |
+| Ctrl+Drag | Pan |
+| Click / Shift+Click (no tool) | Select / toggle mask |
+| Drag / Shift+Drag (no tool) | Rubber-band select / add |
+| Drag handle / inside (one shape selected) | Resize (scale) / move the shape |
+| Double-click | Vertex-edit mode |
+| Delete | Delete selected mask(s) — instant, undoable (no confirm dialog) |
+| Enter | Finish / Accept (keypoint tool: finish pose early, padding unplaced points v=0) |
+| Esc | Cancel in-progress shape **and** return to selection mode (deactivates the tool) |
+| Left / Right-click (keypoint tool) | Place next keypoint visible / occluded |
+| Backspace (keypoint tool) | Remove the last placed keypoint |
+| Right-click a selected pose's point | Toggle its visibility (visible ↔ occluded) |
+| Up/Down | Navigate slices |
+| -/= | Brush size |
 
-3. Keyboard shortcuts:
-   - Ctrl + N: Create a new project
-   - Ctrl + O: Open an existing project
-   - Ctrl + S: Save the current project
-   - Ctrl + W: Close the current project
-   - Ctrl + Shift + S: Open Annotation Statistics
-   - F1: Open the help window
-   - Ctrl + Wheel: Zoom in/out
-   - Hold Ctrl and drag: Pan the image
-   - Esc: Cancel current annotation, exit edit mode, or exit SAM-assisted annotation
-   - Enter: Finish current annotation, exit edit mode, or accept SAM-generated mask
-   - Up/Down Arrow Keys: Navigate through slices in multi-dimensional images
-   - - and =: Adjust pen size for paint brush and eraser tools
+## Documentation
 
-## Known Issues and Bug Fixes
-
-- The application may not work correctly on Linux systems. Extensive testing has not been done yet.
-- When loading a YOLO model trained on different classes compared to the loaded YAML file, the application now gives a message to the user about the mismatch instead of crashing.
-- Various other bugs have been addressed to improve overall stability and performance.
+- **Architecture (arc42)**: [docs/README.md](docs/README.md) — building-block view,
+  runtime scenarios, cross-cutting concepts, architecture decisions, glossary.
+- **Contributor guide**: [CLAUDE.md](CLAUDE.md).
+- **Testing**: [TESTING.md](TESTING.md).
 
 ## Development
 
-For development purposes, you can clone the repository and install it in editable mode:
+```bash
+git clone https://github.com/cofade/digitalsreeni-image-annotator.git
+cd digitalsreeni-image-annotator
+python -m venv venv && source venv/bin/activate   # Windows: venv\Scripts\activate
+pip install -e ".[dev]"                            # runtime + test extras
+pytest tests/ -v                                  # headless: QT_QPA_PLATFORM=offscreen
+python -m src.digitalsreeni_image_annotator.main
+```
 
-1. Clone the repository:
-
-   ```bash
-   git clone https://github.com/bnsreenu/digitalsreeni-image-annotator.git
-   cd digitalsreeni-image-annotator
-   ```
-
-2. Create a virtual environment (optional but recommended):
-
-   ```bash
-   python -m venv venv
-   source venv/bin/activate  # On Windows, use `venv\Scripts\activate`
-   ```
-
-3. Install the package and its dependencies in editable mode:
-
-   ```bash
-   pip install -e .
-   ```
-
-4. Start the application:
-   ```bash
-   python -m src.digitalsreeni_image_annotator.main
-   ```
+Use feature branches (never commit to `master`), keep the arc42 docs in sync, and
+run the senior-reviewer quality gate before opening a PR — see
+[CLAUDE.md](CLAUDE.md) for the full workflow.
 
 ## Contributing
 
-Contributions are welcome! Please feel free to submit a Pull Request.
+Contributions are welcome. Fork, branch (`git checkout -b feature/your-feature`),
+commit, push, and open a Pull Request against this fork.
 
-1. Fork the repository
-2. Create your feature branch (`git checkout -b feature/AmazingFeature`)
-3. Commit your changes (`git commit -m 'Add some AmazingFeature'`)
-4. Push to the branch (`git push origin feature/AmazingFeature`)
-5. Open a Pull Request
+## Fork attribution & upstream
+
+This repository is a fork of
+[bnsreenu/digitalsreeni-image-annotator](https://github.com/bnsreenu/digitalsreeni-image-annotator)
+by **Dr. Sreenivas Bhattiprolu** (@DigitalSreeni on
+[YouTube](http://www.youtube.com/c/DigitalSreeni)), who authored the original
+polygon / rectangle + SAM annotation tool. This fork diverges substantially:
+PyQt6 migration, in-process inference, Grounding-DINO text detection, SAM 2
+fine-tuning + MLflow, undo/redo, an annotations table with Detail %,
+keypoint/pose annotation, canvas selection + handle editing, and an automated
+test suite in CI. Please credit the upstream author for the original work (see
+Citing below).
 
 ## License
 
-This project is licensed under the MIT License - see the [LICENSE](LICENSE) file for details.
+MIT — see [LICENSE](LICENSE).
 
 ## Acknowledgments
 
-- Thanks to all my [YouTube](http://www.youtube.com/c/DigitalSreeni) subscribers who inspired me to work on this project
-- Inspired by the need for efficient image annotation in computer vision tasks
-
-## Contact
-
-Dr. Sreenivas Bhattiprolu - [@DigitalSreeni](https://twitter.com/DigitalSreeni)
-
-Project Link: [https://github.com/bnsreenu/digitalsreeni-image-annotator](https://github.com/bnsreenu/digitalsreeni-image-annotator)
+- Dr. Sreenivas Bhattiprolu and his
+  [YouTube](http://www.youtube.com/c/DigitalSreeni) community for the original
+  tool and tutorials.
+- Inspired by the need for efficient image annotation in computer-vision tasks.
 
 ## Citing
 
-If you use this software in your research, please cite it as follows:
+If you use this software in your research, please cite the upstream project:
 
 Bhattiprolu, S. (2024). DigitalSreeni Image Annotator [Computer software].
 https://github.com/bnsreenu/digitalsreeni-image-annotator

@@ -15,8 +15,6 @@ State stays on the main window (consistent with prior phases):
 - DINO widgets (`dino_class_table`, `dino_phrase_panel`)
 """
 
-import traceback
-
 from PyQt6.QtCore import Qt, QObject
 from PyQt6.QtGui import QColor, QIcon, QPixmap
 from PyQt6.QtWidgets import (
@@ -29,6 +27,10 @@ from PyQt6.QtWidgets import (
 
 from ..core.constants import default_class_color
 
+from ..core.logging_config import get_logger
+
+logger = get_logger(__name__)
+
 
 class ClassController(QObject):
     def __init__(self, main_window):
@@ -40,9 +42,9 @@ class ClassController(QObject):
             item = self.mw.class_list.item(index)
             self.mw.class_list.setCurrentItem(item)
             self.mw.current_class = item.text()
-            print(f"Selected class: {self.mw.current_class}")
+            logger.debug(f"Selected class: {self.mw.current_class}")
         else:
-            print("Invalid class index")
+            logger.warning("Invalid class index")
 
     def delete_selected_class(self):
         selected_items = self.mw.class_list.selectedItems()
@@ -115,7 +117,7 @@ class ClassController(QObject):
                     self.mw, "Add Class", "Enter class name:"
                 )
                 if not ok:
-                    print("Class addition cancelled")
+                    logger.debug("Class addition cancelled")
                     return
                 if not class_name.strip():
                     QMessageBox.warning(
@@ -134,12 +136,12 @@ class ClassController(QObject):
                 break
         else:
             if class_name in self.mw.class_mapping:
-                print(f"Class '{class_name}' already exists. Skipping addition.")
+                logger.warning(f"Class '{class_name}' already exists. Skipping addition.")
                 return
 
         if not isinstance(class_name, str):
-            print(
-                f"Warning: class_name is not a string. Converting {class_name} to string."
+            logger.warning(
+                f"class_name is not a string. Converting {class_name} to string."
             )
             class_name = str(class_name)
 
@@ -150,7 +152,7 @@ class ClassController(QObject):
         elif isinstance(color, str):
             color = QColor(color)
 
-        print(f"Adding class: {class_name}, color: {color.name()}")
+        logger.debug(f"Adding class: {class_name}, color: {color.name()}")
 
         self.mw.image_label.class_colors[class_name] = color
         self.mw.class_mapping[class_name] = len(self.mw.class_mapping) + 1
@@ -171,7 +173,7 @@ class ClassController(QObject):
 
             self.mw.class_list.setCurrentItem(item)
             self.mw.current_class = class_name
-            print(f"Class added successfully: {class_name}")
+            logger.info(f"Class added successfully: {class_name}")
 
             # DINO phrase/threshold sync. Skip the row-select during
             # project load (classes are added in a loop and we don't
@@ -185,9 +187,8 @@ class ClassController(QObject):
 
             if not self.mw.is_loading_project:
                 self.mw.auto_save()
-        except Exception as e:
-            print(f"Error adding class: {e}")
-            traceback.print_exc()
+        except Exception:
+            logger.exception("Error adding class")
 
     def update_class_item_color(self, item, color):
         pixmap = QPixmap(16, 16)
@@ -226,7 +227,7 @@ class ClassController(QObject):
         elif self.mw.class_list.count() > 0:
             self.mw.class_list.setCurrentItem(self.mw.class_list.item(0))
 
-        print(f"Updated class list with {self.mw.class_list.count()} items")
+        logger.debug(f"Updated class list with {self.mw.class_list.count()} items")
 
     def update_class_selection(self):
         for i in range(self.mw.class_list.count()):
@@ -252,7 +253,7 @@ class ClassController(QObject):
 
         if current:
             self.mw.current_class = current.text()
-            print(f"Class selected: {self.mw.current_class}")
+            logger.debug(f"Class selected: {self.mw.current_class}")
 
             if self.mw.current_class.startswith("Temp-"):
                 self.mw.disable_annotation_tools()
@@ -372,7 +373,7 @@ class ClassController(QObject):
                 self.mw.class_mapping[new_name] = old_id
                 del self.mw.class_mapping[old_name]
             else:
-                print(f"Warning: Class '{old_name}' not found in class_mapping")
+                logger.warning(f"Class '{old_name}' not found in class_mapping")
                 return
 
             if old_name in self.mw.image_label.class_colors:
@@ -380,7 +381,7 @@ class ClassController(QObject):
                     self.mw.image_label.class_colors.pop(old_name)
                 )
             else:
-                print(f"Warning: Class '{old_name}' not found in class_colors")
+                logger.warning(f"Class '{old_name}' not found in class_colors")
                 return
 
             # Keypoint schema follows the class name (issue #35).
@@ -412,7 +413,7 @@ class ClassController(QObject):
             self.mw.image_label.update()
             self.mw.auto_save()
 
-            print(f"Class renamed from '{old_name}' to '{new_name}'")
+            logger.info(f"Class renamed from '{old_name}' to '{new_name}'")
 
     def delete_class(self, item=None):
         if item is None:

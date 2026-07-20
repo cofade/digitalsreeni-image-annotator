@@ -40,6 +40,8 @@ def main():
     """
     Main function to run the Image Annotator application.
     """
+    from .core.logging_config import configure
+    configure()
     app = QApplication(sys.argv)
     window = ImageAnnotator()
     window.show()

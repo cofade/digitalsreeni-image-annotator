@@ -390,6 +390,43 @@ on every run.
 
 ## Error Handling
 
+### Error-Handling Convention (issue #34)
+
+Where an exception is caught and what happens to it is a decision, not an
+accident. The rules, enforced in review:
+
+1. **Core / inference / io / training modules raise.** They never show dialogs
+   and never return `None` to signal failure of a user-initiated action.
+2. **Controllers / dialogs (the UI boundary) catch**, `logger.exception(...)`,
+   and surface via `QMessageBox` when a user action failed.
+3. **Catch the narrowest exception type** that models the expected failure.
+   `except Exception` is allowed only at a UI boundary or a documented
+   crash-safety barrier (e.g. `mlflow_tracker` "never let tracking abort
+   training").
+4. **Never `pass` silently.** Every swallowed exception must either log
+   (`logger.exception(...)` / `logger.warning(..., exc_info=True)`) or carry a
+   narrow type plus a `# reason` comment.
+5. **Bare `except:` is banned** (it also traps `KeyboardInterrupt` / `SystemExit`).
+
+```python
+# Good — narrow, documented no-op
+except TypeError:
+    pass  # signal already disconnected
+
+# Good — swallow but stay visible
+except Exception:
+    logger.warning("CUDA cache cleanup failed during unload", exc_info=True)
+
+# Bad — silent, untyped
+except Exception:
+    pass
+```
+
+The OOM-on-model-load path is a worked example: `core/torch_utils._is_oom`
+(torch-free) lets `SAMController.change_sam_model` show a tailored "pick a
+smaller model" dialog for out-of-memory failures while keeping the generic
+download/torch message for everything else. See ADR-031.
+
 ### YOLO Model/Data Mismatch
 
 **Problem**: Loading YOLO model trained on different classes
@@ -511,16 +548,47 @@ def generate_slice_name(filename, t, z, c, s):
 
 ## Logging and Debug Output
 
-### Print Statements
+The application logs through the stdlib `logging` module, rooted at the
+package logger `digitalsreeni_image_annotator`. `print()` is **banned in
+`src/`** (see ADR-030). Configuration lives in
+[`core/logging_config.py`](../src/digitalsreeni_image_annotator/core/logging_config.py):
 
-Current implementation uses `print()` for debugging:
-```python
-print(f"Changed SAM model to: {model_name}")
-print(f"SAM input points: {all_points}, labels: {all_labels}")
-print(f"Loading project from: {project_path}")
-```
+- `configure(level=None)` — called once from `main.py:main()` **before**
+  `QApplication` is created. It installs a single stderr `StreamHandler` on
+  the package logger, sets the level, and is **idempotent** (a second call
+  adds no second handler — important for tests and re-entry).
+- `get_logger(__name__)` — every module's logger. `configure()` derives the
+  package root from its own `__name__`, so all loggers share that root and
+  inherit its handler/level automatically — this holds whether the app is
+  imported as `digitalsreeni_image_annotator` (installed / `sreeni`) or
+  `src.digitalsreeni_image_annotator` (the `python -m src...` launcher).
 
-**Note**: No formal logging framework is used. Output goes to console.
+### Level policy
+
+| Level | Use for | Examples |
+|-------|---------|----------|
+| `debug` | Diagnostic chatter: array shapes/dtypes, metadata dumps, coordinate/point dumps, per-slice / per-file loop progress | "input points: …", "slice 5/12 written" |
+| `info` | State changes a user might care about | "SAM model loaded: …", "Project auto-saved.", "Created N slices for …" |
+| `warning` | Soft failures / ignored conditions **not** in an `except` ("Skipped …", "… not found", failed user action that returns) | "No SAM model selected." |
+| `exception` / `error(exc_info=True)` | Inside an `except` block — appends the traceback | "Error applying SAM points" |
+
+When in doubt between debug and info, choose **debug**: the default INFO level
+must stay quiet enough for daily use, and a per-slice INFO line on a 2560-slice
+stack is unusable. `logger.exception(...)` may only be called inside an
+`except` block; outside one use `logger.error(..., exc_info=True)`.
+
+### The debug switch
+
+The default level is INFO. DEBUG is enabled by either:
+- `--debug` on the command line (`python -m src.digitalsreeni_image_annotator.main --debug`), or
+- `IMAGE_ANNOTATOR_DEBUG=1` in the environment.
+
+### Rule for new code
+
+New code uses `logger = get_logger(__name__)`, never `print()`. User-facing
+messaging still goes through `QMessageBox` / dialogs — logging is the
+diagnostic channel, dialogs are the user channel; the two are independent
+(see the Error-Handling Convention above).
 
 ## DINO Temp Annotations — Single Field, Many Images
 

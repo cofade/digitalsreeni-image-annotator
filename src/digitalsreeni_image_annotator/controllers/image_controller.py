@@ -44,6 +44,10 @@ from tifffile import TiffFile
 
 from ..core import image_utils
 
+from ..core.logging_config import get_logger
+
+logger = get_logger(__name__)
+
 
 class DimensionDialog(QDialog):
     def __init__(self, shape, file_name, parent=None, default_dimensions=None):
@@ -370,7 +374,7 @@ class ImageController(QObject):
         self.mw.annotation_controller.reset_coalesce()
 
         file_name = item.text()
-        print(f"\nSwitching to image: {file_name}")
+        logger.debug(f"Switching to image: {file_name}")
 
         image_info = next(
             (img for img in self.mw.all_images if img["file_name"] == file_name), None
@@ -458,16 +462,16 @@ class ImageController(QObject):
     def load_tiff(
         self, image_path, dimensions=None, shape=None, force_dimension_dialog=False
     ):
-        print(f"Loading TIFF file: {image_path}")
+        logger.debug(f"Loading TIFF file: {image_path}")
         axes_hint = None
         with TiffFile(image_path) as tif:
-            print(f"TIFF tags: {tif.pages[0].tags}")
+            logger.debug(f"TIFF tags: {tif.pages[0].tags}")
 
             try:
                 metadata = tif.pages[0].tags["ImageDescription"].value
-                print(f"TIFF metadata: {metadata}")
+                logger.debug(f"TIFF metadata: {metadata}")
             except KeyError:
-                print("No ImageDescription metadata found")
+                logger.debug("No ImageDescription metadata found")
 
             try:
                 series_axes = tif.series[0].axes if tif.series else None
@@ -479,30 +483,30 @@ class ImageController(QObject):
                     mapped = [axis_map.get(a) for a in series_axes]
                     if all(a is not None for a in mapped):
                         axes_hint = mapped
-                        print(f"TIFF series axes: {series_axes} → dimension hint: {axes_hint}")
+                        logger.debug(f"TIFF series axes: {series_axes} → dimension hint: {axes_hint}")
                     else:
                         unknown = [a for a in series_axes if axis_map.get(a) is None]
-                        print(f"TIFF series axes had unknown labels {unknown}, no hint applied")
-            except Exception as e:
-                print(f"Could not read TIFF series axes: {e}")
+                        logger.debug(f"TIFF series axes had unknown labels {unknown}, no hint applied")
+            except Exception:
+                logger.exception("Could not read TIFF series axes")
 
             if len(tif.pages) > 1:
-                print(f"Multi-page TIFF detected. Number of pages: {len(tif.pages)}")
+                logger.debug(f"Multi-page TIFF detected. Number of pages: {len(tif.pages)}")
                 image_array = tif.asarray()
             else:
-                print("Single-page TIFF detected.")
+                logger.debug("Single-page TIFF detected.")
                 image_array = tif.pages[0].asarray()
 
-            print(f"Image array shape: {image_array.shape}")
-            print(f"Image array dtype: {image_array.dtype}")
-            print(f"Image min: {image_array.min()}, max: {image_array.max()}")
+            logger.debug(f"Image array shape: {image_array.shape}")
+            logger.debug(f"Image array dtype: {image_array.dtype}")
+            logger.debug(f"Image min: {image_array.min()}, max: {image_array.max()}")
 
         if dimensions and shape and not force_dimension_dialog:
-            print(f"Using stored dimensions: {dimensions}")
-            print(f"Using stored shape: {shape}")
+            logger.debug(f"Using stored dimensions: {dimensions}")
+            logger.debug(f"Using stored shape: {shape}")
             image_array = image_array.reshape(shape)
         else:
-            print("Processing as new image or forcing dimension dialog.")
+            logger.debug("Processing as new image or forcing dimension dialog.")
             dimensions = None
 
         self.process_multidimensional_image(
@@ -513,19 +517,19 @@ class ImageController(QObject):
     def load_czi(
         self, image_path, dimensions=None, shape=None, force_dimension_dialog=False
     ):
-        print(f"Loading CZI file: {image_path}")
+        logger.debug(f"Loading CZI file: {image_path}")
         with CziFile(image_path) as czi:
             image_array = czi.asarray()
-            print(f"CZI array shape: {image_array.shape}")
-            print(f"CZI array dtype: {image_array.dtype}")
-            print(f"CZI array min: {image_array.min()}, max: {image_array.max()}")
+            logger.debug(f"CZI array shape: {image_array.shape}")
+            logger.debug(f"CZI array dtype: {image_array.dtype}")
+            logger.debug(f"CZI array min: {image_array.min()}, max: {image_array.max()}")
 
         if dimensions and shape and not force_dimension_dialog:
-            print(f"Using stored dimensions: {dimensions}")
-            print(f"Using stored shape: {shape}")
+            logger.debug(f"Using stored dimensions: {dimensions}")
+            logger.debug(f"Using stored shape: {shape}")
             image_array = image_array.reshape(shape)
         else:
-            print("Processing as new image or forcing dimension dialog.")
+            logger.debug("Processing as new image or forcing dimension dialog.")
             dimensions = None
 
         self.process_multidimensional_image(
@@ -541,12 +545,12 @@ class ImageController(QObject):
     def load_multi_slice_image(self, image_path, dimensions=None, shape=None):
         file_name = os.path.basename(image_path)
         base_name = os.path.splitext(file_name)[0]
-        print(f"Loading multi-slice image: {image_path}")
-        print(f"Base name: {base_name}")
+        logger.debug(f"Loading multi-slice image: {image_path}")
+        logger.debug(f"Base name: {base_name}")
 
         if dimensions and shape:
-            print(f"Using stored dimensions: {dimensions}")
-            print(f"Using stored shape: {shape}")
+            logger.debug(f"Using stored dimensions: {dimensions}")
+            logger.debug(f"Using stored shape: {shape}")
             self.mw.image_dimensions[base_name] = dimensions
             self.mw.image_shapes[base_name] = shape
             if image_path.lower().endswith((".tif", ".tiff")):
@@ -554,16 +558,16 @@ class ImageController(QObject):
             elif image_path.lower().endswith(".czi"):
                 self.load_czi(image_path, dimensions, shape)
         else:
-            print("No stored dimensions or shape, loading as new image")
+            logger.debug("No stored dimensions or shape, loading as new image")
             if image_path.lower().endswith((".tif", ".tiff")):
                 self.load_tiff(image_path)
             elif image_path.lower().endswith(".czi"):
                 self.load_czi(image_path)
 
-        print(f"Loaded multi-slice image: {file_name}")
-        print(f"Dimensions: {self.mw.image_dimensions.get(base_name, 'Not found')}")
-        print(f"Shape: {self.mw.image_shapes.get(base_name, 'Not found')}")
-        print(f"Number of slices: {len(self.mw.slices)}")
+        logger.debug(f"Loaded multi-slice image: {file_name}")
+        logger.debug(f"Dimensions: {self.mw.image_dimensions.get(base_name, 'Not found')}")
+        logger.debug(f"Shape: {self.mw.image_shapes.get(base_name, 'Not found')}")
+        logger.debug(f"Number of slices: {len(self.mw.slices)}")
 
         if self.mw.slices:
             self.mw.current_image = self.mw.slices[0][1]
@@ -572,9 +576,9 @@ class ImageController(QObject):
             self.update_slice_list()
             self.mw.slice_list.setCurrentRow(0)
             self.activate_slice(self.mw.current_slice)
-            print(f"Activated first slice: {self.mw.current_slice}")
+            logger.debug(f"Activated first slice: {self.mw.current_slice}")
         else:
-            print("No slices were loaded")
+            logger.warning("No slices were loaded")
             self.mw.current_image = None
             self.mw.current_slice = None
 
@@ -587,9 +591,9 @@ class ImageController(QObject):
     ):
         file_name = os.path.basename(image_path)
         base_name = os.path.splitext(file_name)[0]
-        print(f"Processing file: {file_name}")
-        print(f"Image array shape: {image_array.shape}")
-        print(f"Image array dtype: {image_array.dtype}")
+        logger.debug(f"Processing file: {file_name}")
+        logger.debug(f"Image array shape: {image_array.shape}")
+        logger.debug(f"Image array dtype: {image_array.dtype}")
 
         if dimensions is None or force_dimension_dialog:
             if image_array.ndim > 2:
@@ -597,10 +601,10 @@ class ImageController(QObject):
                 # slices on a 5D TZCYX file — see arc42.
                 if axes_hint and len(axes_hint) == image_array.ndim:
                     default_dimensions = list(axes_hint)
-                    print(f"Applying axes hint as default dims: {default_dimensions}")
+                    logger.debug(f"Applying axes hint as default dims: {default_dimensions}")
                 else:
                     if axes_hint and len(axes_hint) != image_array.ndim:
-                        print(
+                        logger.debug(
                             f"Ignoring axes hint (length {len(axes_hint)} "
                             f"vs ndim {image_array.ndim})"
                         )
@@ -631,7 +635,7 @@ class ImageController(QObject):
                     QApplication.processEvents()
                     if dialog.exec():
                         dimensions = dialog.get_dimensions()
-                        print(f"Assigned dimensions: {dimensions}")
+                        logger.debug(f"Assigned dimensions: {dimensions}")
                         if "H" in dimensions and "W" in dimensions:
                             self.mw.image_dimensions[base_name] = dimensions
                             break
@@ -651,8 +655,8 @@ class ImageController(QObject):
                 self.mw.image_dimensions[base_name] = dimensions
 
         self.mw.image_shapes[base_name] = image_array.shape
-        print(f"Final assigned dimensions: {self.mw.image_dimensions[base_name]}")
-        print(f"Image shape: {self.mw.image_shapes[base_name]}")
+        logger.debug(f"Final assigned dimensions: {self.mw.image_dimensions[base_name]}")
+        logger.debug(f"Image shape: {self.mw.image_shapes[base_name]}")
 
         if self.mw.image_dimensions[base_name]:
             self.create_slices(
@@ -682,9 +686,9 @@ class ImageController(QObject):
         slices = []
         self.mw.slice_list.clear()
 
-        print(f"Creating slices for {base_name}")
-        print(f"Dimensions: {dimensions}")
-        print(f"Image array shape: {image_array.shape}")
+        logger.debug(f"Creating slices for {base_name}")
+        logger.debug(f"Dimensions: {dimensions}")
+        logger.debug(f"Image array shape: {image_array.shape}")
 
         progress = QProgressDialog("Loading slices...", "Cancel", 0, 100, self.mw)
         progress.setWindowModality(Qt.WindowModality.WindowModal)
@@ -745,9 +749,9 @@ class ImageController(QObject):
                     slice_info += f", {dim}: {size}"
             self.mw.update_image_info(additional_info=slice_info)
         else:
-            print("No slices were created")
+            logger.warning("No slices were created")
 
-        print(f"Created {len(slices)} slices for {base_name}")
+        logger.info(f"Created {len(slices)} slices for {base_name}")
         return slices
 
     def add_slice_to_list(self, slice_name):
@@ -834,7 +838,7 @@ class ImageController(QObject):
         if reply == QMessageBox.StandardButton.Yes:
             base_name = os.path.splitext(file_name)[0]
 
-            print(f"Removing annotations for image: {base_name}")
+            logger.debug(f"Removing annotations for image: {base_name}")
 
             keys_to_remove = [
                 key
@@ -846,7 +850,7 @@ class ImageController(QObject):
                 )
             ]
 
-            print(f"Keys to remove: {keys_to_remove}")
+            logger.debug(f"Keys to remove: {keys_to_remove}")
 
             for key in keys_to_remove:
                 del self.mw.all_annotations[key]
@@ -981,14 +985,14 @@ class ImageController(QObject):
             elif isinstance(self.mw.current_image, QPixmap):
                 pixmap = self.mw.current_image
             else:
-                print(f"Unexpected image type: {type(self.mw.current_image)}")
+                logger.warning(f"Unexpected image type: {type(self.mw.current_image)}")
                 return
 
             if not pixmap.isNull():
                 self.mw.image_label.setPixmap(pixmap)
                 self.mw.image_label.adjustSize()
             else:
-                print("Error: Null pixmap")
+                logger.warning("Null pixmap")
         else:
             self.mw.image_label.clear()
-            print("No current image to display")
+            logger.debug("No current image to display")

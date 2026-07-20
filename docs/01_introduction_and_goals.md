@@ -10,10 +10,14 @@ DigitalSreeni Image Annotator is a PyQt6-based desktop application for annotatin
 
 - **Manual Annotation Tools**: Polygon, rectangle, paint brush, and eraser tools
 - **SAM 2 Integration**: Semi-automated segmentation with Segment Anything Model
+- **Grounding DINO Detection**: Text-prompted object detection (single image or batch) with a review/accept overlay
+- **SAM 2 Fine-Tuning**: Fine-tune the SAM 2 decoder/encoder in-app with MLflow experiment tracking
+- **Keypoint / Pose Annotation**: Per-class named keypoint schema + skeleton (COCO instance model, 3-state visibility) with COCO-keypoints and YOLO-pose export/import
+- **Editing & Review**: Undo/redo, canvas selection with handle-based resize/move, vertex editing, and an annotations table with Area and per-mask Detail % simplification
 - **Multi-dimensional Image Support**: TIFF stacks, CZI files with dimension assignment
 - **Export Formats**: COCO JSON, YOLO v8/v11, Pascal VOC, labeled images, semantic labels
-- **Import Formats**: COCO JSON, YOLO datasets
-- **YOLO Training**: Train YOLO models directly from annotations
+- **Import Formats**: COCO JSON, YOLO datasets (detection + pose)
+- **YOLO Training & Prediction**: Train and predict YOLO models (detection, segmentation, and pose) directly from annotations
 - **Additional Tools**:
   - Annotation statistics
   - COCO JSON combiner

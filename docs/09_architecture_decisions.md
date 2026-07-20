@@ -6,7 +6,7 @@
 
 **Original decision (historical)**: Use PyQt5 5.15.11. Chosen because the upstream project used PyQt5, PyQt5's ecosystem was more mature at the time, and migration carried risk.
 
-**Superseding decision**: The project migrated to PyQt6 6.7+ in the same PR that introduced in-process AI inference. See [ADR-014](#adr-014-migrate-from-pyqt5-to-pyqt6) for the rationale (mainly: PyQt6 eliminated the WinError 1114 DLL load-order conflict that motivated ADR-011, unblocking the subprocess removal in ADR-013).
+**Superseding decision**: The project migrated to PyQt6 6.7+ in the same PR that introduced in-process AI inference. See [ADR-014](#adr-014-migrate-from-pyqt5-to-pyqt6) for the rationale. The migration unblocked the subprocess removal in [ADR-013](#adr-013-in-process-inference-with-qthread-wrapping); note, however, that PyQt6 did **not** by itself eliminate the WinError 1114 DLL load-order conflict — that conflict persists and is handled by importing torch before Qt in `main.py` (see [ADR-017](#adr-017-eager-torch-import-in-mainpy-before-qapplication-creation)).
 
 ---
 
@@ -17,6 +17,11 @@
 **Context**: Need to integrate Segment Anything Model 2 for semi-automated annotation
 
 **Decision**: Use Ultralytics library instead of direct SAM2 installation
+
+**Version bound** (reconciled in the pyproject migration, #38): pinned as
+`ultralytics>=8.3.27,<9` in `pyproject.toml` — the lowest version the code is
+documented against, capped below the next major. The SAM fine-tuning loop
+(ADR-021) was verified on 8.4.51, which remains satisfiable.
 
 **Rationale**:
 - Simplifies SAM model loading (single line)
@@ -56,6 +61,19 @@
 ---
 
 ## ADR-004: No Automated Testing Framework
+
+**Status**: Superseded — the project now has a pytest + pytest-qt suite
+
+**Superseding note**: This decision no longer holds. The repository has a real
+automated test suite under `tests/` (`unit`, `integration`, `ui`) — boot smoke,
+coordinate conversions, export/import round-trips, controller state machines,
+project save/load, multi-dim slicing, and the DINO/SAM/YOLO wiring — run in CI
+on 3 OS × Python 3.10-3.14 (`.github/workflows/tests.yml`). An AST-based
+inline-import gate guards refactors (see
+[ADR-016](#adr-016-static-ast-inspection-of-inline-imports-as-quality-gate-for-refactor-prs)).
+Run headless with `QT_QPA_PLATFORM=offscreen pytest tests/ -v`.
+
+### Original decision (historical)
 
 **Status**: Accepted (Technical Debt)
 
@@ -305,7 +323,7 @@ Migrating the GUI from PyQt5 to PyQt6 (same PR) was expected to eliminate the DL
 **Rationale**:
 - Two coupled changes share most of their cost (touching every file that imports PyQt5) so doing them in one PR avoids paying the migration tax twice.
 - Most PyQt5→PyQt6 differences are enum namespacing (`Qt.AlignCenter` → `Qt.AlignmentFlag.AlignCenter`) and module relocations (`QAction` moves from `QtWidgets` to `QtGui`) — mechanical, codemod-able. The behavioural risk is in event APIs (`event.pos()` → `event.position()`, returning `QPointF` not `QPoint`) and a handful of removed widgets (`QDesktopWidget` → `QGuiApplication.primaryScreen()`).
-- The existing test suite (65 pytest-qt tests, mostly exercising coordinate transforms) serves as the regression safety net.
+- The pytest-qt suite (coordinate transforms, export/import round-trips, controller state machines, and boot smoke) serves as the regression safety net.
 
 **Consequences**:
 - ✅ Subprocess workers retired; inference is in-process with cached models (see [ADR-013](#adr-013-in-process-inference-with-qthread-wrapping)).
@@ -1129,8 +1147,8 @@ invites "why is there no run?" confusion.
 
 **Decision**:
 
-- **Core dependency.** MLflow is in `install_requires` (and uncommented in
-  `requirements.txt`), not an extra — a fresh `pip install` always has it. `import
+- **Core dependency.** MLflow is in the `pyproject.toml` runtime `dependencies`
+  list, not an optional extra — a fresh `pip install` always has it. `import
   mlflow` still happens only inside the methods of `training/mlflow_tracker.py`
   (never at module top), so app startup stays fast and a *broken* install can't stop
   the GUI from launching — but tracking is never *expected* to be absent.
@@ -1472,25 +1490,93 @@ This builds on **ADR-022/023** (canvas selection + #40 handle editing), **ADR-02
 
 ---
 
-## Decisions Under Consideration
+## ADR-030: Centralized stdlib `logging`; `print()` Banned in `src/`
 
-### Consider pytest-qt for Utility Testing
+**Status**: Accepted (issue #33)
 
-**Status**: Under Consideration
+**Context**: The codebase had ~307 `print()` calls and 12 `traceback.print_exc()`
+sites across 23 files and no use of the stdlib `logging` module. Log level could
+not be controlled, output could not be redirected or silenced, and diagnosing a
+user report meant asking them to copy console spam. It also blocked the
+error-handling cleanup (ADR-031): silent `except` sites had no `logger.exception`
+target to migrate to.
 
-**Proposal**: Add unit tests for non-GUI utilities (calculate_area, coordinate conversions, export functions)
+**Decision**: Adopt stdlib `logging` with a single package-level console handler.
 
-**Pros**:
-- Catch regressions in utility functions
-- Build confidence for refactoring
-- Document expected behavior
+- New module `core/logging_config.py` exposes `configure(level=None)` and
+  `get_logger(name)`. `configure()` installs one stderr `StreamHandler` on the
+  package logger `digitalsreeni_image_annotator`, is idempotent (a second call
+  adds no second handler), and is called once from `main.py:main()` **before**
+  `QApplication` is created.
+- Every module does `logger = get_logger(__name__)`; `configure()` derives the
+  package root from its own `__name__` (not a hardcoded string), so all loggers
+  share that root and inherit its handler/level whether the app is imported as
+  `digitalsreeni_image_annotator` or `src.digitalsreeni_image_annotator`.
+- Default level INFO; `--debug` argv flag or `IMAGE_ANNOTATOR_DEBUG` env var
+  switches to DEBUG.
+- No third-party logging dependency. `print()` is banned in `src/` and enforced
+  in review.
+- Level policy: debug = diagnostic chatter (per-item loop progress, shape/metadata
+  dumps), info = user-relevant state changes, warning = soft failures outside
+  `except`, `logger.exception` / `error(exc_info=True)` = inside `except`. See the
+  level table in [docs/08](08_crosscutting_concepts.md#logging-and-debug-output).
 
-**Cons**:
-- Setup overhead
-- Maintenance burden
-- May not catch most bugs (which are in GUI)
+**Consequences**:
+- One switch turns diagnostic chatter on/off; every log line carries its module
+  name (`%(name)s`).
+- `QMessageBox` / dialog behaviour is unchanged — logging is the diagnostic
+  channel, dialogs are the user channel. The migration touched only the output
+  channel of existing prints, never user-visible messaging.
+- Enables ADR-031 (error-handling convention): swallowed exceptions now have a
+  `logger.exception` target.
+- Tests configure the package logger explicitly
+  (`tests/unit/test_logging_config.py`); package loggers have `propagate = False`
+  after `configure()`, so `caplog` tests must enable propagation on the specific
+  logger or attach `caplog.handler`.
 
 ---
+
+## ADR-031: Raise in Core, Catch + Dialog at the UI Boundary, No Silent `pass`
+
+**Status**: Accepted (issue #34)
+
+**Context**: `docs/11`'s "Inconsistent Error Handling" debt — a mix of raised
+exceptions, message boxes, and silent `return None`, plus several
+`except Exception: pass` and one bare `except:` that swallowed real failures
+(CUDA cleanup, a broken MLflow log sink, DICOM VOI-LUT) with no log line. A
+swallowed error left nothing in the bug report.
+
+**Decision**: Adopt one convention (also written into docs/08):
+1. Core / inference / io / training modules **raise**; they never dialog and
+   never return `None` to signal a failed user action.
+2. Controllers / dialogs (the UI boundary) **catch**, `logger.exception(...)`,
+   and surface a `QMessageBox`.
+3. Catch the **narrowest** exception type. `except Exception` only at a UI
+   boundary or a documented crash-safety barrier.
+4. **Never `pass` silently** — log (`exc_info=True` / `.exception`) or use a
+   narrow type + `# reason` comment.
+5. Bare `except:` is **banned**.
+
+Concrete changes: the seven enumerated silent sites now log; the one bare
+`except:` (`dicom_converter.apply_window_level`) became `except Exception` +
+`logger.warning`. A friendly OOM dialog rides along: `core/torch_utils._is_oom`
+(torch-free, unit-tested) drives a "pick a smaller model" message in
+`SAMController.change_sam_model`, while non-OOM failures keep the generic dialog;
+both reset the model selector.
+
+**Consequences**:
+- Every swallowed exception is now visible (logged) or surfaced (dialog).
+- The three deliberate narrow catches stay as the convention's positive
+  examples: `except TypeError: pass  # already disconnected` (yolo /
+  sam_train controllers) and `except ImportError` in `main.py`.
+- `mlflow_tracker`'s outer `except Exception` ("never let tracking abort
+  training") and the ADR-013 `InferenceBusyError` re-entrancy swallow are
+  documented barriers, not silent-swallow sites, and are unchanged.
+- Depends on ADR-030 (logging) for the `logger.exception` target.
+
+---
+
+## Decisions Under Consideration
 
 ### Consider Relative Paths with Image Copying
 

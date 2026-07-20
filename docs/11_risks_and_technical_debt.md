@@ -37,6 +37,9 @@
 - Documentation recommends tiny/small models
 - UI warns about large model
 - Autosave reduces data loss
+- Out-of-memory on model load now shows an actionable "pick a smaller model"
+  dialog instead of a generic error (`core/torch_utils._is_oom` +
+  `SAMController.change_sam_model`, issue #34)
 
 **Future Action**:
 - Add RAM detection and warning
@@ -136,9 +139,18 @@ controller slot) and the SAM/DINO/YOLO inference paths.
 
 ### Inconsistent Error Handling
 
-**Debt Level**: Medium
+**Status**: ✅ Resolved with a written convention (issue #34)
 
-**Description**: Mix of exceptions, return values, and UI warnings
+**Debt Level**: Medium (historical)
+
+**Resolution**: A single error-handling convention now governs the codebase —
+core/inference/io/training raise; controllers/dialogs catch, `logger.exception`,
+and surface a `QMessageBox`; catch the narrowest type; never `pass` silently;
+bare `except:` banned. Seven silent `except: pass` sites were fixed and the one
+bare `except:` removed. See ADR-031 and the Error-Handling Convention in
+[docs/08](08_crosscutting_concepts.md#error-handling-convention-issue-34).
+
+**Description (historical)**: Mix of exceptions, return values, and UI warnings
 
 **Examples**:
 ```python
@@ -167,19 +179,16 @@ return None
 
 ### Print Statements for Logging
 
-**Debt Level**: Low
+**Status**: ✅ Resolved (issue #33)
 
-**Description**: Uses `print()` instead of proper logging framework
-
-**Impact**:
-- Cannot control log levels
-- Cannot redirect logs
-- Hard to debug production issues
-- Console spam
-
-**Effort to Resolve**: Low (days)
-
-**Priority**: Low
+**Description**: Historically used `print()` instead of a logging framework.
+All ~307 `print()` calls and 12 `traceback.print_exc()` sites in `src/` were
+migrated to the stdlib `logging` module: one package-level logger tree rooted
+at `digitalsreeni_image_annotator`, configured once in
+`core/logging_config.py`, with a `--debug` / `IMAGE_ANNOTATOR_DEBUG` level
+switch. `print()` is now banned in `src/` (ADR-030). See the
+"Logging and Debug Output" section in
+[docs/08](08_crosscutting_concepts.md#logging-and-debug-output).
 
 **Plan**: Replace with `logging` module
 
@@ -344,8 +353,28 @@ the orchestrator wires each to the matching controller slot.
 - Periodically review upstream
 - Consider contributing changes back
 
-**Current Fork-Specific Changes**:
-- (Document any fork-specific features here)
+**Current Fork-Specific Changes** (derived from the merge history and ADR index):
+- PyQt6 migration replacing PyQt5 (ADR-014), with a torch-before-Qt DLL
+  load-order guard in `main.py` (ADR-017).
+- In-process SAM 2 / Grounding-DINO inference on a `QThread` with a re-entrancy
+  guard, replacing the old subprocess workers (ADR-013).
+- Grounding-DINO text-prompted detection — single image and batch — with an
+  Enter/Escape review-and-accept overlay.
+- SAM 2 fine-tuning via a custom loop over the Ultralytics SAM2 module (ADR-021),
+  with always-on MLflow experiment tracking (ADR-027).
+- YOLO training + prediction for detection, segmentation, and pose (issue #35).
+- Keypoint / pose annotation: per-class named schema + skeleton (COCO instance
+  model), with COCO-keypoints and YOLO-pose export/import (ADR-029).
+- Undo / redo via per-image annotation snapshots (ADR-026).
+- Canvas selection unified with the annotations table + handle-based shape
+  editing and vertex editing (ADR-022 / 023 / 025), with bounds clamping and
+  augmentation clipping (ADR-024).
+- Modular architecture: thin `ImageAnnotator` orchestrator + per-responsibility
+  controllers + per-tool handlers (ADR-018 / 019).
+- Central stdlib `logging` framework (ADR-030) and a written error-handling
+  convention (ADR-031).
+- A pytest + pytest-qt automated test suite run in CI on 3 OS × Python
+  3.10-3.14, superseding the original manual-testing-only decision (ADR-004).
 
 ---
 

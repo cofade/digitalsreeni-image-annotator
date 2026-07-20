@@ -48,6 +48,9 @@ from .dialogs.slice_registration import SliceRegistrationTool
 from .dialogs.snake_game import SnakeGame
 from .dialogs.stack_interpolator import StackInterpolator
 from .dialogs.stack_to_slices import show_stack_to_slices
+from .core.logging_config import get_logger
+
+logger = get_logger(__name__)
 
 warnings.filterwarnings("ignore", category=UserWarning)
 
@@ -349,7 +352,7 @@ class ImageAnnotator(QMainWindow):
                     self, "Project Details", "Project details have been updated."
                 )
             else:
-                print("No changes made to project details.")
+                logger.debug("No changes made to project details.")
 
     def load_multi_slice_image(self, image_path, dimensions=None, shape=None):
         return self.image_controller.load_multi_slice_image(image_path, dimensions, shape)
@@ -514,7 +517,6 @@ class ImageAnnotator(QMainWindow):
         return self.dino_controller.has_visible_temp_classes()
 
     def launch_snake_game(self):
-        # print("Launching Snake game")
         if not hasattr(self, "snake_game") or not self.snake_game.isVisible():
             self.snake_game = SnakeGame()
         self.snake_game.show()
@@ -1066,10 +1068,10 @@ class ImageAnnotator(QMainWindow):
             delta = event.angleDelta().y()
             if self.image_label.current_tool == "paint_brush":
                 self.paint_brush_size = max(1, self.paint_brush_size + delta // 120)
-                print(f"Paint brush size: {self.paint_brush_size}")
+                logger.debug(f"Paint brush size: {self.paint_brush_size}")
             elif self.image_label.current_tool == "eraser":
                 self.eraser_size = max(1, self.eraser_size + delta // 120)
-                print(f"Eraser size: {self.eraser_size}")
+                logger.debug(f"Eraser size: {self.eraser_size}")
         else:
             super().wheelEvent(event)
 

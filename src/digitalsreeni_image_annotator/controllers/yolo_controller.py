@@ -45,6 +45,10 @@ from ..dialogs.yolo_trainer import (
     YOLOTrainer,
 )
 
+from ..core.logging_config import get_logger
+
+logger = get_logger(__name__)
+
 
 def build_yolo_train_opts(epochs, *, cos_lr, lr0, patience):
     """Map the Train-dialog knobs to Ultralytics ``train()`` kwargs (issue #85).
@@ -413,7 +417,7 @@ class YOLOController(QObject):
                 f"MLflow tracking → {store} (experiment '{experiment}')."
             )
         except Exception as exc:
-            print(f"Could not configure MLflow tracking: {exc}")
+            logger.exception("Could not configure MLflow tracking")
             self.mw.training_dialog.update_info(
                 f"MLflow tracking could not be configured ({exc}); "
                 "training continues untracked."
@@ -480,8 +484,8 @@ class YOLOController(QObject):
                 QTimer.singleShot(2500 if ok else 0, lambda: webbrowser.open(url))
             else:
                 webbrowser.open(url)
-        except Exception as exc:
-            print(f"Could not open MLflow UI for the run: {exc}")
+        except Exception:
+            logger.exception("Could not open MLflow UI for the run")
 
     def training_finished(self, results):
         # Training is over — hide Stop entirely (only Close remains); the next
@@ -703,7 +707,7 @@ class YOLOController(QObject):
                 masks = result.masks
 
                 if masks is None:
-                    print(f"No masks found for {image_name}")
+                    logger.warning(f"No masks found for {image_name}")
                     continue
 
                 for mask, box in zip(masks, boxes):

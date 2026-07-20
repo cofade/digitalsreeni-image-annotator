@@ -28,6 +28,10 @@ from ..io.export_formats import (
 )
 from ..io.import_formats import import_coco_json, process_import_format
 
+from ..core.logging_config import get_logger
+
+logger = get_logger(__name__)
+
 
 def prompt_validation_split(parent):
     """Ask what fraction of images to hold out for validation.
@@ -80,19 +84,19 @@ def _rebuild_imported_annotation(ann, category_name, number):
 def import_annotations(mw):
     if not mw.image_label.check_unsaved_changes():
         return
-    print("Starting import_annotations")
+    logger.debug("Starting import_annotations")
     import_format = mw.import_format_selector.currentText()
-    print(f"Import format: {import_format}")
+    logger.debug(f"Import format: {import_format}")
 
     if import_format == "COCO JSON":
         file_name, _ = QFileDialog.getOpenFileName(
             mw, "Import COCO JSON Annotations", "", "JSON Files (*.json)"
         )
         if not file_name:
-            print("No file selected, returning")
+            logger.debug("No file selected, returning")
             return
 
-        print(f"Selected file: {file_name}")
+        logger.debug(f"Selected file: {file_name}")
         json_dir = os.path.dirname(file_name)
         images_dir = os.path.join(json_dir, "images")
         try:
@@ -106,10 +110,10 @@ def import_annotations(mw):
             mw, "Select YOLO Dataset YAML", "", "YAML Files (*.yaml *.yml)"
         )
         if not yaml_file:
-            print("No YAML file selected, returning")
+            logger.debug("No YAML file selected, returning")
             return
 
-        print(f"Selected YAML file: {yaml_file}")
+        logger.debug(f"Selected YAML file: {yaml_file}")
         try:
             imported_annotations, image_info, recovered_schemas = process_import_format(
                 import_format, yaml_file, mw.class_mapping
@@ -131,22 +135,22 @@ def import_annotations(mw):
         )
         return
 
-    print(
+    logger.debug(
         f"JSON/YOLO directory: {json_dir if import_format == 'COCO JSON' else os.path.dirname(yaml_file)}"
     )
-    print(f"Images directory: {images_dir}")
-    print(f"Imported annotations count: {len(imported_annotations)}")
-    print(f"Image info count: {len(image_info)}")
+    logger.debug(f"Images directory: {images_dir}")
+    logger.debug(f"Imported annotations count: {len(imported_annotations)}")
+    logger.debug(f"Image info count: {len(image_info)}")
 
     images_loaded = 0
     images_not_found = []
 
     for info in image_info.values():
-        print(f"Processing image: {info['file_name']}")
+        logger.debug(f"Processing image: {info['file_name']}")
         image_path = os.path.join(images_dir, info["file_name"])
 
         if os.path.exists(image_path):
-            print(f"Image found at: {image_path}")
+            logger.debug(f"Image found at: {image_path}")
             mw.image_paths[info["file_name"]] = image_path
             mw.all_images.append(
                 {
@@ -159,11 +163,11 @@ def import_annotations(mw):
             )
             images_loaded += 1
         else:
-            print(f"Image not found at: {image_path}")
+            logger.debug(f"Image not found at: {image_path}")
             images_not_found.append(info["file_name"])
 
-    print(f"Images loaded: {images_loaded}")
-    print(f"Images not found: {len(images_not_found)}")
+    logger.debug(f"Images loaded: {images_loaded}")
+    logger.debug(f"Images not found: {len(images_not_found)}")
 
     if images_not_found:
         message = f"The following {len(images_not_found)} images were not found in the 'images' directory:\n\n"
@@ -180,7 +184,7 @@ def import_annotations(mw):
         )
 
         if reply == QMessageBox.StandardButton.No:
-            print("Import cancelled due to missing images")
+            logger.debug("Import cancelled due to missing images")
             QMessageBox.information(
                 mw,
                 "Import Cancelled",
@@ -216,9 +220,9 @@ def import_annotations(mw):
         if sanitized is not None:
             mw.keypoint_schemas[class_name] = sanitized
         else:
-            print(f"  Skipped malformed keypoint schema recovered for class '{class_name}' during import.")
+            logger.warning(f"Skipped malformed keypoint schema recovered for class '{class_name}' during import.")
 
-    print("Updating UI")
+    logger.debug("Updating UI")
     mw.update_class_list()
     mw.update_image_list()
     mw.update_annotation_list()
@@ -241,7 +245,7 @@ def import_annotations(mw):
     if images_not_found:
         message += f"Annotations for {len(images_not_found)} missing images were ignored."
 
-    print("Import complete, showing message")
+    logger.debug("Import complete, showing message")
     QMessageBox.information(mw, "Import Complete", message)
     mw.auto_save()
 

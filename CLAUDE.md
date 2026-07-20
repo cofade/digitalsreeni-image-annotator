@@ -9,8 +9,10 @@ DigitalSreeni Image Annotator - PyQt6 desktop app for image annotation with SAM 
 ## Quick Reference
 
 ```bash
-# Install
+# Install (runtime only)
 pip install -e .
+# Install with dev/test extras (pytest, pytest-qt, ...)
+pip install -e ".[dev]"
 
 # Run
 python -m src.digitalsreeni_image_annotator.main
@@ -20,9 +22,9 @@ python -m src.digitalsreeni_image_annotator.main
 
 ## Tech Stack
 
-Python 3.10+ | PyQt6 6.7+ | Ultralytics 8.3.27 (SAM 2) | NumPy | OpenCV | Shapely
+Python 3.10+ | PyQt6 6.7+ | Ultralytics >=8.3.27,<9 (SAM 2) | NumPy | OpenCV | Shapely
 
-**Test suite**: `tests/` (pytest + pytest-qt). 94 tests pass on PyQt6.
+**Test suite**: `tests/` (pytest + pytest-qt). 650 tests pass on PyQt6 (3 skipped).
 
 ## Documentation
 
@@ -280,4 +282,5 @@ See [Risks and Technical Debt](docs/11_risks_and_technical_debt.md) for full lis
 - Polygon area uses shoelace formula (utils.py)
 - Export formats copy images to output directory
 - Dark mode changes annotation colors for visibility
+- Headless launch + smoke check: see the `run-app` skill (`.claude/skills/run-app/`)
 - Snake game is hidden Easter egg 🐍

@@ -24,7 +24,7 @@ python -m src.digitalsreeni_image_annotator.main
 
 Python 3.10+ | PyQt6 6.7+ | Ultralytics >=8.3.27,<9 (SAM 2) | NumPy | OpenCV | Shapely
 
-**Test suite**: `tests/` (pytest + pytest-qt). 650 tests pass on PyQt6 (3 skipped).
+**Test suite**: `tests/` (pytest + pytest-qt). 688 tests pass on PyQt6 (3 skipped).
 
 ## Documentation
 

@@ -1695,8 +1695,13 @@ dispatcher that owns state and thin delegates — a strictly behavior-preserving
 - ✅ `image_label.py` 1854 → 1197 lines; the two new modules carry module docstrings
   stating what they own and what stays on the label.
 - ✅ Zero functional change — no signal signatures, dispatch order, paint order, or
-  state-field names changed; all pre-existing tests pass unmodified (688 passed / 3
-  skipped, unchanged but for the +2 new identity-lock tests).
+  state-field names changed; every pre-existing test passes unmodified (the suite goes
+  from 686 to 688 passed / 3 skipped purely from the +2 new identity-lock tests).
+- ⚠️ The compatibility layer (~50 one-line pass-through delegates + 7 staticmethod
+  aliases) is **transitional scaffolding**: it keeps every existing call site working for
+  a zero-risk split. As callers migrate to reach `image_label.renderer.*` / the gesture
+  collaborator directly (e.g. during #48/#51 canvas work), the delegate layer should be
+  deleted rather than left to ossify — otherwise the split only adds an indirection tax.
 - ✅ The shared handle geometry (`bbox_handle_points`) stays single-sourced, upholding
   the "visual == grab" invariant (`_draw_selection_overlay` and `_bbox_handle_at` both
   resolve to the same function object).

@@ -1654,6 +1654,58 @@ error dialog) on a structurally broken file; it is deliberately lenient about un
 
 ---
 
+## ADR-034: Split ImageLabel into Renderer + Edit-Gesture Collaborators (Dispatch Stays)
+
+**Status**: Accepted (issue #46)
+
+**Context**: `widgets/image_label.py` had grown to ~1850 lines — the largest file in
+the codebase — mixing three concerns: canvas painting/overlays, the direct-manipulation
+edit-gesture state machine (ADR-023 bbox/segmentation handles, ADR-029 keypoint edits),
+and event dispatch/zoom/pan/tool routing. Upcoming canvas-heavy work (video timeline
+overlays #48, SAM 3 review/tracking #51) would pile onto it further.
+
+**Decision**: Extract two collaborators by **composition**, leaving `ImageLabel` as the
+dispatcher that owns state and thin delegates — a strictly behavior-preserving move
+(diff = moves + delegates only, no logic/ordering/name changes):
+- `widgets/canvas_renderer.py::CanvasRenderer` — constructed with the label
+  (`self.label = image_label`); owns `draw_annotations`, `draw_temp_annotations`,
+  `draw_tool_size_indicator`, `draw_sam_bbox`, `draw_selection_rect`,
+  `_draw_keypoint_annotation`, `_draw_selection_overlay`, `draw_editing_polygon`,
+  `calculate_centroid`, the painter helpers `_pen_w`/`_overlay_font`, and the
+  `_SELECTION_COLOR` constant. `paintEvent` stays on `ImageLabel` and calls into
+  `self.renderer.*` in the identical layer order; the per-tool `handler.paint_overlay`
+  loop (ADR-019) stays in `paintEvent`.
+- `widgets/edit_gestures.py` — seven module-level **pure functions**
+  (`bbox_handle_points`, `resize_bbox`, `scale_segmentation`, `translate_segmentation`,
+  `scale_keypoints`, `translate_keypoints`, `sync_bbox_key`) plus `class EditGestures`
+  for the 15 stateful gesture methods (`_begin_shape_edit`, `_update_bbox_drag`,
+  `_commit_bbox_drag`, keypoint edits, cursor updates, …). The state fields
+  `bbox_edit`/`editing_keypoint`/`selection_*`/`highlighted_annotations` and
+  `_BBOX_HANDLE_CURSORS` **stay on the label**; `EditGestures` mutates them via
+  `self.label.*` and emits via `self.label.<signal>.emit(...)`.
+- **Compatibility surface**: `ImageLabel` keeps `staticmethod` aliases
+  (`_bbox_handle_points = staticmethod(edit_gestures.bbox_handle_points)`, ×7) so
+  `ImageLabel._resize_bbox(...)` / `label._resize_bbox(...)` call sites and tests are
+  unchanged; `_SELECTION_COLOR = CanvasRenderer._SELECTION_COLOR` is re-exported; a
+  one-line delegate exists for every moved render/gesture method (exact names/sigs).
+  `tests/unit/test_module_split.py` locks the seven alias identities +
+  `_SELECTION_COLOR` re-export.
+
+**Consequences**:
+- ✅ `image_label.py` 1854 → 1197 lines; the two new modules carry module docstrings
+  stating what they own and what stays on the label.
+- ✅ Zero functional change — no signal signatures, dispatch order, paint order, or
+  state-field names changed; all pre-existing tests pass unmodified (688 passed / 3
+  skipped, unchanged but for the +2 new identity-lock tests).
+- ✅ The shared handle geometry (`bbox_handle_points`) stays single-sourced, upholding
+  the "visual == grab" invariant (`_draw_selection_overlay` and `_bbox_handle_at` both
+  resolve to the same function object).
+- Cross-references ADR-018 (CanvasContext), ADR-019 (tool handlers), ADR-022/023
+  (selection + shape editing being relocated), ADR-016 (the AST inline-import gate that
+  guards module moves).
+
+---
+
 ## Decisions Under Consideration
 
 ### Consider Relative Paths with Image Copying

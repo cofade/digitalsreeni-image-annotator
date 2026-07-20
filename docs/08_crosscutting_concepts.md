@@ -294,6 +294,28 @@ which on Windows means barely-visible radio-button indicators and
 white-on-white headers (the dataset splitter radio buttons hit this
 before they were styled).
 
+## Left Sidebar — Scrollable Layout (issue #88)
+
+The left sidebar (`ui/sidebar.py::build_sidebar`) stacks Import, Classes,
+the Annotation tools, the DINO panel, the Annotations table and Export in
+one `QVBoxLayout`. On short screens or at large UI font sizes an expanded
+DINO panel used to squeeze the Annotations table down to just its header
+row. The fix is structural, not per-widget:
+
+- The whole sidebar content widget lives inside a `QScrollArea`
+  (`window.sidebar_scroll`, `setWidgetResizable(True)`) that is what gets
+  added to the main layout — `window.sidebar` itself is the scroll area's
+  inner widget. Horizontal scrolling is `ScrollBarAlwaysOff`; because the
+  area is width-resizable the content tracks the viewport width and wraps.
+- Each vertically-competing section (`class_list`, `dino_class_table`,
+  `dino_phrase_panel`, `annotation_list`) carries a `setMinimumHeight(...)`
+  so it keeps a usable size. The sum of those minimums is what makes the
+  scroll area scroll when the window is too short — otherwise a section
+  could still collapse *inside* the scroll area.
+- The scroll area uses `QFrame.Shape.NoFrame` and sets no
+  `background:`/`color:` — the active stylesheet still paints the sidebar
+  (No Hardcoded Colors Rule above).
+
 ## UI Font Zoom (Low-Vision Mode)
 
 ### Single Source of Truth: `ui_font_pt`

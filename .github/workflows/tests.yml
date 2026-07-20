@@ -1,10 +1,23 @@
 name: Tests
 
 on:
+  # Feature-branch prefixes are included so the stacked review PR chain gets
+  # full-matrix CI on every push (a pull_request event only fires when the PR
+  # base is master/main/develop, which stacked PRs are not). For push events
+  # GitHub uses the workflow file at the pushed commit, so this triggers
+  # reliably on the branch that introduces it.
   push:
-    branches: [ master, main, develop ]
+    branches:
+      - master
+      - main
+      - develop
+      - 'feature/**'
+      - 'refactor/**'
+      - 'perf/**'
+      - 'spike/**'
   pull_request:
     branches: [ master, main, develop ]
+  workflow_dispatch:
 
 jobs:
   test:

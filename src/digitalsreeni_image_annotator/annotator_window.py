@@ -8,6 +8,7 @@ from PyQt6.QtWidgets import (
     QDialog,
     QFileDialog,
     QHBoxLayout,
+    QInputDialog,
     QLineEdit,
     QMainWindow,
     QMenu,
@@ -876,6 +877,10 @@ class ImageAnnotator(QMainWindow):
             if self.is_multi_dimensional(file_name):
                 redefine_dimensions_action = menu.addAction("Redefine Dimensions")
 
+            menu.addSeparator()
+            move_to_group_action = menu.addAction("Move to group…")
+            remove_from_group_action = menu.addAction("Remove from group")
+
             action = menu.exec(self.image_list.mapToGlobal(position))
 
             if action == delete_action:
@@ -887,6 +892,36 @@ class ImageAnnotator(QMainWindow):
                 and action == redefine_dimensions_action
             ):
                 self.redefine_dimensions(file_name)
+            elif action == move_to_group_action:
+                self._prompt_move_image_to_group(file_name)
+            elif action == remove_from_group_action:
+                self.image_controller.set_image_group(file_name, None)
+
+    def _prompt_move_image_to_group(self, file_name):
+        """Ask for a group name and assign it (issue #43).
+
+        The combo is seeded with the existing derived groups and is
+        editable so a new name can be typed. Thin delegation: the
+        controller owns the state change (set_image_group).
+        """
+        existing = sorted(
+            {info.get("group") for info in self.all_images if info.get("group")}
+        )
+        info = next(
+            (img for img in self.all_images if img["file_name"] == file_name), None
+        )
+        current = (info.get("group") if info else "") or ""
+        current_index = existing.index(current) if current in existing else 0
+        name, ok = QInputDialog.getItem(
+            self,
+            "Move to group",
+            "Group name (leave blank to ungroup):",
+            existing,
+            current_index,
+            True,
+        )
+        if ok:
+            self.image_controller.set_image_group(file_name, name)
 
     def is_multi_dimensional(self, file_name):
         return self.image_controller.is_multi_dimensional(file_name)

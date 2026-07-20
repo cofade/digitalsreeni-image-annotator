@@ -220,6 +220,20 @@ class ProjectController(QObject):
             else:
                 self.mw.add_images_to_list([image_path])
 
+        # Restore per-image group tags (issue #43). add_images_to_list /
+        # load_multi_slice_image rebuild all_images from scratch and drop
+        # extra keys, so copy the saved "group" back onto the matching entry.
+        saved_groups = {
+            img["file_name"]: img["group"]
+            for img in project_data["images"]
+            if img.get("group")
+        }
+        if saved_groups:
+            for info in self.mw.all_images:
+                group = saved_groups.get(info["file_name"])
+                if group:
+                    info["group"] = group
+
         dino_cfg = project_data.get("dino_config", {})
         valid_classes = set(self.mw.class_mapping.keys())
 
@@ -445,6 +459,10 @@ class ProjectController(QObject):
                 "height": image_info["height"],
                 "is_multi_slice": image_info["is_multi_slice"],
             }
+            # Persist the optional group tag (issue #43); absent for
+            # ungrouped images so old projects are unchanged.
+            if image_info.get("group"):
+                image_data["group"] = image_info["group"]
 
             if image_data["is_multi_slice"]:
                 base_name_without_ext = os.path.splitext(file_name)[0]

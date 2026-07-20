@@ -404,6 +404,17 @@ def build_image_list(window):
     )
     window.image_list_layout.addWidget(window.image_filter_combo)
 
+    # Group filter (issue #43). Index 0 ("All groups") means "hide
+    # nothing"; the other entries are the derived group names, repopulated
+    # by ImageController.sort_image_list with signals blocked.
+    window.image_group_combo = QComboBox()
+    window.image_group_combo.addItem("All groups")
+    window.image_group_combo.setToolTip("Filter the image list by group")
+    window.image_group_combo.currentIndexChanged.connect(
+        lambda _index: window.apply_image_filter()
+    )
+    window.image_list_layout.addWidget(window.image_group_combo)
+
     window.image_list = QListWidget()
     window.image_list.itemClicked.connect(window.switch_image)
     window.image_list.currentRowChanged.connect(

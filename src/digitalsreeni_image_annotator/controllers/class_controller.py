@@ -270,6 +270,15 @@ class ClassController(QObject):
                 and self.mw.current_class not in self.mw.keypoint_schemas
             ):
                 self.mw.activate_tool(None)
+            # Conversely, a pose class admits only the keypoint tool: if a
+            # shape/SAM tool is active when a pose class is selected, deactivate
+            # it so a tool can't stay active-but-invalid on a pose class. (#44)
+            elif (
+                self.mw.current_class in self.mw.keypoint_schemas
+                and self.mw.image_label.current_tool is not None
+                and self.mw.image_label.current_tool != "keypoint"
+            ):
+                self.mw.activate_tool(None)
         else:
             self.mw.current_class = None
             self.mw.disable_annotation_tools()
@@ -326,6 +335,21 @@ class ClassController(QObject):
         from ..dialogs.keypoint_schema_dialog import KeypointSchemaDialog
 
         class_name = item.text()
+        # A class is pose OR regular, not both (ADR-029). Refuse to turn a class
+        # that already holds plain annotations into a pose class; editing the
+        # schema of an existing pose class (even a legacy-mixed one) stays
+        # allowed so names/skeleton can still be fixed. (#44)
+        is_new_pose_class = class_name not in self.mw.keypoint_schemas
+        if is_new_pose_class and self._class_has_plain_annotations(class_name):
+            QMessageBox.warning(
+                self.mw,
+                "Cannot Define Keypoint Schema",
+                f"'{class_name}' already has regular (polygon/box/paint) "
+                "annotations. A class can be a pose class or a regular class, "
+                "not both. Move or delete those annotations first, or create a "
+                "new class for poses.",
+            )
+            return
         has_instances = self._class_has_keypoint_instances(class_name)
         dialog = KeypointSchemaDialog(
             self.mw,
@@ -354,6 +378,15 @@ class ClassController(QObject):
         self.mw.image_label.update()
         if not self.mw.is_loading_project:
             self.mw.auto_save()
+
+    def _class_has_plain_annotations(self, class_name):
+        """True if the class holds any non-keypoint (polygon/box/paint)
+        annotation. A class is pose OR regular, not both (ADR-029 / #44)."""
+        for image_annotations in self.mw.all_annotations.values():
+            for ann in image_annotations.get(class_name, []):
+                if "keypoints" not in ann:
+                    return True
+        return False
 
     def _class_has_keypoint_instances(self, class_name):
         for image_annotations in self.mw.all_annotations.values():

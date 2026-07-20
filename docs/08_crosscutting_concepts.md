@@ -146,6 +146,22 @@ for contour in contours:
         # Accept annotation
 ```
 
+## Project Portability & Unsaved-Project Recovery (#41 / #42)
+
+**Relative image paths (ADR-033).** `build_project_data()` writes `image_paths_rel`
+(POSIX separators, project-relative) alongside the absolute `image_paths`, but only when
+a project dir exists. `resolve_image_path()` resolves in order relative → absolute →
+`<project_dir>/images/` → missing, so a moved project folder opens cleanly and v1 files
+still resolve. `core/project_schema.validate_project_data` (pure) runs after `json.load`
+and raises `ValueError` on a structurally broken `.iap`.
+
+**Unsaved-project recovery (ADR-032).** With no `current_project_file`, `auto_save()`
+never prompts — it writes a silent snapshot (`build_project_data()` → atomic temp +
+`os.replace`) to `AppDataLocation/recovery/`, path stored under QSettings
+`recovery/pending_path`. `main()` calls `ProjectController.offer_recovery()` after
+`window.show()` (never the constructor, so tests don't trigger it); a real save clears it.
+The snapshot is exactly the `.iap` shape, so restore reuses `load_project_data`.
+
 ## Autosave and Project Corruption Prevention
 
 ### Critical: Disable Autosave During Load
@@ -917,6 +933,12 @@ to keep the image legible — see the No Hardcoded Colors Rule for the broader
 "don't fight the theme/colours" theme.
 
 ## Tool Activation — One Choke-Point, Mutually Exclusive
+
+**Pose classes admit only the keypoint tool (#44).** Activating a shape tool
+(`toggle_tool`) or a SAM tool (`SAMController.toggle_sam_*`) while a pose class is
+selected is refused (button unchecked); selecting a pose class while a shape/SAM tool is
+active deactivates it (`ClassController.on_class_selected`). Editing a schema is still
+allowed on a legacy-mixed class. See ADR-029 Guards.
 
 All six canvas tools (Polygon, Rectangle, Paint, Eraser, SAM-box, SAM-points)
 go through a **single** activation method, `ImageAnnotator.activate_tool(name)`

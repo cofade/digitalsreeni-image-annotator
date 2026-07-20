@@ -45,6 +45,10 @@ def main():
     app = QApplication(sys.argv)
     window = ImageAnnotator()
     window.show()
+    # Offer to restore an unsaved-project recovery snapshot from a previous
+    # session (issue #41). Done here — after show(), never in the constructor —
+    # so tests that build ImageAnnotator() directly never trigger the modal.
+    window.project_controller.offer_recovery()
     sys.exit(app.exec())
 
 if __name__ == "__main__":

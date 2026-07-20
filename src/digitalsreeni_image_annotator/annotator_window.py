@@ -1037,6 +1037,25 @@ class ImageAnnotator(QMainWindow):
             self.keypoint_button: "keypoint",
         }
 
+        # A pose class admits only the keypoint tool. Block activating any shape
+        # tool on it (gate activation only — unchecking falls through, same
+        # discipline as the keypoint guard below). SAM buttons are guarded in
+        # SAMController.toggle_sam_*. (#44)
+        if (
+            sender in (self.polygon_button, self.rectangle_button,
+                       self.paint_brush_button, self.eraser_button)
+            and sender.isChecked()
+            and self.current_class in self.keypoint_schemas
+        ):
+            QMessageBox.warning(
+                self,
+                "Pose Class",
+                f"'{self.current_class}' is a pose class — only the Keypoint "
+                "tool can annotate it.",
+            )
+            sender.setChecked(False)
+            return
+
         # The keypoint tool needs a pose schema on the current class (#35). Only
         # gate activation — unchecking must always fall through to deactivate, or
         # button state and current_tool would drift on a schemaless class.

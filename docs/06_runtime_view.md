@@ -521,6 +521,32 @@ User clicks "Open" or Ctrl+O
     └─> Return
 ```
 
+## Unsaved-Project Recovery (issue #41, ADR-032)
+
+Before a project has ever been saved, every mutation still calls `auto_save()`. With no
+`current_project_file`, `ProjectController.auto_save()` writes a **silent** snapshot
+(`build_project_data()` → atomic temp-file + `os.replace`) to
+`AppDataLocation/recovery/unsaved.iap.recovery`, remembering its path in QSettings
+(`recovery/pending_path`). A trivially empty session writes nothing.
+
+On the next launch, `main()` calls `ProjectController.offer_recovery()` after the window
+is shown:
+
+```
+main() → window.show() → offer_recovery()
+    │
+    ├─ pending_recovery() finds a snapshot?
+    │     ├─ No  → return
+    │     └─ Yes → "Restore unsaved work from <mtime>?"
+    │                ├─ No  → clear_recovery()
+    │                └─ Yes → is_loading_project = True → load_project_data(snapshot)
+    │                          → current_project_file left UNSET (user still saves)
+    │                          → clear_recovery() on success
+```
+
+A real save (or New Project) calls `clear_recovery()`, so a stale snapshot is never
+offered once the project is disk-backed.
+
 ## Multi-dimensional Image Loading
 
 ```

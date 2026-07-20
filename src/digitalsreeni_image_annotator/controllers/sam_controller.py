@@ -172,15 +172,36 @@ class SAMController(QObject):
         # Route through the unified tool choke-point so SAM-box is mutually
         # exclusive with the manual tools and with SAM-points (F).
         if self.mw.sam_box_button.isChecked():
+            if self._pose_class_blocks_tool(self.mw.sam_box_button):
+                return
             self.mw.activate_tool("sam_box")
         else:
             self.mw.activate_tool(None)
 
     def toggle_sam_points(self):
         if self.mw.sam_points_button.isChecked():
+            if self._pose_class_blocks_tool(self.mw.sam_points_button):
+                return
             self.mw.activate_tool("sam_points")
         else:
             self.mw.activate_tool(None)
+
+    def _pose_class_blocks_tool(self, button):
+        """A pose class admits only the keypoint tool; refuse SAM on it (#44).
+
+        Unchecks the button and returns True when blocked, mirroring the
+        manual-tool guard in ImageAnnotator.toggle_tool.
+        """
+        if self.mw.current_class in self.mw.keypoint_schemas:
+            QMessageBox.warning(
+                self.mw,
+                "Pose Class",
+                f"'{self.mw.current_class}' is a pose class — only the "
+                "Keypoint tool can annotate it.",
+            )
+            button.setChecked(False)
+            return True
+        return False
 
     def change_sam_model(self, model_name):
         try:

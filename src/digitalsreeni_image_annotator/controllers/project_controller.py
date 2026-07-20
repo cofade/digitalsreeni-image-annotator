@@ -15,13 +15,15 @@ import json
 import os
 import shutil
 from datetime import datetime
+from pathlib import PurePath
 
 from PyQt6.QtCore import QObject
 from PyQt6.QtGui import QColor
 from PyQt6.QtWidgets import QFileDialog, QInputDialog, QMessageBox
 
-from ..core import image_utils
+from ..core import image_utils, recovery
 from ..core.keypoint_schema import sanitize_schema as _sanitize_keypoint_schema
+from ..core.project_schema import validate_project_data
 
 from ..core.logging_config import get_logger
 
@@ -124,6 +126,12 @@ class ProjectController(QObject):
                 with open(project_file, "r", encoding='utf-8') as f:
                     project_data = json.load(f)
 
+                problems = validate_project_data(project_data)
+                if problems:
+                    raise ValueError(
+                        "This project file is not valid:\n- " + "\n- ".join(problems)
+                    )
+
                 self.mw.clear_all(show_messages=False)
                 self.mw.current_project_file = project_file
                 self.mw.current_project_dir = os.path.dirname(project_file)
@@ -197,11 +205,9 @@ class ProjectController(QObject):
 
         missing_images = []
         for image_info in project_data["images"]:
-            image_path = os.path.join(
-                self.mw.current_project_dir, "images", image_info["file_name"]
-            )
+            image_path = self.resolve_image_path(image_info["file_name"], project_data)
 
-            if not os.path.exists(image_path):
+            if image_path is None:
                 missing_images.append(image_info["file_name"])
                 continue
 
@@ -250,6 +256,36 @@ class ProjectController(QObject):
         if self.mw.class_list.count() > 0:
             self.mw.class_list.setCurrentRow(0)
             self.mw.on_class_selected()
+
+    def resolve_image_path(self, file_name, project_data):
+        """Resolve a stored image reference to an existing absolute path (#42).
+
+        Tries, in order, the first that exists on disk:
+          1. the project-relative path (portable across machines/OSes);
+          2. the stored absolute path (covers images referenced outside the
+             project's ``images/`` dir — previously dead data on load);
+          3. the historical ``<project_dir>/images/<file_name>`` convention
+             (so v1 projects with neither key resolve exactly as before).
+        Returns None when none exist — the caller reports it as missing.
+        """
+        project_dir = getattr(self.mw, "current_project_dir", None)
+
+        rel = (project_data.get("image_paths_rel") or {}).get(file_name)
+        if rel and project_dir:
+            candidate = os.path.normpath(os.path.join(project_dir, rel))
+            if os.path.exists(candidate):
+                return candidate
+
+        abs_path = (project_data.get("image_paths") or {}).get(file_name)
+        if abs_path and os.path.exists(abs_path):
+            return abs_path
+
+        if project_dir:
+            candidate = os.path.join(project_dir, "images", file_name)
+            if os.path.exists(candidate):
+                return candidate
+
+        return None
 
     def handle_missing_images(self, missing_images):
         message = "The following images have annotations but were not found in the project directory:\n\n"
@@ -392,55 +428,14 @@ class ProjectController(QObject):
 
         self.update_window_title()
 
-    def save_project(self, show_message=True):
-        if not hasattr(self.mw, "current_project_file") or not self.mw.current_project_file:
-            self.mw.current_project_file, _ = QFileDialog.getSaveFileName(
-                self.mw, "Save Project", "", "Image Annotator Project (*.iap)"
-            )
-            if not self.mw.current_project_file:
-                return
+    def build_project_data(self):
+        """Assemble the full project dict for serialization.
 
-        self.mw.current_project_dir = os.path.dirname(self.mw.current_project_file)
-
-        images_dir = os.path.join(self.mw.current_project_dir, "images")
-        os.makedirs(images_dir, exist_ok=True)
-
-        images_to_copy = []
-        for file_name, src_path in self.mw.image_paths.items():
-            dst_path = os.path.join(images_dir, file_name)
-            if os.path.abspath(src_path) != os.path.abspath(dst_path):
-                if not os.path.exists(dst_path):
-                    images_to_copy.append((file_name, src_path, dst_path))
-
-        if images_to_copy:
-            reply = QMessageBox.question(
-                self.mw,
-                "Image Directory Structure",
-                f"The project structure requires all images to be in an 'images' subdirectory. "
-                f"{len(images_to_copy)} images need to be copied to the correct location. "
-                f"Do you want to copy these images?",
-                QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
-                QMessageBox.StandardButton.Yes,
-            )
-
-            if reply == QMessageBox.StandardButton.Yes:
-                for file_name, src_path, dst_path in images_to_copy:
-                    try:
-                        shutil.copy2(src_path, dst_path)
-                        self.mw.image_paths[file_name] = dst_path
-                    except Exception as e:
-                        QMessageBox.warning(
-                            self.mw, "Copy Failed", f"Failed to copy {file_name}: {str(e)}"
-                        )
-                        return
-            else:
-                QMessageBox.warning(
-                    self.mw,
-                    "Save Cancelled",
-                    "Project cannot be saved without the correct directory structure.",
-                )
-                return
-
+        Pure data-building only: no dialogs, no file I/O, no image copying — so
+        it can be reused by both save_project() and the silent unsaved-project
+        recovery writer (issue #41). For a saved project the output matches the
+        previous inline block, plus the portable ``image_paths_rel`` key (#42).
+        """
         images_data = []
         for image_info in self.mw.all_images:
             file_name = image_info["file_name"]
@@ -506,12 +501,84 @@ class ProjectController(QObject):
             "last_modified": datetime.now().isoformat(),
         }
 
+        # Portable, project-relative image paths alongside the absolutes (#42).
+        # Only when a project dir exists — recovery snapshots for an unsaved
+        # project have none and rely on the absolute paths (restore is
+        # same-machine). The absolute entries stay so older app versions still
+        # open the file; resolve_image_path() prefers the relative ones on load.
+        project_dir = getattr(self.mw, "current_project_dir", None)
+        if project_dir:
+            rel = {}
+            for file_name, abs_path in project_data["image_paths"].items():
+                try:
+                    rel[file_name] = PurePath(
+                        os.path.relpath(abs_path, project_dir)
+                    ).as_posix()
+                except ValueError:
+                    # Different drive (Windows): no relative path exists; the
+                    # absolute entry remains the fallback.
+                    pass
+            project_data["image_paths_rel"] = rel
+
         dino_cfg = {
             "phrases": self.mw.dino_phrase_panel.get_all_phrases(),
             "thresholds": self.mw.dino_class_table.get_thresholds_dict(),
         }
         if dino_cfg["phrases"] or dino_cfg["thresholds"]:
             project_data["dino_config"] = dino_cfg
+
+        return project_data
+
+    def save_project(self, show_message=True):
+        if not hasattr(self.mw, "current_project_file") or not self.mw.current_project_file:
+            self.mw.current_project_file, _ = QFileDialog.getSaveFileName(
+                self.mw, "Save Project", "", "Image Annotator Project (*.iap)"
+            )
+            if not self.mw.current_project_file:
+                return
+
+        self.mw.current_project_dir = os.path.dirname(self.mw.current_project_file)
+
+        images_dir = os.path.join(self.mw.current_project_dir, "images")
+        os.makedirs(images_dir, exist_ok=True)
+
+        images_to_copy = []
+        for file_name, src_path in self.mw.image_paths.items():
+            dst_path = os.path.join(images_dir, file_name)
+            if os.path.abspath(src_path) != os.path.abspath(dst_path):
+                if not os.path.exists(dst_path):
+                    images_to_copy.append((file_name, src_path, dst_path))
+
+        if images_to_copy:
+            reply = QMessageBox.question(
+                self.mw,
+                "Image Directory Structure",
+                f"The project structure requires all images to be in an 'images' subdirectory. "
+                f"{len(images_to_copy)} images need to be copied to the correct location. "
+                f"Do you want to copy these images?",
+                QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
+                QMessageBox.StandardButton.Yes,
+            )
+
+            if reply == QMessageBox.StandardButton.Yes:
+                for file_name, src_path, dst_path in images_to_copy:
+                    try:
+                        shutil.copy2(src_path, dst_path)
+                        self.mw.image_paths[file_name] = dst_path
+                    except Exception as e:
+                        QMessageBox.warning(
+                            self.mw, "Copy Failed", f"Failed to copy {file_name}: {str(e)}"
+                        )
+                        return
+            else:
+                QMessageBox.warning(
+                    self.mw,
+                    "Save Cancelled",
+                    "Project cannot be saved without the correct directory structure.",
+                )
+                return
+
+        project_data = self.build_project_data()
 
         with open(self.mw.current_project_file, "w", encoding='utf-8') as f:
             json.dump(image_utils.convert_to_serializable(project_data), f, indent=2)
@@ -520,6 +587,11 @@ class ProjectController(QObject):
             self.mw.show_info(
                 "Project Saved", f"Project saved to {self.mw.current_project_file}"
             )
+
+        # The project now has a real `.iap`; drop any unsaved-project recovery
+        # snapshot so a stale one is never offered on next launch (issue #41).
+        # Covers new_project() too, which saves immediately after creation.
+        recovery.clear_recovery()
 
         self.update_window_title()
 
@@ -553,19 +625,88 @@ class ProjectController(QObject):
         if self.mw.is_loading_project:
             return
 
-        if not hasattr(self.mw, "current_project_file"):
-            reply = QMessageBox.question(
-                self.mw,
-                "No Project",
-                "You need to save the project before auto-saving. Would you like to save now?",
-                QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
-                QMessageBox.StandardButton.Yes,
-            )
-            if reply == QMessageBox.StandardButton.Yes:
-                self.save_project()
-            else:
+        if not getattr(self.mw, "current_project_file", None):
+            # No project file yet. NEVER pop a dialog here — auto_save fires from
+            # deep inside mutation handlers, and a modal there re-enters the event
+            # loop mid-edit. Instead write a silent recovery snapshot the app
+            # offers to restore on next launch (issue #41). Skip a trivially empty
+            # session so a fresh launch never creates a recovery file.
+            if self._project_is_trivially_empty():
                 return
+            try:
+                recovery.write_recovery(self.build_project_data())
+            except Exception:
+                logger.exception("Failed to write unsaved-project recovery snapshot.")
+            return
 
-        if hasattr(self.mw, "current_project_file"):
-            self.save_project(show_message=False)
-            logger.info("Project auto-saved.")
+        self.save_project(show_message=False)
+        logger.info("Project auto-saved.")
+
+    def _project_is_trivially_empty(self):
+        """True when nothing worth recovering has been done yet (#41)."""
+        return (
+            not self.mw.all_images
+            and not self.mw.image_label.class_colors
+            and not any(self.mw.all_annotations.values())
+            and not self.mw.dino_phrase_panel.get_all_phrases()
+            and not self.mw.dino_class_table.get_thresholds_dict()
+        )
+
+    def offer_recovery(self, settings=None):
+        """On launch, offer to restore an unsaved-project recovery snapshot (#41).
+
+        Fired from ``main()`` after the window is shown — never from the
+        constructor, so tests that build ``ImageAnnotator()`` don't trigger it.
+        On accept, the snapshot loads through the normal ``load_project_data``
+        path but ``current_project_file`` is left unset, so the user still does a
+        first real save (and continued edits keep writing fresh snapshots).
+        """
+        path = recovery.pending_recovery(settings)
+        if not path:
+            return
+        try:
+            mtime = datetime.fromtimestamp(os.path.getmtime(path)).strftime(
+                "%Y-%m-%d %H:%M:%S"
+            )
+        except OSError:
+            mtime = "an earlier session"
+        reply = QMessageBox.question(
+            self.mw,
+            "Restore Unsaved Work",
+            f"An unsaved project from a previous session was found "
+            f"(last modified {mtime}). Restore it?",
+            QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
+            QMessageBox.StandardButton.Yes,
+        )
+        if reply != QMessageBox.StandardButton.Yes:
+            recovery.clear_recovery(settings)
+            return
+
+        try:
+            self.mw.is_loading_project = True
+            with open(path, "r", encoding="utf-8") as f:
+                project_data = json.load(f)
+            problems = validate_project_data(project_data)
+            if problems:
+                raise ValueError("\n".join(problems))
+            self.mw.clear_all(show_messages=False)
+            self.load_project_data(project_data)
+        except Exception:
+            # A decode/validation failure (or a partial load) means the snapshot
+            # is unusable — drop it so it isn't re-offered on every launch, and
+            # reset to a clean empty state rather than a half-loaded one.
+            logger.exception("Failed to restore recovery snapshot.")
+            self.mw.clear_all(show_messages=False)
+            recovery.clear_recovery(settings)
+            QMessageBox.warning(
+                self.mw,
+                "Restore Failed",
+                "The unsaved-project recovery file could not be restored.",
+            )
+        finally:
+            self.mw.is_loading_project = False
+
+        # On success the snapshot is deliberately KEPT: the restored project is
+        # still unsaved (current_project_file is unset), so the first real save
+        # retires it (save_project -> clear_recovery). Keeping it until then means
+        # a re-crash before that save can still re-offer the recovered work.

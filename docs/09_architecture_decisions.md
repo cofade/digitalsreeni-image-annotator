@@ -40,7 +40,7 @@ documented against, capped below the next major. The SAM fine-tuning loop
 
 ## ADR-003: Store Absolute Paths in Project Files
 
-**Status**: Accepted
+**Status**: Superseded by ADR-033 (dual absolute + relative paths for portability, #42)
 
 **Context**: Project files need to reference image locations
 
@@ -1353,6 +1353,17 @@ visibility, and (later PRs) COCO/YOLO-pose export-import + YOLO-pose training. T
   annotation can't become a pose instance and vice versa; a keypoint instance only
   moves to a pose class with an identical `names` list). The schema-definition dialog
   locks the keypoint count K once instances exist (only K can corrupt them).
+  **A class is pose OR regular, not both, enforced at the UI (#44):** defining a schema
+  on a class that already holds plain annotations is blocked
+  (`ClassController.define_keypoint_schema`, only for a *new* conversion — editing an
+  existing/legacy-mixed schema stays allowed so names/skeleton can still be fixed);
+  activating a shape tool (`toggle_tool`) or a SAM tool (`SAMController.toggle_sam_*`)
+  while a pose class is selected is refused (button unchecked); selecting a pose class
+  while a shape/SAM tool is active deactivates it (`on_class_selected`); and DINO
+  detection skips pose classes at the one config builder both paths share
+  (`_build_dino_class_configs`). Legacy-mixed classes from older projects still load,
+  render, and save — the guards only stop *new* mixing; `_pose_export_check` remains the
+  backstop for imported/legacy data.
 - **Area = bbox area (not 0).** `calculate_area` returns the stored box's `w*h` for a
   keypoint instance — deliberate, so sort-by-area behaves consistently with imported
   bbox annotations rather than dumping all poses to the end.
@@ -1576,11 +1587,80 @@ both reset the model selector.
 
 ---
 
+## ADR-032: Silent Recovery Autosave for Unsaved Projects via a QSettings-Known Location
+
+**Status**: Accepted (issue #41)
+
+**Context**: Autosave is event-driven — every mutation calls `auto_save()`. Before a
+project has ever been saved there is no `.iap` to write to, so the old code popped a
+modal "save now?" from inside the mutation handler. Declining it (or a crash) lost all
+work, and a modal raised from deep in a mutation re-enters the event loop mid-edit.
+Tracked as the "Autosave Doesn't Ask for File Location" debt. Related: ADR-005 (load
+guard), ADR-020 (QSettings precedent).
+
+**Decision**: With no `current_project_file`, `auto_save()` writes a **silent** recovery
+snapshot instead of prompting. The snapshot is exactly a `build_project_data()` dict — a
+new pure serializer factored out of `save_project()` (no dialogs, no file I/O, no image
+copying) — serialized like a real `.iap`, written atomically (temp file + `os.replace`)
+to `QStandardPaths.AppDataLocation/recovery/unsaved.iap.recovery`, its path stored under
+the QSettings key `recovery/pending_path` (same org/app as `app_settings`). A trivially
+empty session writes nothing. On the next launch, `main()` — after `window.show()`, never
+the constructor, so tests that build `ImageAnnotator()` don't trigger it — calls
+`ProjectController.offer_recovery()`, which offers to restore it. A real save (or New
+Project) calls `clear_recovery()`.
+
+**Consequences**:
+- ✅ Work is never silently lost before the first save; no modal ever fires from `auto_save`.
+- ✅ Restore reuses `load_project_data` unchanged (the snapshot has the `.iap` shape).
+- ✅ **Failure-path policy:** a *successful* restore **keeps** the snapshot (the project is
+  still unsaved) until the first real save retires it via `clear_recovery`, so a re-crash
+  before that save can still re-offer the work; a *corrupt or partially-loaded* snapshot is
+  **dropped** on the failed restore (with the UI reset to empty) so it can't nag on every
+  launch. A user who restores and then quits cleanly without editing is re-offered it next
+  launch — intentional, since the work is genuinely still unsaved.
+- ⚠️ The recovery pointer lives in per-user QSettings, so it is machine-local — acceptable,
+  since a restore is always on the same machine that crashed.
+
+---
+
+## ADR-033: Dual Absolute + Relative Image Paths in `.iap`; Relative-First Resolution; Load-Time Validation
+
+**Status**: Accepted (issue #42; supersedes ADR-003)
+
+**Context**: `.iap` stored only absolute image paths, so a project folder couldn't be
+moved or shared (ADR-003). In practice the loader already rebuilt paths from
+`<project_dir>/images/<file_name>` and ignored the stored absolutes — they were dead data
+on load and merely leaked the author's machine paths.
+
+**Decision**: `build_project_data()` writes a portable `image_paths_rel` map (POSIX
+separators via `PurePath(os.path.relpath(...)).as_posix()`; a cross-drive `ValueError`
+just omits that entry) **alongside** the unchanged absolute `image_paths` (dual storage,
+so older app versions still open new files). `image_paths_rel` is written only when a
+project dir exists — recovery snapshots (ADR-032) for an unsaved project have none and
+rely on the absolutes. On load, `ProjectController.resolve_image_path()` returns the first
+that exists: relative → absolute (revives the old dead data, fixing images referenced
+outside `images/`) → the historical `images/` convention → missing. A new pure
+`core/project_schema.py::validate_project_data` runs right after `json.load` in
+`open_specific_project`, raising `ValueError` (surfaced by the existing backup-restore +
+error dialog) on a structurally broken file; it is deliberately lenient about unknown keys
+(the format keeps growing — keypoint schemas, DINO config, relative paths).
+
+**Consequences**:
+- ✅ A project folder (`.iap` + `images/`) is portable across machines/OSes.
+- ✅ v1 projects (no `image_paths_rel`) resolve exactly as before via the `images/` fallback.
+- ✅ A broken `.iap` fails with an actionable message instead of a random traceback.
+- ⚠️ Dual storage means the absolute paths still appear in the file; they are kept only for
+  backward-compatible opening, and relative paths win on load.
+
+---
+
 ## Decisions Under Consideration
 
 ### Consider Relative Paths with Image Copying
 
-**Status**: Under Consideration
+**Status**: Resolved by ADR-033 (#42) — implemented as dual absolute+relative paths
+*without* forced image copying (the copy-into-`images/` prompt already existed), so the
+"disk duplication" con below does not apply.
 
 **Proposal**: Copy images to project folder, store relative paths
 

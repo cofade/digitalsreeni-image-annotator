@@ -687,6 +687,12 @@ class ImageController(QObject):
                             self.mw.current_slice = self.mw.slices[0][0]
                             self.update_slice_list()
                             self.activate_slice(self.mw.current_slice)
+                    elif image_info.get("is_video"):
+                        # Video whose frames aren't in image_slices yet (e.g. a
+                        # future path that dropped them): rebuild via load_video,
+                        # never load_multi_slice_image (which handles neither
+                        # branch for a video and would leave a stale display).
+                        self.load_video(image_path)
                     else:
                         self.load_multi_slice_image(
                             image_path,

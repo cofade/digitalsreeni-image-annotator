@@ -365,7 +365,7 @@ class ProjectController(QObject):
             self.mw,
             "Select Missing Images",
             "",
-            "Image Files (*.png *.jpg *.bmp *.tif *.tiff *.czi)",
+            "Image Files (*.png *.jpg *.bmp *.tif *.tiff *.czi *.mp4 *.avi *.mov)",
         )
         if files:
             images_loaded = 0
@@ -493,7 +493,7 @@ class ProjectController(QObject):
                 # LazySliceList persists names only, no pixels (issue #45).
                 if image_info.get("is_video"):
                     image_data["is_video"] = True
-                    image_data["video_metadata"] = image_info["video_metadata"]
+                    image_data["video_metadata"] = image_info.get("video_metadata")
             else:
                 image_data["annotations"] = {}
                 for class_name, annotations in self.mw.all_annotations.get(

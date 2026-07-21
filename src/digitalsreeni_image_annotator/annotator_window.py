@@ -878,13 +878,21 @@ class ImageAnnotator(QMainWindow):
         )
 
     def show_image_context_menu(self, position):
+        from .core.video_handler import is_video
+
         menu = QMenu()
         current_item = self.image_list.itemAt(position)
         if current_item:
             file_name = current_item.text()
             delete_action = menu.addAction("Remove Image")
 
-            if not self.is_multi_dimensional(file_name):
+            # YOLO single-image predict is for plain 2D images only — not
+            # multi-dim stacks and NOT videos (predicting a video would run
+            # Ultralytics over the whole clip on the GUI thread, #47).
+            can_predict = not self.is_multi_dimensional(file_name) and not is_video(
+                file_name
+            )
+            if can_predict:
                 predict_action = menu.addAction("Predict using YOLO")
 
             if self.is_multi_dimensional(file_name):
@@ -898,7 +906,7 @@ class ImageAnnotator(QMainWindow):
 
             if action == delete_action:
                 self.remove_image()
-            elif not self.is_multi_dimensional(file_name) and action == predict_action:
+            elif can_predict and action == predict_action:
                 self.predict_single_image(file_name)
             elif (
                 self.is_multi_dimensional(file_name)

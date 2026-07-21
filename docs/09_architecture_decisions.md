@@ -1840,8 +1840,13 @@ lazy-slice machinery** rather than a parallel frame cache (the #45/#47 reconcili
   (`switch_slice`/`activate_slice` `.get()`+prefetch, `switch_image` `slices[0]`, `.names`,
   `__iter__`, exporters, DINO batch, save-touches-no-pixels, delete→`release_slices`)
   works for video **unchanged** — no parallel resolver, no `None`-placeholder path.
-- ✅ Frames decode lazily and are bounded by the shared LRU; opening a video decodes
-  nothing beyond frame 0; `save_project` decodes zero frames (test-asserted).
+- ✅ Frames decode lazily and are bounded by the shared LRU for interactive use
+  (navigation, display); opening a video decodes nothing beyond frame 0;
+  `save_project` decodes zero frames (test-asserted).
+- ⚠️ One batch path is NOT LRU-bounded: `DINOController._collect_dino_batch_work_items`
+  builds a flat `[(name, QImage), …]` list, so running DINO batch over a long video
+  materialises all its frames at once (pre-existing for stacks; more costly for video).
+  Streaming that collector frame-by-frame is a documented follow-up.
 - ✅ Annotation storage, per-frame independence, navigation, save/load and export path
   matching all come for free from the slice machinery.
 - ⚠️ `cv2.VideoCapture` seeking is per-codec-variable; heavy random scrubbing re-seeks.

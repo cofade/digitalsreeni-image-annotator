@@ -102,6 +102,42 @@ def test_base_name_collision_refused(
     assert not any(i["file_name"] == "clip.png" for i in window.all_images)
 
 
+def test_switch_between_video_and_image_reuses_lazy_slices(
+    window, make_test_video, tmp_path, no_native_dialogs
+):
+    """switch_image between a video and a plain image and back exercises the
+    `base in image_slices` reuse branch the #45/#47 reconciliation rests on:
+    the video's LazySliceList is restored intact (no rebuild, no stale
+    display)."""
+    video = make_test_video(tmp_path, name="clip.avi", frames=8)
+    png = tmp_path / "plain.png"
+    plain = QImage(6, 5, QImage.Format.Format_RGB888)
+    plain.fill(Qt.GlobalColor.darkGreen)
+    plain.save(str(png))
+
+    window.image_controller.add_images_to_list([video, str(png)])
+    lazy = window.image_slices["clip"]
+
+    def item(name):
+        its = window.image_list.findItems(name, Qt.MatchFlag.MatchExactly)
+        assert its, name
+        return its[0]
+
+    # Switch to the plain image: slice list cleared, a single 2D image shown.
+    window.image_controller.switch_image(item("plain.png"))
+    assert window.current_slice is None
+    assert window.slice_list.count() == 0
+    assert isinstance(window.current_image, QImage)
+
+    # Switch back to the video: the SAME LazySliceList is restored via the
+    # reuse branch (not rebuilt), frame 0 current, slice list repopulated.
+    window.image_controller.switch_image(item("clip.avi"))
+    assert window.image_slices["clip"] is lazy
+    assert window.slices is lazy
+    assert window.current_slice == frame_key("clip", 0)
+    assert window.slice_list.count() == len(lazy)
+
+
 def test_video_roundtrip_save_reload(
     window, make_test_video, tmp_path, no_native_dialogs
 ):

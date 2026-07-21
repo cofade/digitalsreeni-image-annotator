@@ -32,7 +32,7 @@ Weights
 -------
 The real ``sam3.pt`` checkpoint is ~3.45 GB and gated on Hugging Face.
 We never auto-download it (mirrors DINO's gated-download UX): the
-controller calls :meth:`_weights_available` to decide between "Ready"
+controller calls :meth:`weights_available` to decide between "Ready"
 and a "request access + place sam3.pt" status. ``ensure_loaded`` only
 flips :attr:`loaded` / :attr:`_predictor` AFTER a successful construct —
 never a half-loaded state.

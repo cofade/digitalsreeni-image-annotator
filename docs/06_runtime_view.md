@@ -571,7 +571,7 @@ offered once the project is disk-backed.
 
 ## Video Loading (issue #47, ADR-037)
 
-1. User adds `clip.mp4` (or `.avi`/`.mov`) via Add New Images / Open Images.
+1. User adds `clip.mp4` (or `.avi`/`.mov`) via Add Images / Videos / Open Images.
 2. `add_images_to_list` detects the video extension (`is_video`) and calls
    `ImageController.load_video(path)`:
    - `VideoHandler(path)` opens the capture and reads metadata once

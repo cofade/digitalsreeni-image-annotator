@@ -15,8 +15,10 @@ from digitalsreeni_image_annotator.core.slice_cache import (
     get_shared_lru,
 )
 from digitalsreeni_image_annotator.core.video_handler import (
+    VIDEO_EXTS,
     VideoHandler,
     VideoSliceProvider,
+    file_dialog_filter,
     frame_key,
     is_video,
     parse_frame_index,
@@ -28,6 +30,18 @@ from digitalsreeni_image_annotator.core.video_handler import (
 def test_frame_key_zero_padded():
     assert frame_key("v", 42) == "v_F00042"
     assert frame_key("clip", 0) == "clip_F00000"
+
+
+def test_file_dialog_filter_covers_every_video_ext():
+    """The open-dialog filter must offer every registered video container, so
+    the app can't silently accept a format the file picker never shows (the
+    #47 gap). Guards the VIDEO_EXTS-derived globs in file_dialog_filter():
+    add an ext to VIDEO_EXTS and this fails until the filter covers it."""
+    filt = file_dialog_filter()
+    for ext in VIDEO_EXTS:
+        assert f"*{ext}" in filt, f"{ext} missing from the open-dialog filter"
+    # ...and it advertises videos, not just images.
+    assert "Videos" in filt
 
 
 def test_parse_frame_index_roundtrip():

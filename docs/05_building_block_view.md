@@ -37,6 +37,8 @@ src/digitalsreeni_image_annotator/
 	│   └── torch_utils.py             # Shared torch device resolution + CPU fallback (#57)
 	├── widgets/
 	│   ├── image_label.py             # ImageLabel - canvas widget; dispatcher
+	│   ├── canvas_renderer.py         # CanvasRenderer - painting/overlays (ADR-034)
+	│   ├── edit_gestures.py           # EditGestures + pure fns - #40/#35 handles (ADR-034)
 	│   ├── canvas_context.py          # CanvasContext - narrow read view (ADR-018)
 	│   └── tools/                     # Per-tool handlers (ADR-019)
 	│       ├── base.py                # ToolHandler base
@@ -84,10 +86,16 @@ current_slice: str                  # Currently displayed slice
 ### ImageLabel (widgets/image_label.py)
 
 **Responsibility**: Canvas widget — image display, navigation
-(zoom/pan), committed-annotation rendering, SAM bbox/points overlays,
-DINO temp-annotation rendering, polygon edit mode (modal). Per-tool
-mouse/key handling lives in `widgets/tools/*` (see ADR-019); ImageLabel
-dispatches events to the active handler.
+(zoom/pan), event dispatch, and state ownership. Committed-annotation
+rendering, SAM/DINO overlays and the selection overlay are delegated to
+`CanvasRenderer` (`widgets/canvas_renderer.py`); the direct-manipulation
+edit-gesture state machine (#40 bbox/segmentation handles, #35 keypoint
+edits) is delegated to `EditGestures` + pure functions
+(`widgets/edit_gestures.py`) — both via thin one-line delegates that keep
+every existing `ImageLabel` name working (ADR-034). Per-tool mouse/key
+handling lives in `widgets/tools/*` (see ADR-019); ImageLabel dispatches
+events to the active handler. `paintEvent` orchestration and polygon
+edit mode (modal) stay on ImageLabel.
 
 **Key Attributes**:
 ```python

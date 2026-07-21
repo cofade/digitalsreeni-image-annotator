@@ -24,7 +24,7 @@ python -m src.digitalsreeni_image_annotator.main
 
 Python 3.10+ | PyQt6 6.7+ | Ultralytics >=8.3.27,<9 (SAM 2) | NumPy | OpenCV | Shapely
 
-**Test suite**: `tests/` (pytest + pytest-qt). 650 tests pass on PyQt6 (3 skipped).
+**Test suite**: `tests/` (pytest + pytest-qt). 688 tests pass on PyQt6 (3 skipped).
 
 ## Documentation
 
@@ -54,6 +54,8 @@ src/digitalsreeni_image_annotator/
 │                                 #   class) + io_controller
 ├── widgets/
 │   ├── image_label.py            # ImageLabel canvas widget (dispatcher)
+│   ├── canvas_renderer.py        # CanvasRenderer painting/overlays (ADR-034)
+│   ├── edit_gestures.py          # EditGestures + pure fns: #40/#35 handles (ADR-034)
 │   ├── canvas_context.py         # CanvasContext read accessor (ADR-018)
 │   └── tools/                    # Per-tool handlers (ADR-019): rectangle,
 │                                 #   polygon, paint, eraser
@@ -72,7 +74,9 @@ src/digitalsreeni_image_annotator/
 | Class | File | Responsibility |
 |-------|------|----------------|
 | `ImageAnnotator` | annotator_window.py | Thin orchestrator — holds controllers, wires signals, delegates almost everything |
-| `ImageLabel` | widgets/image_label.py | Canvas display, zoom/pan, event dispatch to tool handlers |
+| `ImageLabel` | widgets/image_label.py | Canvas display, zoom/pan, event dispatch to tool handlers; state owner (ADR-034) |
+| `CanvasRenderer` | widgets/canvas_renderer.py | All canvas painting/overlays, delegated from ImageLabel.paintEvent (ADR-034) |
+| `EditGestures` (+ pure fns) | widgets/edit_gestures.py | #40/#35 direct-manipulation edit-gesture state machine; bbox_edit/editing_keypoint stay on the label (ADR-034) |
 | `CanvasContext` | widgets/canvas_context.py | Narrow read view of main-window state for ImageLabel (ADR-018) |
 | `ToolHandler` (+ 4 subclasses) | widgets/tools/ | Per-tool mouse/key handling (rectangle, polygon, paint, eraser) (ADR-019) |
 | `ProjectController` | controllers/project_controller.py | `.iap` save/load, auto-save, `is_loading_project` guard |

@@ -403,6 +403,31 @@ class ImageAnnotator(QMainWindow):
     def switch_image(self, item):
         return self.image_controller.switch_image(item)
 
+    def on_timeline_frame_selected(self, idx):
+        """Route a video-timeline scrub to the matching frame (issue #48).
+
+        Slice-list rows are in frame order, so ``idx`` maps 1:1 to a row. Go
+        through ``switch_slice`` (never set ``current_image`` directly) so the
+        unsaved-change check, annotation save, edit-mode exit and DINO temp
+        re-sync all run.
+        """
+        if 0 <= idx < self.slice_list.count():
+            self.switch_slice(self.slice_list.item(idx))
+
+    def update_video_timeline(self):
+        return self.image_controller.update_video_timeline()
+
+    def _current_image_is_video(self):
+        """True if the currently-selected image is a video (issue #48)."""
+        item = self.image_list.currentItem()
+        if item is None:
+            return False
+        info = next(
+            (img for img in self.all_images if img["file_name"] == item.text()),
+            None,
+        )
+        return bool(info and info.get("is_video"))
+
     def adjust_zoom_to_fit(self):
         if not self.current_image:
             return
@@ -502,6 +527,22 @@ class ImageAnnotator(QMainWindow):
             else:
                 # Pass the event to the parent for default handling
                 super().keyPressEvent(event)
+        elif event.key() == Qt.Key.Key_Home or event.key() == Qt.Key.Key_End:
+            # First / last frame jump for videos (issue #48). Gated on the
+            # active image being a video AND focus on the slice list or the
+            # canvas — QLineEdit/QTextEdit are already spared by the early
+            # return at the top, so this can't steal Home/End from text cursors.
+            # Routes through switch_slice (never sets current_image directly).
+            if self._current_image_is_video() and (
+                self.slice_list.hasFocus() or self.image_label.hasFocus()
+            ):
+                count = self.slice_list.count()
+                if count > 0:
+                    row = 0 if event.key() == Qt.Key.Key_Home else count - 1
+                    self.slice_list.setCurrentRow(row)
+                    self.switch_slice(self.slice_list.item(row))
+            else:
+                super().keyPressEvent(event)
         elif event.key() == Qt.Key.Key_Return or event.key() == Qt.Key.Key_Enter:
             # Handle accepting visible temporary classes
             if self.has_visible_temp_classes():
@@ -532,6 +573,9 @@ class ImageAnnotator(QMainWindow):
 
     def export_annotations(self):
         return io_controller.export_annotations(self)
+
+    def export_annotated_frames(self):
+        return io_controller.export_annotated_frames(self)
 
     def save_slices(self, directory):
         return io_controller.save_slices(self, directory)

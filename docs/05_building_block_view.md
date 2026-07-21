@@ -42,6 +42,7 @@ src/digitalsreeni_image_annotator/
 	│   ├── canvas_renderer.py         # CanvasRenderer - painting/overlays (ADR-034)
 	│   ├── edit_gestures.py           # EditGestures + pure fns - #40/#35 handles (ADR-034)
 	│   ├── canvas_context.py          # CanvasContext - narrow read view (ADR-018)
+	│   ├── video_timeline.py          # VideoTimeline scrub bar + frame markers (#48)
 	│   └── tools/                     # Per-tool handlers (ADR-019)
 	│       ├── base.py                # ToolHandler base
 	│       ├── rectangle_tool.py

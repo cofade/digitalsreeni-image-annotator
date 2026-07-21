@@ -32,6 +32,7 @@ from ..core.constants import (
     ANNOT_COL_ID,
 )
 from ..dialogs.dino_phrase_editor import ClassThresholdTable, PhraseEditorPanel
+from ..widgets.video_timeline import VideoTimeline
 
 
 def _section_header(text):
@@ -368,6 +369,13 @@ def build_image_area(window):
     window.scroll_area.setWidget(window.image_label)
 
     window.image_layout.addWidget(window.scroll_area)
+
+    # Video scrub timeline (issue #48) sits BETWEEN the canvas and the zoom
+    # slider; hidden until a video is the active image (update_video_timeline).
+    window.video_timeline = VideoTimeline()
+    window.video_timeline.setVisible(False)
+    window.video_timeline.frameSelected.connect(window.on_timeline_frame_selected)
+    window.image_layout.addWidget(window.video_timeline)
 
     window.zoom_slider = QSlider(Qt.Orientation.Horizontal)
     window.zoom_slider.setMinimum(10)

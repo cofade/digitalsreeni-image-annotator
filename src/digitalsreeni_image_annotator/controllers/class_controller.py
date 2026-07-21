@@ -107,6 +107,13 @@ class ClassController(QObject):
         # keep one of those two routes.
         self.mw.image_controller.apply_image_filter()
 
+        # Repaint the video timeline's annotated-frame marks (issue #48). This
+        # is THE mark-refresh choke point (runs on every annotation mutation AND
+        # at the end of switch_image / switch_slice), so hooking here keeps the
+        # timeline in sync with a single call rather than duplicating it in each
+        # frame-switch path. No-op unless the active image is a video.
+        self.mw.image_controller.update_video_timeline()
+
     def add_class(self, class_name=None, color=None):
         if not self.mw.image_label.check_unsaved_changes():
             return

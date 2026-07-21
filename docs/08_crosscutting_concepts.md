@@ -862,6 +862,30 @@ every slice consumer above works for video unchanged. Practical rules:
 - **Base-name collision** (`video.mp4` vs `video.tif` → same `image_slices` key) is
   refused in `add_images_to_list`.
 
+## Video Timeline — A Pure View (issue #48)
+
+`widgets/video_timeline.py::VideoTimeline` is a scrub slider + annotated-frame
+marker strip + `F i/N • MM:SS / MM:SS` label shown under the canvas for videos
+only. It is a **view**, never a second source of truth for the current frame:
+
+- **All frame changes route through `switch_slice`.** User scrubbing emits
+  `frameSelected(idx)`; the orchestrator's `on_timeline_frame_selected` maps
+  idx→slice-list row and calls `switch_slice` (keeping unsaved-changes checks,
+  annotation save, and the DINO temp re-sync intact). The timeline never writes
+  `current_image`.
+- **No signal feedback loop.** `set_current_frame` (called from `switch_slice`
+  via `update_video_timeline`) wraps `slider.setValue` in an `_updating` guard
+  so the programmatic sync can't re-emit `frameSelected` and re-enter
+  `switch_slice`. `set_video` is guarded the same way, so reconfiguring the
+  timeline on every annotation mutation never spuriously jumps to frame 0.
+- **Marks derive from `all_annotations` keys**, computed by
+  `ImageController.annotated_frame_indices(base)` (prefix `base + "_F"` +
+  `parse_frame_index`, exact) and refreshed at the `update_slice_list_colors`
+  choke point — the same hook the slice list uses — so they stay correct after
+  every save/accept/undo/delete without a frame switch.
+- **Palette-only colours** (`highlight`/`mid`/`text`) so ticks read in both
+  themes; the slider has `NoFocus` so it never swallows arrow-key slice nav.
+
 ## Image List Groups & Status Badges (issue #43)
 
 The image list gained two at-a-glance affordances, both layered on the

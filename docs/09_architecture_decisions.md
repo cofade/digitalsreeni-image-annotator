@@ -1751,6 +1751,57 @@ non-structural overlays on the existing sort/filter machinery:
 
 ---
 
+## ADR-036: Lazy Slice Extraction with a Bounded Shared LRU (Retained Source Array)
+
+**Status**: Accepted (issue #45)
+
+**Context**: Opening a multi-dimensional TIFF/CZI eagerly converted **every** slice to
+an RGB888 `QImage` in `ImageController.create_slices` and held them all for the session
+(`image_slices[base] = [(name, qimage), ...]`). A 5D 10×20×3 stack of 2048² frames is
+~600 slices ≈ 7.5 GB of live QImages, plus a create-time peak of source-array +
+growing-QImages. Annotation storage is keyed by slice *name* and is unaffected — only
+the pixel data needed to become lazy.
+
+**Decision**: Introduce `core/slice_cache.py` and make QImage materialisation lazy behind
+a process-wide bounded LRU, keeping the exact `(name, qimage)` interface every consumer
+uses (**Strategy A** — retain the already-decoded source ndarray, materialise QImages on
+demand):
+- `SliceProvider` retains the `tif.asarray()`/CZI ndarray and precomputes the ordered
+  `names` + `name → full-index` map with the **byte-identical** naming logic of the old
+  `create_slices` (`{base}_{dim}{index+1}`), then `extract(name)` reconstructs one slice
+  through the exact ADR-010 pipeline (`convert_to_8bit_rgb`/`normalize_array`/
+  `array_to_qimage`) — a **fresh** QImage each call (never mutate a cached one; the SAM
+  worker may be reading it, ADR-013).
+- `LazySliceList` is the drop-in for the old tuple list: `get(name)`, `__getitem__`,
+  `__iter__` (one-at-a-time), `__len__`/`__bool__`/`.names`, `prefetch_around(name)`
+  (pins current ±1 for instant Up/Down nav), `release()`. It is stored as BOTH
+  `image_slices[base]` and `mw.slices` (the same object — several paths compare them).
+- A single module-level `SliceLRU` (keyed `(provider_id, name)`, `LRU_CAPACITY = 8`)
+  bounds live QImages across ALL open stacks; `evict_prefix`/`release_slices` drop a
+  stack's entries on delete. Name-only consumers (save, `image_has_annotations`,
+  `update_slice_list`, navigation membership checks) use `slice_names(...)` so they touch
+  **no** pixels; iterating pixel consumers (exporters, SAM-dataset build, DINO batch,
+  `io_controller`) keep working unchanged via `__iter__`.
+
+**Consequences**:
+- ✅ Opening a stack no longer decodes every slice; live QImages are bounded by the LRU;
+  `save_project` materialises zero pixels (test-asserted via an `extract` spy).
+- ✅ Byte-identical slice names + pixels (lazy == eager, regression-tested), so existing
+  `.iap` annotations and exports are unaffected; Up/Down neighbours are prefetched.
+- ✅ `slice_names()`/`release_slices()` also accept a plain `[(name, qimage)]` list, so
+  legacy/test call sites that inject plain lists keep working with no pixel decode.
+- ⚠️ **Strategy A retains the decoded source ndarray per open stack**, so peak RSS is
+  bounded by the LRU *for QImages* but not for the array. Full array-free reading
+  (memmap/zarr per slice; CZI lazy read) is a deliberate follow-up. The dominant
+  all-QImages-in-RAM cost and the create-time peak are eliminated regardless.
+- ⚠️ The LRU keys on `id(provider)`; providers are `release()`d before being replaced
+  or deleted and `clear_all` wipes the cache, so a recycled `id()` cannot alias a stale
+  QImage.
+- Feeds issue #47: video frames reuse the same lazy-slice contract (`None`-payload
+  frames resolved on demand) rather than introducing a parallel cache.
+
+---
+
 ## Decisions Under Consideration
 
 ### Consider Relative Paths with Image Copying

@@ -84,10 +84,16 @@ without a missing-images prompt. v1 projects still resolve via the `images/` con
 
 **Mitigation**:
 - Slice-by-slice loading for multi-dimensional images
+- **Lazy slice QImage materialisation with a bounded LRU (ADR-036, #45)** —
+  `create_slices` no longer builds every slice's `QImage` up front; slice
+  QImages decode on demand and at most `slice_cache.LRU_CAPACITY` (8) are held
+  live process-wide. Removes the dominant all-QImages-in-RAM cost and the
+  create-time peak.
 - Image downsampling for display (future)
-- Lazy loading (future)
 
-**Current Limitation**: All slices loaded into memory
+**Current Limitation**: The decoded source ndarray is still retained per open
+stack (Strategy A). Full array-free reading (memmap/zarr per-slice, or CZI
+lazy read) is a documented follow-up; the live-QImage count is now bounded.
 
 ---
 

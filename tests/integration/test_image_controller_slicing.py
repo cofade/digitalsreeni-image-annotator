@@ -19,8 +19,10 @@ import tifffile
 
 import digitalsreeni_image_annotator.controllers.image_controller as ic
 from digitalsreeni_image_annotator.core import image_utils
+from digitalsreeni_image_annotator.core.slice_cache import get_shared_lru
 
-from PyQt6.QtGui import QImage
+from PyQt6.QtCore import Qt
+from PyQt6.QtGui import QColor, QImage
 
 
 @pytest.fixture
@@ -220,3 +222,165 @@ def test_uint16_normalized_to_uint8():
 
     qimg = image_utils.array_to_qimage(rgb)
     assert qimg.format() == QImage.Format.Format_RGB888
+
+
+# ── lazy slice loading (issue #45) ───────────────────────────────────────────
+
+POLY = {"segmentation": [1.0, 1.0, 10.0, 1.0, 10.0, 8.0], "area": 31.5,
+        "category_id": 1, "category_name": "cell", "number": 1}
+
+
+@pytest.fixture
+def no_native_dialogs(monkeypatch):
+    """Hard safety net: no modal may open in an offscreen run (it hangs)."""
+    from PyQt6.QtWidgets import QFileDialog, QMessageBox
+
+    monkeypatch.setattr(
+        QMessageBox, "question",
+        staticmethod(lambda *a, **k: QMessageBox.StandardButton.Yes),
+    )
+    for m in ("information", "warning", "critical"):
+        monkeypatch.setattr(QMessageBox, m, staticmethod(lambda *a, **k: None))
+    monkeypatch.setattr(QFileDialog, "getOpenFileNames", staticmethod(lambda *a, **k: ([], "")))
+    monkeypatch.setattr(QFileDialog, "getSaveFileName", staticmethod(lambda *a, **k: ("", "")))
+
+
+def _spy_extract(provider):
+    """Count how many times a provider actually decodes a slice."""
+    calls = {"n": 0}
+    original = provider.extract
+
+    def counting(name):
+        calls["n"] += 1
+        return original(name)
+
+    provider.extract = counting
+    return calls
+
+
+def test_create_slices_stores_lazy_list_shared_object(tmp_path, window, fake_dimension_dialog):
+    """mw.slices and mw.image_slices[base] are the SAME LazySliceList object
+    (issue #45 guardrail), and names are byte-identical to the eager output."""
+    path, _ = make_tiff(tmp_path, "stack5d.tif", (2, 3, 2, 16, 12), axes="TZCYX")
+
+    window.image_controller.load_tiff(path)
+
+    lazy = window.image_slices["stack5d"]
+    assert window.slices is lazy  # exact same object, not a copy
+    expected = [
+        f"stack5d_T{t+1}_Z{z+1}_C{c+1}"
+        for t in range(2) for z in range(3) for c in range(2)
+    ]
+    assert lazy.names == expected
+    # First slice is materialised + active after load.
+    assert window.current_slice == "stack5d_T1_Z1_C1"
+    assert isinstance(window.current_image, QImage)
+
+
+def test_switch_to_far_slice_materialises_lazily(tmp_path, window, fake_dimension_dialog):
+    """Switching to a far slice returns its QImage on demand (LRU miss →
+    extract), and only a bounded number of slices are ever held live."""
+    path, _ = make_tiff(tmp_path, "stack5d.tif", (2, 3, 2, 16, 12), axes="TZCYX")
+    window.image_controller.load_tiff(path)
+
+    lazy = window.image_slices["stack5d"]
+    far = lazy.names[-1]
+    items = window.slice_list.findItems(far, Qt.MatchFlag.MatchExactly)
+    assert items
+    window.image_controller.switch_slice(items[0])
+
+    assert window.current_slice == far
+    assert isinstance(window.current_image, QImage)
+    assert window.current_image.width() == 12 and window.current_image.height() == 16
+    # Never more than the shared capacity live across the whole session.
+    assert len(get_shared_lru()) <= get_shared_lru().capacity
+
+
+def test_save_reads_no_slice_pixels(tmp_path, window, fake_dimension_dialog):
+    """build_project_data must persist per-slice annotations WITHOUT decoding
+    a single slice — proven by a zero call-count on provider.extract."""
+    path, _ = make_tiff(tmp_path, "stack5d.tif", (2, 3, 2, 8, 6), axes="TZCYX")
+    window.image_controller.load_tiff(path)
+    window.all_images.append({"file_name": "stack5d.tif", "width": 6, "height": 8,
+                              "id": 1, "is_multi_slice": True})
+
+    lazy = window.image_slices["stack5d"]
+    calls = _spy_extract(lazy.provider)  # spy AFTER load (ignore load-time extracts)
+
+    data = window.project_controller.build_project_data()
+
+    assert calls["n"] == 0
+    stack = next(i for i in data["images"] if i["file_name"] == "stack5d.tif")
+    assert [s["name"] for s in stack["slices"]] == lazy.names
+
+
+def test_far_slice_annotation_survives_save_reload(
+    tmp_path, window, fake_dimension_dialog, no_native_dialogs
+):
+    """Full roundtrip: open a stack, switch to a far slice, annotate it, save,
+    reload — the annotation is preserved under the slice key."""
+    images_dir = tmp_path / "images"
+    images_dir.mkdir()
+    path, _ = make_tiff(images_dir, "stack5d.tif", (2, 3, 2, 8, 6), axes="TZCYX")
+
+    window.current_project_file = str(tmp_path / "proj.iap")
+    window.current_project_dir = str(tmp_path)
+    window.add_class("cell", QColor("#ff0000"))
+
+    window.image_controller.add_images_to_list([path])
+    lazy = window.image_slices["stack5d"]
+    far = lazy.names[-1]
+
+    items = window.slice_list.findItems(far, Qt.MatchFlag.MatchExactly)
+    assert items
+    window.image_controller.switch_slice(items[0])
+    assert window.current_slice == far
+
+    # Annotate the (far) current slice through the normal save path.
+    window.image_label.annotations = {"cell": [dict(POLY)]}
+    window.save_current_annotations()
+
+    window.project_controller.save_project(show_message=False)
+    window.project_controller.open_specific_project(str(window.current_project_file))
+
+    assert far in window.all_annotations
+    assert window.all_annotations[far]["cell"][0]["segmentation"] == POLY["segmentation"]
+
+
+def test_collect_dino_batch_flattens_lazy_stack(tmp_path, window, fake_dimension_dialog):
+    """DINO batch flattening yields one work item per slice of a lazily-loaded
+    stack, each a real QImage (materialised on demand)."""
+    path, _ = make_tiff(tmp_path, "stack3d.tif", (4, 8, 6), axes="ZYX")
+    window.image_controller.load_tiff(path)
+    window.all_images.append({"file_name": "stack3d.tif", "is_multi_slice": True})
+
+    items = window.dino_controller._collect_dino_batch_work_items()
+
+    names = [n for n, _ in items]
+    assert names == window.image_slices["stack3d"].names
+    assert all(isinstance(img, QImage) for _, img in items)
+
+
+def test_deleting_stack_evicts_lru(tmp_path, window, fake_dimension_dialog, no_native_dialogs):
+    """Deleting a stack drops every one of its cached QImages from the shared
+    LRU (no stale entries keyed by a soon-to-be-recycled provider id)."""
+    path, _ = make_tiff(tmp_path, "stack3d.tif", (4, 8, 6), axes="ZYX")
+    window.image_controller.load_tiff(path)
+
+    lazy = window.image_slices["stack3d"]
+    provider_id = lazy.provider_id
+    for name in lazy.names:  # force several entries into the LRU
+        lazy.get(name)
+    assert get_shared_lru().count_prefix(provider_id) > 0
+
+    # Minimal image-list state so delete_selected_image can find the entry.
+    window.all_images.append({"file_name": "stack3d.tif", "width": 6, "height": 8,
+                              "id": 1, "is_multi_slice": True})
+    window.image_paths["stack3d.tif"] = path
+    window.image_list.addItem("stack3d.tif")
+    window.image_list.setCurrentRow(window.image_list.count() - 1)
+
+    window.image_controller.delete_selected_image()
+
+    assert "stack3d" not in window.image_slices
+    assert get_shared_lru().count_prefix(provider_id) == 0

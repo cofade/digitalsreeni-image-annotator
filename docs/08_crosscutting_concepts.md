@@ -810,6 +810,32 @@ emitters follow up with `annotationsBatchSaved`
 New mutation paths must keep one of those two routes — don't add
 bespoke `apply_image_filter()` call sites.
 
+## Lazy Slice Materialisation — Name-Only vs Pixel Consumers (issue #45, ADR-036)
+
+Multi-dim `image_slices[base]` is a `LazySliceList` (`core/slice_cache.py`), not a
+list of `(name, qimage)` tuples — QImages decode on demand through a shared bounded
+LRU (`LRU_CAPACITY = 8`). It stays interface-compatible (`__iter__`, `__getitem__`,
+`__len__`, `__bool__`, `.names`, `.get(name)`, `prefetch_around`), but there is a
+critical distinction for anyone touching slice code:
+
+- **Name-only consumers must never iterate for pixels.** Saving a project, computing
+  annotation status, rebuilding the slice list, and navigation membership checks need
+  only slice *names*. Use `slice_cache.slice_names(slices)` (or `.names`) — iterating
+  `for name, _ in slices` would materialise every QImage. `save_project` is
+  regression-tested to call `SliceProvider.extract` **zero** times.
+- **Pixel consumers materialise one at a time.** `switch_slice`/`activate_slice` use
+  `slices.get(name)` + `prefetch_around(name)`; exporters, the SAM-dataset build and
+  DINO batch iterate via `__iter__` (which feeds/evicts the LRU). A batch export still
+  transiently collects a stack's QImages into its own `slice_map` — that is an accepted
+  per-operation cost; the SESSION memory is what the LRU bounds.
+- **Deletion must release.** `remove_image`/`delete_selected_image`/`redefine_dimensions`
+  call `slice_cache.release_slices(...)` (or the list's `release()`) before dropping the
+  stack, so LRU entries don't linger; `clear_all` clears the whole shared cache.
+- `mw.slices` and `image_slices[base]` are the **same** `LazySliceList` object, and
+  slice naming is byte-identical to the old eager path (it is the annotation key +
+  export filename). Extraction returns a fresh QImage each call — never mutate a cached
+  one (the SAM worker may be reading it, ADR-013).
+
 ## Image List Groups & Status Badges (issue #43)
 
 The image list gained two at-a-glance affordances, both layered on the

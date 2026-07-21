@@ -86,7 +86,7 @@ def build_sidebar(window):
     # Add spacing
     window.sidebar_layout.addSpacing(20)
 
-    window.add_images_button = QPushButton("Add New Images")
+    window.add_images_button = QPushButton("Add Images / Videos")
     window.add_images_button.clicked.connect(window.add_images)
     window.sidebar_layout.addWidget(window.add_images_button)
 

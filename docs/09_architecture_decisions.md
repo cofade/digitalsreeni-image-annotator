@@ -1830,7 +1830,10 @@ lazy-slice machinery** rather than a parallel frame cache (the #45/#47 reconcili
 - `ImageController.load_video` builds the handler + provider + `LazySliceList` (stored as
   both `image_slices[base]` and `mw.slices`); `add_images_to_list` gains an
   `is_video(...)` branch setting `is_multi_slice=True`, `is_video=True`,
-  `video_metadata=handler.metadata()`; `open_images` accepts `*.mp4 *.avi *.mov`.
+  `video_metadata=handler.metadata()`. The Add/Open file dialogs accept `*.mp4 *.avi
+  *.mov` via the shared `video_handler.file_dialog_filter()` (video globs derived from
+  `VIDEO_EXTS`), used by `add_images` (the live "Add Images / Videos" button),
+  `open_images` and `load_missing_images` so the filter can't drift from `is_video()`.
   Handlers live in `mw.video_handlers[base]` and are `release()`d on every drop path
   (delete/remove/redefine/`open_images`/`clear_all`). `.iap` round-trips `is_video`
   +`video_metadata`; load branches to `load_video`.

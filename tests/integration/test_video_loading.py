@@ -204,7 +204,7 @@ def test_video_roundtrip_save_reload(
 def test_add_images_button_path_accepts_and_loads_video(
     window, make_test_video, tmp_path, monkeypatch
 ):
-    """The visible "Add New Images" button (``add_images``) must let the user
+    """The visible "Add Images / Videos" button (``add_images``) must let the user
     pick AND load a video.
 
     Regression for the #47/#48 gap: ``add_images`` — the only method the

@@ -547,6 +547,28 @@ main() → window.show() → offer_recovery()
 A real save (or New Project) calls `clear_recovery()`, so a stale snapshot is never
 offered once the project is disk-backed.
 
+## Organising the Image List — Groups & Status Badges (issue #43)
+
+1. **Badge refresh** (automatic, no user action): any annotation mutation
+   flows through `ClassController.update_slice_list_colors →
+   ImageController.apply_image_filter`, whose tail calls
+   `refresh_image_status_icons()`. Each row's `QIcon` is set from a
+   `(annotated, dark_mode)`-keyed painted-pixmap cache — filled green dot if
+   the image (or any of its slices) has annotations, hollow gray otherwise.
+   Toggling dark mode calls `ImageController.on_theme_changed()`, which clears
+   the cache and repaints.
+2. **Assigning a group**: right-click a row → "Move to group…" opens
+   `QInputDialog.getItem` (existing groups + free text) →
+   `set_image_group(name, group)` sets the `"group"` key on the `all_images`
+   entry, `sort_image_list()` re-clusters grouped rows (ungrouped first; item
+   text stays the file name, group in the tooltip), then `auto_save()` (skipped
+   during load). "Remove from group" passes `None`.
+3. **Filtering by group**: `image_group_combo` ("All groups" + derived names)
+   drives `apply_image_filter`, which hides a row when the status filter **or**
+   the group filter excludes it. Both combos' index 0 means "hide nothing".
+4. **Persistence**: `save_project` writes `"group"` per image; on load a
+   restoration loop re-applies saved groups onto the rebuilt `all_images`.
+
 ## Multi-dimensional Image Loading
 
 ```

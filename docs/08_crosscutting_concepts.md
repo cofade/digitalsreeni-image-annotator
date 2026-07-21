@@ -810,6 +810,43 @@ emitters follow up with `annotationsBatchSaved`
 New mutation paths must keep one of those two routes — don't add
 bespoke `apply_image_filter()` call sites.
 
+## Image List Groups & Status Badges (issue #43)
+
+The image list gained two at-a-glance affordances, both layered on the
+existing filter/sort wiring — **no tree widget, no thumbnails, no header
+rows**:
+
+- **Status badges**: `ImageController.refresh_image_status_icons()` sets a
+  small painted-pixmap `QIcon` per row — a filled green dot when
+  `image_has_annotations(info)` (any slice of a stack counts), a hollow gray
+  outline otherwise. Nothing is stored; both states are derived. Icons are
+  painted once per `(annotated, dark_mode)` into a cache; because they are
+  **painted pixmaps, not stylesheet colours**, the No Hardcoded Colors Rule
+  isn't violated — but the cache is cleared and rebuilt when the theme flips
+  (`on_theme_changed`, called from `ui/theme.py::toggle_dark_mode`). The
+  refresh runs at the end of `apply_image_filter()` (so every annotation
+  mutation repaints badges via the `update_slice_list_colors →
+  apply_image_filter` contract) and at the end of `sort_image_list()`. The
+  dot colours are theme-tuned (a brighter green / lighter gray on the dark
+  sidebar), which is what makes the `(annotated, dark_mode)` cache dimension
+  and the `on_theme_changed` rebuild do real work.
+- **Named groups**: an optional `"group"` string key on each `all_images`
+  entry (no registry; the group set is derived). `set_image_group` sets/clears
+  it, re-sorts, and auto-saves (guarded by `is_loading_project`). The
+  context menu ("Move to group…" / "Remove from group") drives it. Grouped
+  images cluster via the `sort_image_list` key
+  `(group.casefold(), name.casefold(), name)`; the group shows only in the
+  row **tooltip** — the item TEXT stays the bare file name, because
+  `item(i).text()` is read as a filename by DINO batch navigation and COCO
+  import reconciliation. A second combo (`image_group_combo`) filters by
+  group; `apply_image_filter` hides a row when **either** the status filter
+  or the group filter excludes it (OR of the two hide flags), keeping index 0
+  of both combos as the cheap "hide nothing" default. Groups persist in the
+  `.iap`; on load no restoration step is needed — `load_project_data` aliases
+  `all_images` to the parsed `project_data["images"]` and the load loop does
+  not rebuild it (`add_images_to_list` no-ops because `image_paths` is set
+  first), so the `"group"` keys survive as-is.
+
 ## Image List Sorting — Rebuild, Don't `setSortingEnabled`
 
 The image list is kept alphabetical (upstream issue #60,

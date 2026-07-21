@@ -24,7 +24,7 @@ import os
 import numpy as np
 from czifile import CziFile
 from PyQt6.QtCore import Qt, QObject
-from PyQt6.QtGui import QColor, QImage, QPixmap
+from PyQt6.QtGui import QColor, QIcon, QImage, QPainter, QPen, QPixmap
 from PyQt6.QtWidgets import (
     QApplication,
     QComboBox,
@@ -88,6 +88,10 @@ class ImageController(QObject):
     def __init__(self, main_window):
         super().__init__(main_window)
         self.mw = main_window
+        # Annotation-status badge icons, keyed by (annotated: bool,
+        # dark: bool). Each is painted once and reused; cleared on a
+        # dark-mode flip via on_theme_changed (issue #43).
+        self._status_icon_cache = {}
 
     def update_image_list(self):
         # Rebuild (and sort) the list, preserving the current selection
@@ -113,8 +117,11 @@ class ImageController(QObject):
         if self.mw.image_list.currentItem() is not None:
             current = self.mw.image_list.currentItem().text()
 
+        # Grouped images cluster together (ungrouped first, blank group
+        # sorts before any name); within a group, by file name (issue #43).
         self.mw.all_images.sort(
             key=lambda info: (
+                info.get("group", "").casefold(),
                 info.get("file_name", "").casefold(),
                 info.get("file_name", ""),
             )
@@ -123,8 +130,17 @@ class ImageController(QObject):
         self.mw.image_list.blockSignals(True)
         self.mw.image_list.clear()
         for info in self.mw.all_images:
-            self.mw.image_list.addItem(info["file_name"])
+            item = QListWidgetItem(info["file_name"])
+            group = info.get("group")
+            if group:
+                # Item TEXT stays the bare file name (many consumers read
+                # item(i).text() as a filename — DINO batch nav, COCO
+                # import). The group shows only in the tooltip. See #43.
+                item.setToolTip(f"{info['file_name']}  [{group}]")
+            self.mw.image_list.addItem(item)
         self.mw.image_list.blockSignals(False)
+
+        self._populate_group_combo()
 
         self.apply_image_filter()
 
@@ -193,18 +209,164 @@ class ImageController(QObject):
         if combo is None:
             return
         mode = combo.currentIndex()  # 0 = all, 1 = without, 2 = with
-        if mode == 0:
-            # Default case runs on every update_slice_list_colors —
-            # keep it a plain unhide pass with no annotation scans.
+
+        # Group filter (issue #43): a specific group selected (index > 0)
+        # hides rows whose image isn't in it. Index 0 ("All groups") means
+        # "hide nothing", so the default path below stays a cheap unhide.
+        group_combo = getattr(self.mw, "image_group_combo", None)
+        active_group = None
+        if group_combo is not None and group_combo.currentIndex() > 0:
+            active_group = group_combo.currentText()
+
+        if mode == 0 and active_group is None:
+            # Default case runs on every update_slice_list_colors — skip the
+            # per-row hide computation (nothing is filtered) but still refresh
+            # the status badges, which necessarily scan annotation state per
+            # row (unavoidable: badges must stay current after every mutation).
             for i in range(self.mw.image_list.count()):
                 self.mw.image_list.setRowHidden(i, False)
+            self.refresh_image_status_icons()
             return
         infos = {info["file_name"]: info for info in self.mw.all_images}
         for i in range(self.mw.image_list.count()):
             info = infos.get(self.mw.image_list.item(i).text())
+            if mode == 0:
+                status_hide = False
+            else:
+                annotated = bool(info) and self.image_has_annotations(info)
+                status_hide = annotated if mode == 1 else not annotated
+            if active_group is None:
+                group_hide = False
+            else:
+                group_hide = not (info and info.get("group") == active_group)
+            # Hide the row if EITHER filter excludes it.
+            self.mw.image_list.setRowHidden(i, status_hide or group_hide)
+
+        self.refresh_image_status_icons()
+
+    def refresh_image_status_icons(self):
+        """Set a per-row annotation-status badge on the image list (#43).
+
+        Filled green dot = the image (or, for a multi-dim stack, any of
+        its slices) has annotations; hollow gray dot = none. Both states
+        are derived — nothing is stored. Icons are cached per (annotated,
+        dark_mode) and painted once; the colours are theme-tuned (brighter
+        on the dark sidebar), so on_theme_changed clears the cache on a
+        dark-mode flip to force a repaint at the new theme's colours.
+
+        Called at the end of apply_image_filter (so it refreshes on every
+        annotation mutation via update_slice_list_colors) and after
+        sort_image_list's rebuild.
+        """
+        dark = bool(getattr(self.mw, "dark_mode", False))
+        infos = {info["file_name"]: info for info in self.mw.all_images}
+        for i in range(self.mw.image_list.count()):
+            item = self.mw.image_list.item(i)
+            info = infos.get(item.text())
             annotated = bool(info) and self.image_has_annotations(info)
-            hide = annotated if mode == 1 else not annotated
-            self.mw.image_list.setRowHidden(i, hide)
+            item.setIcon(self._status_icon(annotated, dark))
+
+    def _status_icon(self, annotated, dark):
+        key = (annotated, dark)
+        icon = self._status_icon_cache.get(key)
+        if icon is None:
+            icon = self._build_status_icon(annotated, dark)
+            self._status_icon_cache[key] = icon
+        return icon
+
+    @staticmethod
+    def _build_status_icon(annotated, dark):
+        """Paint a 12x12 status dot into a QIcon, tuned for the theme.
+
+        These are painted PIXMAPS, not stylesheet colours, so the "No
+        Hardcoded Colors Rule" (which targets setStyleSheet literals) does
+        not apply. The colours are picked per theme: a brighter green /
+        lighter gray on the soft-dark sidebar for adequate contrast, a
+        deeper pair on the light one. That difference is what makes the
+        (annotated, dark) cache dimension and on_theme_changed do real work.
+        """
+        if annotated:
+            fill = QColor(63, 185, 80) if dark else QColor(46, 160, 67)
+        else:
+            outline = QColor(155, 155, 155) if dark else QColor(120, 120, 120)
+        pixmap = QPixmap(12, 12)
+        pixmap.fill(Qt.GlobalColor.transparent)
+        painter = QPainter(pixmap)
+        painter.setRenderHint(QPainter.RenderHint.Antialiasing, True)
+        if annotated:
+            painter.setPen(Qt.PenStyle.NoPen)
+            painter.setBrush(fill)  # filled dot
+            painter.drawEllipse(2, 2, 8, 8)
+        else:
+            pen = QPen(outline)  # hollow outline dot
+            pen.setWidthF(1.5)
+            painter.setPen(pen)
+            painter.setBrush(Qt.BrushStyle.NoBrush)
+            painter.drawEllipse(3, 3, 6, 6)
+        painter.end()
+        return QIcon(pixmap)
+
+    def on_theme_changed(self):
+        """Rebuild the status-icon cache after a dark-mode flip (#43).
+
+        Called from the theme choke point (ui/theme.toggle_dark_mode).
+        The cached icons are keyed by dark-mode, so clearing forces a
+        redraw at the new theme on the next refresh.
+        """
+        self._status_icon_cache.clear()
+        self.refresh_image_status_icons()
+
+    def set_image_group(self, file_name, group):
+        """Assign or clear an image's group tag (issue #43).
+
+        group: a name (whitespace stripped) or None/empty to remove the
+        image from any group. Re-sorts the list so grouped images cluster,
+        then auto-saves — but never during project load (CLAUDE.md guard,
+        matching add_images_to_list).
+        """
+        info = next(
+            (img for img in self.mw.all_images if img["file_name"] == file_name),
+            None,
+        )
+        if info is None:
+            return
+        normalized = group.strip() if isinstance(group, str) else None
+        normalized = normalized or None
+        # No-op if nothing actually changes (e.g. "Remove from group" on an
+        # already-ungrouped image) so we don't re-sort + auto_save for nothing.
+        if normalized == info.get("group"):
+            return
+        if normalized:
+            info["group"] = normalized
+        else:
+            info.pop("group", None)
+        self.sort_image_list()
+        if not self.mw.is_loading_project:
+            self.mw.auto_save()
+
+    def _populate_group_combo(self):
+        """Repopulate image_group_combo from the derived group set (#43).
+
+        Signals are blocked (repopulating fires currentIndexChanged →
+        apply_image_filter otherwise) and the current selection is
+        preserved by text, falling back to "All groups" if its group is
+        gone.
+        """
+        combo = getattr(self.mw, "image_group_combo", None)
+        if combo is None:
+            return
+        groups = sorted(
+            {info.get("group") for info in self.mw.all_images if info.get("group")}
+        )
+        current = combo.currentText()
+        combo.blockSignals(True)
+        combo.clear()
+        combo.addItem("All groups")
+        for g in groups:
+            combo.addItem(g)
+        idx = combo.findText(current)
+        combo.setCurrentIndex(idx if idx >= 0 else 0)
+        combo.blockSignals(False)
 
     def setup_slice_list(self):
         self.mw.slice_list = QListWidget()

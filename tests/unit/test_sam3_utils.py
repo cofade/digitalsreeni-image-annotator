@@ -213,11 +213,14 @@ def test_load_overrides_omit_quantize_and_mode(sam3, monkeypatch):
     assert sam3.loaded is True
     assert sam3._predictor is not None
     ov = captured["overrides"]
-    assert set(ov) == {"model", "task", "conf"}
+    # device is REQUIRED (CPU-fallback safety, mirrors SAMUtils); quantize/mode
+    # must be absent (quantize raises in ultralytics 8.4.51, mode is redundant).
+    assert set(ov) == {"model", "task", "conf", "device"}
     assert "quantize" not in ov
     assert "mode" not in ov
     assert ov["task"] == "segment"
     assert isinstance(ov["conf"], float)
+    assert ov["device"] == sam3._device
     # Constructor gets ONLY overrides=...; no stray kwargs.
     assert captured["kwargs"] == {}
 
@@ -245,13 +248,13 @@ def test_weights_available_reflects_resolvable_path(sam3, monkeypatch, tmp_path)
     absent = tmp_path / "absent.pt"
     monkeypatch.setattr(sam3, "_candidate_weight_paths", lambda: [str(absent)])
     assert sam3._resolve_weights_path() is None
-    assert sam3._weights_available() is False
+    assert sam3.weights_available() is False
 
     present = tmp_path / "sam3.pt"
     present.write_bytes(b"not-a-real-checkpoint")
     monkeypatch.setattr(sam3, "_candidate_weight_paths", lambda: [str(present)])
     assert sam3._resolve_weights_path() == str(present)
-    assert sam3._weights_available() is True
+    assert sam3.weights_available() is True
 
 
 def test_env_override_is_a_candidate_path(sam3, monkeypatch, tmp_path):

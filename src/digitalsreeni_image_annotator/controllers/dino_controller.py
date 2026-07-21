@@ -162,7 +162,7 @@ class DINOController(QObject):
         self.mw.dino_model_loaded = False
         sam3 = self.mw.sam3_utils
 
-        if not sam3._weights_available():
+        if not sam3.weights_available():
             self.mw.lbl_dino_status.setText(
                 "SAM 3 weights (sam3.pt) not found. Request access on Hugging "
                 "Face, then place sam3.pt in the working directory or the "
@@ -300,6 +300,10 @@ class DINOController(QObject):
             instances = self.mw.sam3_utils.detect_text(qimage, class_configs)
             if instances is None:
                 return None, None
+            # bbox is carried only for shape-parity with the DINO results dict
+            # (downstream commit/store/temp-attach/accept read segmentation/
+            # class_name/score/source, never bbox); keeping it avoids a
+            # divergent results shape between the two producers.
             results = [
                 {"class_name": inst["class_name"], "score": inst["score"],
                  "bbox": inst["bbox"], "source": "sam3"}

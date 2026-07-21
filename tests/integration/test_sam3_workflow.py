@@ -30,7 +30,7 @@ class _Sam3Stub:
         self.loaded = True
         self.detect_calls = []
 
-    def _weights_available(self):
+    def weights_available(self):
         return True
 
     def ensure_loaded(self):
@@ -131,7 +131,7 @@ def test_sam3_gated_download_status_when_weights_absent(window, monkeypatch):
         monkeypatch.setattr(QMessageBox, m, staticmethod(lambda *a, **k: None))
 
     class _NoWeights(_Sam3Stub):
-        def _weights_available(self):
+        def weights_available(self):
             return False
 
         def ensure_loaded(self):
@@ -246,6 +246,32 @@ def test_batch_temp_resync_swaps_on_switch(sam3_ready, tmp_path, monkeypatch):
 
 
 # --- DINO fallback path is untouched ---------------------------------------
+
+def test_inflight_guard_absorbs_busy(sam3_ready, tmp_path, monkeypatch):
+    """A re-entrant SAM 3 call raises InferenceBusyError; both the single and
+    batch paths must absorb it (skip cleanly) rather than crash (ADR-013)."""
+    from digitalsreeni_image_annotator.inference.sam3_utils import (
+        InferenceBusyError,
+    )
+
+    window = sam3_ready
+    c = window.dino_controller
+
+    def _busy(image, class_configs):
+        raise InferenceBusyError("busy")
+
+    window.sam3_utils.detect_text = _busy
+
+    # Single: no crash, nothing attached.
+    c.run_dino_detection_single()
+    assert window.image_label.temp_annotations == []
+
+    # Batch: no crash either (each work item's busy is caught + skipped).
+    _seed_batch(window, tmp_path)
+    window.dino_batch_mode.setCurrentText("Review before accepting")
+    monkeypatch.setattr(c, "_show_dino_batch_review", lambda: None)
+    c.run_dino_detection_batch()  # must not raise
+
 
 def test_dino_path_does_not_call_sam3(sam3_ready, monkeypatch):
     window = sam3_ready

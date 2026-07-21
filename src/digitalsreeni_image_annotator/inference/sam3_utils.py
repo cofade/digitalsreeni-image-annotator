@@ -91,7 +91,7 @@ class SAM3Utils(QObject):
     - ``ensure_loaded() -> None``
     - ``detect_text(image: QImage, class_configs: list[dict]) -> list[dict] | None``
     - ``unload() -> None``
-    - ``_weights_available() -> bool``
+    - ``weights_available() -> bool``
     - attributes ``loaded: bool`` and ``_predictor`` (None until loaded)
     """
 
@@ -123,7 +123,7 @@ class SAM3Utils(QObject):
                 return p
         return None
 
-    def _weights_available(self) -> bool:
+    def weights_available(self) -> bool:
         """True if ``sam3.pt`` is already on disk somewhere resolvable.
 
         Never triggers a download — the checkpoint is gated on HF. The
@@ -159,10 +159,16 @@ class SAM3Utils(QObject):
         self._device, _ = resolve_torch_device()
 
         weights = self._resolve_weights_path() or SAM3_WEIGHTS_FILENAME
-        # NOTE (ADR-038): pass ONLY model/task/conf. `quantize=` raises
-        # "'quantize' is not a valid YOLO argument" on ultralytics 8.4.51,
-        # and `mode=` is redundant. conf is the single threshold knob.
-        overrides = dict(model=weights, task="segment", conf=self._conf)
+        # NOTE (ADR-038): pass model/task/conf/device only. `quantize=` raises
+        # "'quantize' is not a valid YOLO argument" on ultralytics 8.4.51, and
+        # `mode=` is redundant. conf is the single threshold knob. `device` is
+        # REQUIRED (mirrors SAMUtils): resolve_torch_device() may force "cpu"
+        # even when CUDA is present (unsupported compute capability / probe
+        # failure); without it Ultralytics auto-picks cuda:0 and crashes on the
+        # exact GPU the fallback rejected.
+        overrides = dict(
+            model=weights, task="segment", conf=self._conf, device=self._device
+        )
         predictor = SAM3SemanticPredictor(overrides=overrides)
 
         # Flip state only after a clean construct — never half-loaded.

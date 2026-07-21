@@ -1982,8 +1982,10 @@ reuse everything downstream verbatim:
 - ✅ One-stage SAM 3 masks flow through the entire existing review/accept/batch/auto-accept/undo/persist
   machinery with zero new review UI; commits reuse `_commit_dino_results` (so `record_history` fires —
   undoable).
-- ✅ Grounding-DINO two-stage path is behaviourally unchanged (its tests pass unmodified); the model
-  picker's "SAM 3 (text prompt)" entry sits alongside the DINO models.
+- ✅ Grounding-DINO two-stage path is **functionally** unchanged — identical final annotations/temps,
+  so its tests pass unmodified. (The single path drops a transient "Running SAM…" status line and
+  unifies the two error-dialog titles into one — the only intra-run UX differences.) The model picker's
+  "SAM 3 (text prompt)" entry sits alongside the DINO models.
 - ✅ `ultralytics` floor raised to `>=8.3.237,<9` (ADR-038). SAM 3 lazy-imports, so older installs still
   launch and the app stays importable.
 - ⚠️ Real end-to-end verification needs a GPU + the gated 3.45 GB `sam3.pt` (cannot run in CI or a

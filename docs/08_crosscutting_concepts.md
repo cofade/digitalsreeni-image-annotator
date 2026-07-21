@@ -839,6 +839,29 @@ critical distinction for anyone touching slice code:
   export filename). Extraction returns a fresh QImage each call — never mutate a cached
   one (the SAM worker may be reading it, ADR-013).
 
+## Video Frames as Lazy Slices (issue #47, ADR-037)
+
+A video is a stack whose slices are frames, and it **reuses** the #45 lazy machinery
+rather than a parallel cache: `image_slices[base]` is a `LazySliceList` backed by a
+`core/video_handler.py::VideoSliceProvider` (duck-compatible with `SliceProvider`), so
+every slice consumer above works for video unchanged. Practical rules:
+
+- **Never read a frame's pixels directly.** Go through the `LazySliceList`
+  (`slices.get(frame_key)` / `__iter__`), which decodes via `VideoHandler.get_frame`
+  and caches in the shared `SliceLRU`. Frame keys are `f"{base}_F{idx:05d}"`
+  (`video_handler.frame_key` / `parse_frame_index`, regex anchored at end so a
+  `stack_T1_Z5` key never parses as a frame).
+- **Handlers are a separate resource that must be released.** `mw.video_handlers[base]`
+  holds the open `cv2.VideoCapture`; release it on every drop path
+  (`remove_image`/`delete_selected_image`/`redefine_dimensions`/`open_images`/
+  `clear_all`) alongside `release_slices`.
+- **GUI-thread only.** `cv2.VideoCapture` is not thread-safe; `get_frame` seeks +
+  decodes synchronously on the main thread (same discipline as `SliceProvider.extract`),
+  and always returns a fresh `.copy()` QImage (the numpy buffer dies at return; the SAM
+  worker may read a cached one, ADR-013).
+- **Base-name collision** (`video.mp4` vs `video.tif` → same `image_slices` key) is
+  refused in `add_images_to_list`.
+
 ## Image List Groups & Status Badges (issue #43)
 
 The image list gained two at-a-glance affordances, both layered on the

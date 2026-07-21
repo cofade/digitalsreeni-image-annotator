@@ -97,6 +97,10 @@ class ImageAnnotator(QMainWindow):
         self.current_stack = None
         self.image_dimensions = {}
         self.image_slices = {}
+        # Open cv2.VideoCapture handlers keyed by ext-stripped base name
+        # (issue #47). A video's image_slices[base] is a LazySliceList backed
+        # by a VideoSliceProvider that decodes frames through the handler.
+        self.video_handlers = {}
         self.image_shapes = {}
 
         
@@ -809,6 +813,10 @@ class ImageAnnotator(QMainWindow):
         from .core.slice_cache import get_shared_lru
         get_shared_lru().clear()
         self.image_slices.clear()
+        # Release each video's cv2 capture before dropping the dict (issue #47).
+        for handler in self.video_handlers.values():
+            handler.release()
+        self.video_handlers.clear()
         self.slices = []
         self.slice_list.clear()
         self.current_slice = None

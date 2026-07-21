@@ -35,6 +35,7 @@ src/digitalsreeni_image_annotator/
 	│   ├── constants.py
 	│   ├── annotation_utils.py
 	│   ├── slice_cache.py             # Lazy multi-dim slice materialisation + bounded LRU (ADR-036, #45)
+	│   ├── video_handler.py           # cv2 video decode; frames as lazy slices (ADR-037, #47)
 	│   └── torch_utils.py             # Shared torch device resolution + CPU fallback (#57)
 	├── widgets/
 	│   ├── image_label.py             # ImageLabel - canvas widget; dispatcher
@@ -240,7 +241,7 @@ the controller graph.
 | Controller | Responsibility |
 |------------|----------------|
 | `ProjectController` | `.iap` save/load, auto-save, backup/restore, missing-image prompts, window-title sync. Owns the `is_loading_project` autosave guard (load/save round-trip safety, v0.8.12). |
-| `ImageController` | Open / load / switch images and slices. TIFF + CZI loaders (with `imagecodecs` codec-error handling — #56), the multi-dim `DimensionDialog`, the `[-ndim:]` axis-slice bug fix from the v0.9.0 era. Multi-dim slices are now materialised **lazily** via `core/slice_cache.py` (`create_slices` builds names + a `SliceProvider`, QImages decode on demand through a shared bounded LRU — ADR-036 / #45). Image-list annotation-status filter (`image_has_annotations`, `apply_image_filter` — #27), alphabetical/grouped sort (`sort_image_list` — #60/#43), per-image named groups (`set_image_group`, `_populate_group_combo` — #43) and derived status badges (`refresh_image_status_icons`, painted-pixmap `QIcon` cache rebuilt on theme flip via `on_theme_changed` — #43). |
+| `ImageController` | Open / load / switch images and slices. TIFF + CZI loaders (with `imagecodecs` codec-error handling — #56), the multi-dim `DimensionDialog`, the `[-ndim:]` axis-slice bug fix from the v0.9.0 era. Multi-dim slices are now materialised **lazily** via `core/slice_cache.py` (`create_slices` builds names + a `SliceProvider`, QImages decode on demand through a shared bounded LRU — ADR-036 / #45). Videos (`load_video`, `mw.video_handlers`) reuse the same lazy contract: frames are `LazySliceList` slices backed by a `VideoSliceProvider` over `core/video_handler.py::VideoHandler` (ADR-037 / #47). Image-list annotation-status filter (`image_has_annotations`, `apply_image_filter` — #27), alphabetical/grouped sort (`sort_image_list` — #60/#43), per-image named groups (`set_image_group`, `_populate_group_combo` — #43) and derived status badges (`refresh_image_status_icons`, painted-pixmap `QIcon` cache rebuilt on theme flip via `on_theme_changed` — #43). |
 | `AnnotationController` | Annotation CRUD, list sorting, highlight, edit-mode entry/exit, `finish_polygon`, `finish_rectangle`, `replace_annotations` (eraser path). Validates writes before mutating `all_annotations`. |
 | `ClassController` | Class add / delete / rename / colour / visibility. `update_slice_list_colors`, `is_class_visible`. |
 | `SAMController` | SAM box/points tool lifecycle, debounce timer, `_sam_inference_in_flight` re-entrancy guard (ADR-013), model picker. |

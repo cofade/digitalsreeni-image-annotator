@@ -569,6 +569,29 @@ offered once the project is disk-backed.
 4. **Persistence**: `save_project` writes `"group"` per image; on load a
    restoration loop re-applies saved groups onto the rebuilt `all_images`.
 
+## Video Loading (issue #47, ADR-037)
+
+1. User adds `clip.mp4` (or `.avi`/`.mov`) via Add New Images / Open Images.
+2. `add_images_to_list` detects the video extension (`is_video`) and calls
+   `ImageController.load_video(path)`:
+   - `VideoHandler(path)` opens the capture and reads metadata once
+     (`total_frames`, `fps`, `width`, `height`, `duration_s`).
+   - A `VideoSliceProvider` (names `clip_F00000 … clip_F<N-1>`) is wrapped in a
+     `LazySliceList` and stored as both `image_slices["clip"]` and `mw.slices`;
+     the handler is stored in `mw.video_handlers["clip"]`.
+   - The slice list is populated with frame names; frame 0 is activated.
+   - `image_info` gets `is_multi_slice=True`, `is_video=True`,
+     `video_metadata=handler.metadata()`.
+3. Navigation (Up/Down, slice-list click) routes through `switch_slice`, which
+   `.get(frame_key)`s the frame QImage on demand (decoded via `VideoHandler`,
+   cached in the shared `SliceLRU`) and `prefetch_around`s the neighbours — no
+   frame is decoded until visited.
+4. Annotating a frame keys under its frame name in `all_annotations`, exactly
+   like a stack slice — per-frame independence, save/load and export come for free.
+5. Save writes `is_video`/`video_metadata` + per-frame annotations (no pixels);
+   load branches to `load_video`. A missing video flows through the existing
+   missing-images prompt.
+
 ## Multi-dimensional Image Loading
 
 ```

@@ -790,7 +790,10 @@ class ImageAnnotator(QMainWindow):
         if not self.image_label.check_unsaved_changes():
             return
         file_names, _ = QFileDialog.getOpenFileNames(
-            self, "Add Images", "", "Image Files (*.png *.jpg *.bmp *.tif *.tiff *.czi)"
+            self,
+            "Add Images or Videos",
+            "",
+            "Images & Videos (*.png *.jpg *.bmp *.tif *.tiff *.czi *.mp4 *.avi *.mov)",
         )
         if file_names:
             self.add_images_to_list(file_names)

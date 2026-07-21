@@ -24,6 +24,7 @@ from PyQt6.QtWidgets import QFileDialog, QInputDialog, QMessageBox
 from ..core import image_utils, recovery
 from ..core.keypoint_schema import sanitize_schema as _sanitize_keypoint_schema
 from ..core.project_schema import validate_project_data
+from ..core.slice_cache import release_slices, slice_names
 
 from ..core.logging_config import get_logger
 
@@ -323,8 +324,10 @@ class ProjectController(QObject):
 
             base_name = os.path.splitext(image_name)[0]
             if base_name in self.mw.image_slices:
-                for slice_name, _ in self.mw.image_slices[base_name]:
+                stack_slices = self.mw.image_slices[base_name]
+                for slice_name in slice_names(stack_slices):
                     self.mw.all_annotations.pop(slice_name, None)
+                release_slices(stack_slices)  # evict cached QImages (issue #45)
                 del self.mw.image_slices[base_name]
 
         self.mw.update_ui()
@@ -459,7 +462,12 @@ class ProjectController(QObject):
             if image_data["is_multi_slice"]:
                 base_name_without_ext = os.path.splitext(file_name)[0]
                 image_data["slices"] = []
-                for slice_name, _ in self.mw.image_slices.get(base_name_without_ext, []):
+                # Name-only (slice_names) — saving a project must not decode a
+                # single slice's pixels (issue #45); it also accepts a plain
+                # list or an absent/None entry.
+                for slice_name in slice_names(
+                    self.mw.image_slices.get(base_name_without_ext)
+                ):
                     slice_data = {
                         "name": slice_name,
                         "annotations": image_utils.convert_to_serializable(

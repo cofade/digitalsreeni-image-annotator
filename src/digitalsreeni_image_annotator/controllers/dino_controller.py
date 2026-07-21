@@ -39,6 +39,7 @@ from PyQt6.QtWidgets import (
 
 from ..core.constants import default_class_color
 from ..core.keypoint_schema import schema_k
+from ..core.slice_cache import slice_names
 
 from ..core.logging_config import get_logger
 
@@ -606,7 +607,9 @@ class DINOController(QObject):
                 self.mw.switch_image(item)
                 return True
         for base_name, slices in self.mw.image_slices.items():
-            if not any(s_name == name for s_name, _ in slices):
+            # Name-only membership check — don't materialise every slice's
+            # QImage just to find one by name (issue #45).
+            if name not in slice_names(slices):
                 continue
             for i in range(self.mw.image_list.count()):
                 item = self.mw.image_list.item(i)

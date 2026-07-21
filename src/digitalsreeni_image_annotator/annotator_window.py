@@ -802,7 +802,12 @@ class ImageAnnotator(QMainWindow):
         self.btn_detect_single.setEnabled(False)
         self.btn_detect_batch.setEnabled(False)
 
-        # Clear slices
+        # Clear slices. Wipe the shared slice LRU too: image_slices is dropped
+        # wholesale here, so any cached QImages keyed by a soon-to-be-recycled
+        # provider id() must go with it or a reloaded stack could alias them
+        # (issue #45).
+        from .core.slice_cache import get_shared_lru
+        get_shared_lru().clear()
         self.image_slices.clear()
         self.slices = []
         self.slice_list.clear()

@@ -406,11 +406,25 @@ def export_annotations(mw):
 
 
 def save_slices(mw, directory):
+    # Decode ONLY the annotated slices (issue #45): iterate names first (no
+    # pixel work) and materialise a slice's QImage only when it has
+    # annotations, instead of decoding every slice of every stack.
+    from ..core.slice_cache import slice_names
+
     slices_saved = False
     for image_file, image_slices in mw.image_slices.items():
-        for slice_name, qimage in image_slices:
-            if slice_name in mw.all_annotations and mw.all_annotations[slice_name]:
-                file_path = os.path.join(directory, f"{slice_name}.png")
-                qimage.save(file_path, "PNG")
+        getter = getattr(image_slices, "get", None)
+        name_to_qimage = None  # lazily built only for plain-list collections
+        for slice_name in slice_names(image_slices):
+            if not mw.all_annotations.get(slice_name):
+                continue
+            if getter is not None:
+                qimage = getter(slice_name)
+            else:
+                if name_to_qimage is None:
+                    name_to_qimage = {n: q for n, q in image_slices}
+                qimage = name_to_qimage.get(slice_name)
+            if qimage is not None:
+                qimage.save(os.path.join(directory, f"{slice_name}.png"), "PNG")
                 slices_saved = True
     return slices_saved

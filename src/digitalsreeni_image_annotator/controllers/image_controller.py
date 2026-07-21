@@ -21,7 +21,6 @@ The `DimensionDialog` widget lives here too — it is only used by
 
 import os
 
-import numpy as np
 from czifile import CziFile
 from PyQt6.QtCore import Qt, QObject
 from PyQt6.QtGui import QColor, QIcon, QImage, QPainter, QPen, QPixmap
@@ -43,6 +42,13 @@ from PyQt6.QtWidgets import (
 from tifffile import TiffFile
 
 from ..core import image_utils
+from ..core.slice_cache import (
+    LazySliceList,
+    SliceProvider,
+    get_shared_lru,
+    release_slices,
+    slice_names,
+)
 
 from ..core.logging_config import get_logger
 
@@ -171,9 +177,11 @@ class ImageController(QObject):
             base_name = os.path.splitext(file_name)[0]
             slices = self.mw.image_slices.get(base_name)
             if slices:
+                # Name-only scan (slice_names) — never materialise QImages
+                # just to check annotation status (issue #45).
                 return any(
                     _non_empty(self.mw.all_annotations.get(slice_name, {}))
-                    for slice_name, _ in slices
+                    for slice_name in slice_names(slices)
                 )
             # Slices not extracted yet (e.g. load cancelled) — slice keys
             # are f"{base_name}_T1_Z5_..." so a "{base_name}_" prefix match
@@ -386,7 +394,16 @@ class ImageController(QObject):
             self.mw.image_paths.clear()
             self.mw.all_images.clear()
             self.mw.slice_list.clear()
-            self.mw.slices.clear()
+            # Drop the outgoing stacks' cached QImages AND their retained
+            # source arrays: image_slices is being replaced wholesale, so wipe
+            # the shared slice LRU and clear image_slices. Under Strategy A a
+            # LazySliceList pins its whole decoded ndarray, so merely
+            # rebinding mw.slices = [] (mw.slices is no longer the same object
+            # as image_slices[base]) would leak every previously-open stack for
+            # the session. Mirrors clear_all (issue #45).
+            get_shared_lru().clear()
+            self.mw.image_slices.clear()
+            self.mw.slices = []
             self.mw.current_stack = None
             self.mw.current_slice = None
             self.add_images_to_list(file_names)
@@ -498,18 +515,21 @@ class ImageController(QObject):
         self.mw.annotation_controller.reset_coalesce()
 
         slice_name = item.text()
-        for name, qimage in self.mw.slices:
-            if name == slice_name:
-                self.mw.current_image = qimage
-                self.mw.current_slice = name
-                self.display_image()
-                self.mw.load_image_annotations()
-                self.mw.update_annotation_list()
-                self.mw.clear_highlighted_annotation()
-                self.mw.image_label.reset_annotation_state()
-                self.mw.image_label.clear_current_annotation()
-                self.mw.update_image_info()
-                break
+        # Lazy materialise this slice (LRU-cached) instead of scanning +
+        # holding every slice's QImage; prefetch neighbours so Up/Down nav
+        # stays instant (issue #45).
+        qimage = self.mw.slices.get(slice_name)
+        if qimage is not None:
+            self.mw.slices.prefetch_around(slice_name)
+            self.mw.current_image = qimage
+            self.mw.current_slice = slice_name
+            self.display_image()
+            self.mw.load_image_annotations()
+            self.mw.update_annotation_list()
+            self.mw.clear_highlighted_annotation()
+            self.mw.image_label.reset_annotation_state()
+            self.mw.image_label.clear_current_annotation()
+            self.mw.update_image_info()
 
         self.mw.image_label.update()
         self.mw.update_slice_list_colors()
@@ -845,67 +865,43 @@ class ImageController(QObject):
 
     def create_slices(self, image_array, dimensions, image_path):
         base_name = os.path.splitext(os.path.basename(image_path))[0]
-        slices = []
         self.mw.slice_list.clear()
 
         logger.debug(f"Creating slices for {base_name}")
         logger.debug(f"Dimensions: {dimensions}")
         logger.debug(f"Image array shape: {image_array.shape}")
 
-        progress = QProgressDialog("Loading slices...", "Cancel", 0, 100, self.mw)
-        progress.setWindowModality(Qt.WindowModality.WindowModal)
-        progress.setMinimumDuration(0)
+        # Reloading a stack under the same base_name (redefine dims, project
+        # reload) drops the previous LazySliceList — evict its cached QImages
+        # first so a recycled provider id() can't alias stale entries. The old
+        # object stays referenced until the reassignment below, so the new
+        # provider is guaranteed a distinct id() (issue #45).
+        release_slices(self.mw.image_slices.get(base_name))
 
-        if image_array.ndim == 2:
-            progress.setValue(50)
-            QApplication.processEvents()
-            normalized_array = image_utils.normalize_array(image_array)
-            qimage = image_utils.array_to_qimage(normalized_array)
-            slice_name = f"{base_name}"
-            slices.append((slice_name, qimage))
+        # Lazy slicing (issue #45): retain the already-decoded source array in
+        # a provider and materialise each slice's QImage ON DEMAND through a
+        # shared bounded LRU. No per-slice pixel work happens here now, so the
+        # progress dialog (pixel work only) is gone; building names is cheap.
+        provider = SliceProvider(image_array, dimensions, base_name)
+        lazy = LazySliceList(provider)
+
+        for slice_name in lazy.names:
             self.add_slice_to_list(slice_name)
-        else:
-            slice_indices = [
-                i for i, dim in enumerate(dimensions) if dim not in ["H", "W"]
-            ]
 
-            total_slices = np.prod([image_array.shape[i] for i in slice_indices])
-            for idx, _ in enumerate(
-                np.ndindex(tuple(image_array.shape[i] for i in slice_indices))
-            ):
-                if progress.wasCanceled():
-                    break
+        # mw.image_slices[base] and mw.slices MUST be the same object — several
+        # paths compare/assign them (issue #45 guardrail).
+        self.mw.image_slices[base_name] = lazy
+        self.mw.slices = lazy
 
-                full_idx = [slice(None)] * len(dimensions)
-                for i, val in zip(slice_indices, _):
-                    full_idx[i] = val
-
-                slice_array = image_array[tuple(full_idx)]
-                rgb_slice = image_utils.convert_to_8bit_rgb(slice_array)
-                qimage = image_utils.array_to_qimage(rgb_slice)
-
-                slice_name = f"{base_name}_{'_'.join([f'{dimensions[i]}{val+1}' for i, val in zip(slice_indices, _)])}"
-                slices.append((slice_name, qimage))
-
-                self.add_slice_to_list(slice_name)
-
-                progress_value = int((idx + 1) / total_slices * 100)
-                progress.setValue(progress_value)
-                QApplication.processEvents()
-
-        progress.setValue(100)
-
-        self.mw.image_slices[base_name] = slices
-        self.mw.slices = slices
-
-        if slices:
-            self.mw.current_image = slices[0][1]
-            self.mw.current_slice = slices[0][0]
+        if lazy:
+            first_name, first_image = lazy[0]
+            self.mw.current_image = first_image
+            self.mw.current_slice = first_name
             self.mw.slice_list.setCurrentRow(0)
 
             self.activate_slice(self.mw.current_slice)
 
-            slice_info = f"Total slices: {len(slices)}"
+            slice_info = f"Total slices: {len(lazy)}"
             for dim, size in zip(dimensions, image_array.shape):
                 if dim not in ["H", "W"]:
                     slice_info += f", {dim}: {size}"
@@ -913,8 +909,8 @@ class ImageController(QObject):
         else:
             logger.warning("No slices were created")
 
-        logger.info(f"Created {len(slices)} slices for {base_name}")
-        return slices
+        logger.info(f"Created {len(lazy)} slices for {base_name}")
+        return lazy
 
     def add_slice_to_list(self, slice_name):
         item = QListWidgetItem(slice_name)
@@ -942,11 +938,12 @@ class ImageController(QObject):
         self.mw.load_image_annotations()
         self.mw.update_annotation_list()
 
-        for name, qimage in self.mw.slices:
-            if name == slice_name:
-                self.mw.current_image = qimage
-                self.display_image()
-                break
+        # Lazy materialise (LRU-cached) + prefetch neighbours (issue #45).
+        qimage = self.mw.slices.get(slice_name)
+        if qimage is not None:
+            self.mw.slices.prefetch_around(slice_name)
+            self.mw.current_image = qimage
+            self.display_image()
 
         self.mw.image_label.update()
 
@@ -956,7 +953,9 @@ class ImageController(QObject):
 
     def update_slice_list(self):
         self.mw.slice_list.clear()
-        for slice_name, _ in self.mw.slices:
+        # Name-only (slice_names) — rebuilding the list must not decode pixels
+        # (issue #45).
+        for slice_name in slice_names(self.mw.slices):
             item = QListWidgetItem(slice_name)
             if slice_name in self.mw.all_annotations:
                 item.setForeground(QColor(Qt.GlobalColor.green))
@@ -1018,6 +1017,9 @@ class ImageController(QObject):
                 del self.mw.all_annotations[key]
 
             if base_name in self.mw.image_slices:
+                # Drop this stack's cached QImages before dropping the list so
+                # shared-LRU entries don't leak (issue #45).
+                release_slices(self.mw.image_slices[base_name])
                 del self.mw.image_slices[base_name]
 
             if self.mw.image_file_name == file_name:
@@ -1055,8 +1057,10 @@ class ImageController(QObject):
 
             base_name = os.path.splitext(file_name)[0]
             if base_name in self.mw.image_slices:
-                for slice_name, _ in self.mw.image_slices[base_name]:
+                stack_slices = self.mw.image_slices[base_name]
+                for slice_name in slice_names(stack_slices):
                     self.mw.all_annotations.pop(slice_name, None)
+                release_slices(stack_slices)  # evict cached QImages (issue #45)
                 del self.mw.image_slices[base_name]
 
                 self.mw.slice_list.clear()
@@ -1107,8 +1111,10 @@ class ImageController(QObject):
 
                 base_name = os.path.splitext(file_name)[0]
                 if base_name in self.mw.image_slices:
-                    for slice_name, _ in self.mw.image_slices[base_name]:
+                    stack_slices = self.mw.image_slices[base_name]
+                    for slice_name in slice_names(stack_slices):
                         self.mw.all_annotations.pop(slice_name, None)
+                    release_slices(stack_slices)  # evict cached QImages (issue #45)
                     del self.mw.image_slices[base_name]
 
                     self.mw.slice_list.clear()

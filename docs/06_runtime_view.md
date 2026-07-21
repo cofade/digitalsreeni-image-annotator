@@ -589,19 +589,19 @@ User adds TIFF stack
     │   │   │
     │   │   └─> dimension_string = "TZCHW"
     │   │
-    │   ├─> Extract slices:
+    │   ├─> Build slice index (LAZY — ADR-036/#45):
+    │   │   │
+    │   │   ├─> SliceProvider retains the source ndarray
     │   │   │
     │   │   ├─> For each T, Z, C combination:
-    │   │   │   │
-    │   │   │   ├─> Extract 2D slice
-    │   │   │   │
-    │   │   │   ├─> Convert to QImage
-    │   │   │   │
-    │   │   │   ├─> Name: "file_T0_Z5_C0"
-    │   │   │   │
-    │   │   │   └─> Store in image_slices[filename]
+    │   │   │   └─> Precompute name "file_T1_Z6_C1" + full-index
+    │   │   │       (NO pixel work, NO QImage yet)
     │   │   │
-    │   │   └─> Display first slice
+    │   │   ├─> Store LazySliceList in image_slices[filename]
+    │   │   │   (mw.slices is the SAME object)
+    │   │   │
+    │   │   └─> Display first slice (its QImage decoded on demand,
+    │   │       cached in the shared bounded LRU; prefetch ±1 on nav)
     │   │
     │   └─> Store dimension metadata
     │       (image_dimensions, image_shapes)

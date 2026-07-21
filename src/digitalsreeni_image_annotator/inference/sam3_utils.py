@@ -301,7 +301,7 @@ class SAM3Utils(QObject):
         clean = [p.strip().rstrip(".") for p in phrases if p and p.strip()]
         return clean or [name]
 
-    # ── video object tracking (issue #51, ADR-038) ─────────────────────
+    # ── video object tracking (issue #51, ADR-040; verify-first notes: ADR-038) ─────────────
 
     def track(
         self,
@@ -412,6 +412,10 @@ class SAM3Utils(QObject):
         polygon = _mask_to_polygon(mask_arr[0])
         if polygon is None:
             return None
+        # TODO(ADR-038 verify-first): defaults to fully-confident when the
+        # predictor returns no per-frame confidence. The GPU+weights run MUST
+        # confirm SAM 3 video returns per-frame conf — otherwise every frame
+        # commits as confident and the review-threshold UI is decorative.
         score = 1.0
         boxes = getattr(res, "boxes", None)
         conf = getattr(boxes, "conf", None) if boxes is not None else None

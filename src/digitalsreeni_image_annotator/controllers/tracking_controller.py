@@ -1,4 +1,4 @@
-"""SAM 3 video object-tracking coordination controller (issue #51, ADR-038).
+"""SAM 3 video object-tracking coordination controller (issue #51, ADR-040).
 
 Owns the "track a selected object across a video's frames" workflow. SAM 3's
 video predictor propagates one seeded object; this controller turns the seed
@@ -134,6 +134,9 @@ class TrackingController(QObject):
         progress.setValue(0)
         QApplication.processEvents()
 
+        # should_cancel reads QProgressDialog.wasCanceled() from the worker
+        # thread — the one tolerated cross-thread touch (a bool getter read
+        # under the GIL; the propagation is otherwise Qt-free on the worker).
         def should_cancel():
             return progress.wasCanceled()
 
@@ -180,10 +183,13 @@ class TrackingController(QObject):
             frame_name = frame_key(base_name, frame_idx)
 
             if score >= threshold:
-                self._commit_tracked_result(
+                # Only record the frame as committed if the write actually
+                # happened (unknown-class commits no-op) so _last_run["frames"]
+                # can't list frames that hold no tracked annotation.
+                if self._commit_tracked_result(
                     frame_name, polygon, score, class_name, run_id
-                )
-                committed_frames.append(frame_name)
+                ):
+                    committed_frames.append(frame_name)
             elif score > 0:
                 # Uncertain → temp-shaped result in dino_batch_results, source
                 # "sam3" so the existing review pipeline + event filter handle
@@ -234,7 +240,7 @@ class TrackingController(QObject):
         """
         if class_name not in self.mw.class_mapping:
             logger.warning("track: unknown class '%s'; skipping commit", class_name)
-            return
+            return False
 
         current_image = self.mw.current_slice or self.mw.image_file_name
         is_current = frame_name == current_image
@@ -268,6 +274,7 @@ class TrackingController(QObject):
         if is_current:
             self.mw.save_current_annotations()
             self.mw.image_label.update()
+        return True
 
     # --- undo the last run --------------------------------------------------
 
@@ -314,6 +321,9 @@ class TrackingController(QObject):
                 self.mw.all_annotations.pop(frame_name, None)
 
         self._last_run = None
+        # Drop any selection referencing a just-removed shape so no floating
+        # selection overlay is painted (mirrors _restore_snapshot).
+        self.mw.image_label.highlighted_annotations.clear()
         self.mw.update_annotation_list()
         self.mw.update_slice_list_colors()
         self.mw.update_video_timeline()

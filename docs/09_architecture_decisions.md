@@ -2045,6 +2045,10 @@ arbitrary-frame seeding + backward-propagation behaviour, and (b) long-video pre
 - ⚠️ Two ADR-038 items stay UNVERIFIED (arbitrary-frame seed/backward; long-video memory).
   `seed_idx`/`direction` are plumbed but inert until a weights run confirms the API; chunked
   propagation is the memory follow-up if needed.
+- ⚠️ The confident/uncertain split depends on the predictor returning **per-frame confidence**
+  (`_frame_result` defaults `score=1.0` when absent → everything would commit as confident and
+  the threshold UI becomes decorative). Confirming per-frame conf is an explicit GPU-verification
+  checkpoint (TODO in `_frame_result`).
 
 ---
 

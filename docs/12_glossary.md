@@ -46,7 +46,9 @@ One SAM 3 video-tracking pass (issue #51, [ADR-040](09_architecture_decisions.md
 seeds an object's mask on one frame and `TrackingController` propagates it across the video.
 Every annotation the run commits carries a shared `track_run` uuid and `source: "sam3-track"`,
 so "Undo Last Track" can remove the whole run in one action (per-frame Ctrl+Z still undoes a
-single frame).
+single frame). "Undo Last Track" is session-scoped — it targets the most recent run of the
+current session; after a project reload the `track_run` ids persist but the bulk affordance
+resets (per-frame undo still works).
 
 ### Seed Frame
 The video frame whose selected mask seeds a [Track Run](#track-run). Tracking propagates the

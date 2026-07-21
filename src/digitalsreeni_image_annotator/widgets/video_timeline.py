@@ -105,14 +105,21 @@ class _MarkerStrip(QWidget):
         - ``tracked``     → a **desaturated** highlight (same hue, muted) so a
           machine-propagated frame reads distinct from a hand-annotated one
           without introducing a hardcoded colour.
-        - ``needs_review``→ ``brightText`` (a high-contrast warning-ish role).
+        - ``needs_review``→ the accent hue rotated to a contrasting warm tone
+          (derived from ``highlight``, not a literal) so it reads distinct from
+          BOTH the annotated segments and the ``text``-coloured current-frame
+          tick (``brightText`` collides with ``text`` on dark palettes).
         """
         if state == "tracked":
             base = pal.highlight().color()
             h, s, v, a = base.getHsv()
             return QColor.fromHsv(h, int(s * 0.4), v, a)
         if state == "needs_review":
-            return pal.brightText().color()
+            base = pal.highlight().color()
+            h, s, v, a = base.getHsv()
+            # Rotate the accent hue ~150° (e.g. blue accent → warm amber) for a
+            # warning-ish tone that contrasts both other states + the tick.
+            return QColor.fromHsv((h + 150) % 360, s, v, a)
         return pal.highlight().color()
 
     def paintEvent(self, event):

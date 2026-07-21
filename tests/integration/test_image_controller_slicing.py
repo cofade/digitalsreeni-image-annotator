@@ -361,6 +361,38 @@ def test_collect_dino_batch_flattens_lazy_stack(tmp_path, window, fake_dimension
     assert all(isinstance(img, QImage) for _, img in items)
 
 
+def test_open_images_releases_previous_stack(
+    tmp_path, window, fake_dimension_dialog, monkeypatch
+):
+    """open_images replaces the dataset: the previously-open stack's cached
+    QImages AND its retained source array (the whole LazySliceList) must be
+    dropped, not merely unaliased. Under Strategy A that array can be GBs, so a
+    bare ``mw.slices = []`` would leak the outgoing stack for the session (#45).
+    """
+    from PyQt6.QtWidgets import QFileDialog
+
+    path, _ = make_tiff(tmp_path, "stack3d.tif", (4, 8, 6), axes="ZYX")
+    window.image_controller.load_tiff(path)
+    lazy = window.image_slices["stack3d"]
+    old_pid = lazy.provider_id
+    lazy.get(lazy.names[0])  # prime the LRU with one entry
+    assert get_shared_lru().count_prefix(old_pid) > 0
+
+    # Open a fresh, unrelated regular image via the (monkeypatched) dialog.
+    png = tmp_path / "plain.png"
+    img = QImage(4, 4, QImage.Format.Format_RGB888)
+    img.fill(Qt.GlobalColor.gray)
+    img.save(str(png))
+    monkeypatch.setattr(
+        QFileDialog, "getOpenFileNames",
+        staticmethod(lambda *a, **k: ([str(png)], "")),
+    )
+    window.image_controller.open_images()
+
+    assert "stack3d" not in window.image_slices  # outgoing stack dropped
+    assert get_shared_lru().count_prefix(old_pid) == 0  # its LRU entries gone
+
+
 def test_deleting_stack_evicts_lru(tmp_path, window, fake_dimension_dialog, no_native_dialogs):
     """Deleting a stack drops every one of its cached QImages from the shared
     LRU (no stale entries keyed by a soon-to-be-recycled provider id)."""

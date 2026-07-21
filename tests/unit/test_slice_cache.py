@@ -195,6 +195,28 @@ class TestPixelEquivalence:
             for x in range(eager.width()):
                 assert got.pixel(x, y) == eager.pixel(x, y)
 
+    def test_5d_tzcyx_slice_matches_eager_pipeline(self, clean_lru, qt_application):
+        # Pixel-equality on the 5D dimension order that shipped the historical
+        # [-ndim:] axis-slice bug, so byte-identity is proven, not just argued.
+        rng = np.random.RandomState(2)
+        arr = (rng.rand(2, 3, 2, 8, 6) * 65535).astype(np.uint16)
+        dims = ["T", "Z", "C", "H", "W"]
+        provider = SliceProvider(arr, dims, "vol")
+        lazy = LazySliceList(provider)
+
+        # A mid-stack slice: T2_Z2_C1 -> array indices [1, 1, 0].
+        name = "vol_T2_Z2_C1"
+        assert name in lazy.names
+        got = lazy.get(name)
+        eager_rgb = image_utils.convert_to_8bit_rgb(arr[1, 1, 0])
+        eager = image_utils.array_to_qimage(eager_rgb)
+
+        assert got.format() == eager.format() == QImage.Format.Format_RGB888
+        assert (got.width(), got.height()) == (eager.width(), eager.height())
+        for y in range(eager.height()):
+            for x in range(eager.width()):
+                assert got.pixel(x, y) == eager.pixel(x, y)
+
     def test_2d_slice_matches_grayscale_pipeline(self, clean_lru, qt_application):
         rng = np.random.RandomState(1)
         arr = (rng.rand(8, 6) * 65535).astype(np.uint16)

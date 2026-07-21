@@ -1796,7 +1796,9 @@ demand):
   all-QImages-in-RAM cost and the create-time peak are eliminated regardless.
 - ⚠️ The LRU keys on `id(provider)`; providers are `release()`d before being replaced
   or deleted and `clear_all` wipes the cache, so a recycled `id()` cannot alias a stale
-  QImage.
+  QImage. Every dataset-replacing path (`remove_image`/`delete_selected_image`/
+  `redefine_dimensions`/`open_images`/`clear_all`) drops the outgoing `image_slices`
+  entries + their LRU cache so the retained source array cannot leak for the session.
 - Feeds issue #47: video frames reuse the same lazy-slice contract (`None`-payload
   frames resolved on demand) rather than introducing a parallel cache.
 

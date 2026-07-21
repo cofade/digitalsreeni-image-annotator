@@ -828,9 +828,12 @@ critical distinction for anyone touching slice code:
   DINO batch iterate via `__iter__` (which feeds/evicts the LRU). A batch export still
   transiently collects a stack's QImages into its own `slice_map` — that is an accepted
   per-operation cost; the SESSION memory is what the LRU bounds.
-- **Deletion must release.** `remove_image`/`delete_selected_image`/`redefine_dimensions`
-  call `slice_cache.release_slices(...)` (or the list's `release()`) before dropping the
-  stack, so LRU entries don't linger; `clear_all` clears the whole shared cache.
+- **Every "drop a stack" path must release.** `remove_image`/`delete_selected_image`/
+  `redefine_dimensions` call `slice_cache.release_slices(...)` before dropping the stack;
+  `open_images` (which replaces the whole dataset) and `clear_all` clear the entire shared
+  LRU **and** `image_slices` — because a `LazySliceList` pins its whole decoded source
+  array under Strategy A, merely rebinding `mw.slices = []` would leak the outgoing stack
+  for the session.
 - `mw.slices` and `image_slices[base]` are the **same** `LazySliceList` object, and
   slice naming is byte-identical to the old eager path (it is the annotation key +
   export filename). Extraction returns a fresh QImage each call — never mutate a cached

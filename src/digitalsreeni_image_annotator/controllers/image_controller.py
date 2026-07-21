@@ -393,8 +393,16 @@ class ImageController(QObject):
             self.mw.image_paths.clear()
             self.mw.all_images.clear()
             self.mw.slice_list.clear()
-            # Reassign (not .clear()) — mw.slices may be a LazySliceList,
-            # which has no .clear() (issue #45).
+            # Drop the outgoing stacks' cached QImages AND their retained
+            # source arrays: image_slices is being replaced wholesale, so wipe
+            # the shared slice LRU and clear image_slices. Under Strategy A a
+            # LazySliceList pins its whole decoded ndarray, so merely
+            # rebinding mw.slices = [] (mw.slices is no longer the same object
+            # as image_slices[base]) would leak every previously-open stack for
+            # the session. Mirrors clear_all (issue #45).
+            from ..core.slice_cache import get_shared_lru
+            get_shared_lru().clear()
+            self.mw.image_slices.clear()
             self.mw.slices = []
             self.mw.current_stack = None
             self.mw.current_slice = None

@@ -1862,6 +1862,93 @@ lazy-slice machinery** rather than a parallel frame cache (the #45/#47 reconcili
 
 ---
 
+## ADR-038: SAM 3 Integration Path (Spike — #49)
+
+**Status**: Proposed (issue #49 spike; to be flipped to Accepted + amended by the D2/#50 PR)
+
+**Context**: Milestone D plans two SAM 3 features — native text-prompt segmentation reusing the DINO
+review workflow (#50) and video object tracking (#51). Both hinge on facts that were unverified when
+the milestone was scoped: whether SAM 3 is consumable through Ultralytics (ADR-002), the exact
+text/video APIs, model sizes, licensing and minimum dependency versions. This ADR records the spike
+findings. Every claim carries a dated source; the environment was probed directly (`pip show
+ultralytics`, an import smoke) rather than trusting docs.
+
+**Findings (checked 2026-07-21):**
+
+1. **Distribution** — SAM 3 (Meta, released 2025-11-20; "Promptable Concept Segmentation") is **fully
+   integrated into Ultralytics as of v8.3.237** (PR ultralytics#22897; discussion #22378). This
+   **upholds ADR-002** — Ultralytics stays the integration layer; no `facebookresearch/sam3` vendor
+   dependency is needed. This dev environment already has `ultralytics 8.4.51`, `torch 2.11.0+cu128`,
+   and `from ultralytics.models.sam import SAM3SemanticPredictor` imports successfully.
+2. **Text-prompt image API** — `SAM3SemanticPredictor(overrides=dict(model="sam3.pt", task="segment",
+   conf=0.25))`; `predictor.set_image(img)`; `results = predictor(text=["person", "bus"])` (a list of noun
+   phrases). Returns a Results object with `.masks` and `.boxes` (numpy via `.cpu().numpy()`; boxes carry
+   confidence). Image-exemplar prompting via `predictor(bboxes=[[x1,y1,x2,y2]])`; feature reuse via
+   `inference_features(features, src_shape=..., text=[...])`. **Confidence is the single knob (`conf`)** —
+   our DINO UI's per-class box/txt/nms thresholds map only to `conf` (reuse `box_thr` as the confidence
+   filter; txt/nms have no SAM 3 equivalent). SAM 2-style visual prompts:
+   `SAM("sam3.pt").predict(source, points=..., bboxes=...)`.
+   **Correction (probed in ultralytics 8.4.51):** the published Ultralytics docs example also passes
+   `quantize=16` and `mode="predict"`; `get_cfg(overrides=dict(..., quantize=16))` **raises**
+   `'quantize' is not a valid YOLO argument`, and `mode` is redundant for a predictor — **D2 must omit
+   both**. This is why the spike probes the environment instead of trusting the docs verbatim.
+3. **Video tracking API** — `SAM3VideoPredictor` (visual: box/point/mask) and `SAM3VideoSemanticPredictor`
+   (text). `predictor(source="video.mp4", bboxes=[[...]], stream=True)` yields **one Results per frame** in
+   file order; `stream=True` is a frame-by-frame generator, omitting it processes the whole video. Docs seed
+   from a **file path**; whether the predictor accepts incrementally-supplied numpy frames (our C1
+   `VideoHandler` decodes on demand) is **UNRESOLVED** — resolve by testing on a GPU box before D3 commits
+   to feeding frames vs. a path. **Backward propagation is not explicitly documented**; the predictor
+   propagates automatically from the seed, so D3 should treat backward as "feed frames in reverse index
+   order" and verify (this is an inference from the streaming-forward API, **not confirmed** without weights).
+   **Long-video predictor memory behaviour is UNRESOLVED** and is D3's verify-first item
+   (measure RSS over 500+ frames; decide whole-video vs chunked).
+4. **Models & download** — `sam3.pt` is **3.45 GB, 473.6M params** (per the Ultralytics SAM 3 docs
+   model table, docs.ultralytics.com/models/sam-3/). It is **NOT auto-downloaded**: the user
+   must request access on the gated HF page `facebook/sam3`, accept Meta's terms, and download/place it
+   manually (or pass a full path). Mirror our DINO gated-download UX + a clear status message. A CLIP
+   dependency quirk may require `pip install git+https://github.com/ultralytics/CLIP.git`.
+5. **License** — code + weights are under Meta's **custom “SAM License”** (NOT MIT/Apache/GPL, NOT
+   OSI-“open source”). Permits research **and** commercial use with restrictions: no military/ITAR use, obey
+   sanctions, no reverse-engineering; a **patent-retaliation clause** (sue over SAM 3 patents → license
+   terminates); **redistributed weights/derivatives must stay under the SAM License**. Consequence: **we
+   must NOT vendor or redistribute `sam3.pt`** — users accept Meta's terms and download it themselves (same
+   posture as our gated DINO/HF models). Source: https://huggingface.co/facebook/sam3/blob/main/LICENSE.
+6. **Minimum versions** — **ultralytics >= 8.3.237** (per the Ultralytics SAM 3 docs; our floor is
+   `>=8.3.27,<9`; #50 must raise it to `>=8.3.237,<9`). **Caveat**: the installed 8.4.51 only proves
+   `>= 8.3.237`, not that 8.3.237 was the *first* integrated version — **D2 must independently re-confirm
+   the exact first-integrated release before pinning the floor** (check the Ultralytics changelog/release
+   notes). Python/torch/torchvision minima are not separately pinned by the SAM 3 docs; our installed torch
+   2.11 + Python 3.10+ floor satisfy it (verified by the successful import). No conflict with the
+   #38-reconciled `<9` upper bound.
+7. **CPU fallback** — GPU latency ~30 ms/image on an H200 at 100+ objects. **CPU is not documented and is
+   impractical** given 3.45 GB / 473.6M params. Recommendation: document SAM 3 as **GPU-recommended**; keep
+   the Grounding-DINO two-stage pipeline as the CPU fallback (D2 keeps DINO selectable).
+8. **Decision for D2 (#50)** — Mirror `SAMUtils` via Ultralytics: a new `inference/sam3_utils.py` wrapping
+   `SAM3SemanticPredictor`, reusing `sam_utils._run_sync` / `_qimage_to_numpy` / `_mask_to_polygon`
+   (the shared `_inference_in_flight` flag then serialises SAM 3 against SAM 2/DINO — desirable). New
+   packaging entries: raise `ultralytics` floor to `>=8.3.237,<9`; document the gated `sam3.pt` weights
+   and the CLIP quirk. Real end-to-end model verification requires a GPU + approved weights (cannot run in
+   CI or a dev box without the gated weights) — stubbed/monkeypatched tests cover the wiring; the real-model
+   check is a documented manual step (CLAUDE.md inference checklist).
+
+**Go/no-go for D3 (#51)**: GO on the API surface (SAM3VideoPredictor exists, streaming per-frame results,
+seed-then-propagate), with two verify-first gates carried into D3: (a) numpy-frame vs file-path seeding,
+(b) long-video predictor memory → whole-video vs chunked. Both are measured in the D3 branch before
+building on them.
+
+**Consequences**:
+- ✅ D2/#50 and D3/#51 are unblocked with a concrete integration route, API names, versions and license.
+- ✅ ADR-002 (Ultralytics for SAM) is upheld, not superseded — no new backend dependency.
+- ⚠️ The weights are gated + non-redistributable (SAM License) and large (3.45 GB); CPU is impractical.
+  These become the D2/D3 UX constraints (gated download, GPU-recommended, DINO fallback for CPU).
+- ⚠️ Two D3 facts remain UNRESOLVED (numpy-frame seeding; long-video memory) and are its verify-first items.
+
+**Sources** (dated 2026-07-21): docs.ultralytics.com/models/sam-3/ ; github.com/ultralytics/ultralytics
+docs/en/models/sam-3.md ; newreleases.io … ultralytics v8.3.237 ; huggingface.co/facebook/sam3 (gated) +
+/blob/main/LICENSE ; github.com/orgs/ultralytics/discussions/22378 ; local `pip show ultralytics` (8.4.51).
+
+---
+
 ## Decisions Under Consideration
 
 ### Consider Relative Paths with Image Copying

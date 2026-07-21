@@ -388,6 +388,31 @@ mutation.
 
 ---
 
+## SAM 3 Dependency & Licensing Constraints (Milestone D, ADR-038)
+
+**Risk Level**: Medium (forward-looking; applies once #50/#51 ship)
+
+**Description**: The SAM 3 spike (#49, ADR-038) confirmed SAM 3 is consumable via Ultralytics
+(>=8.3.237) but with three material constraints:
+
+- **Non-redistributable, gated weights**: `sam3.pt` (3.45 GB) is under Meta's custom **SAM License**
+  (not OSI open-source) and is access-gated on Hugging Face. We must **not** vendor or ship the
+  weights; users request access, accept Meta's terms, and download them (same posture as gated DINO
+  models). Redistributed weights/derivatives must stay under the SAM License; a patent-retaliation
+  clause applies.
+- **CPU impractical**: no documented CPU path; 3.45 GB / 473.6M params make CPU inference infeasible.
+  SAM 3 is GPU-recommended; the Grounding-DINO two-stage pipeline remains the CPU fallback.
+- **Version floor bump**: `ultralytics` floor rises to `>=8.3.237,<9` for #50; a CLIP dependency quirk
+  may require `pip install git+https://github.com/ultralytics/CLIP.git`.
+
+**Mitigation**: Lazy-load SAM 3 (ADR-012) so older installs still launch; keep DINO selectable for CPU
+users; surface a clear gated-download status message; document the manual weight step. Two D3 facts
+(numpy-frame seeding, long-video predictor memory) remain unresolved and are #51's verify-first items.
+
+**Priority**: Tracked in ADR-038; addressed by #50/#51.
+
+---
+
 ## Security Considerations
 
 ### No Input Validation on JSON Loading

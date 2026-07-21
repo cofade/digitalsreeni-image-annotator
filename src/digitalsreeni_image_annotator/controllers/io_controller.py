@@ -414,30 +414,15 @@ def export_annotated_frames(mw):
     """
     from ..core.video_handler import frame_key
 
-    current_item = mw.image_list.currentItem()
-    info = None
-    if current_item is not None:
-        info = next(
-            (img for img in mw.all_images if img["file_name"] == current_item.text()),
-            None,
-        )
-    if not (info and info.get("is_video")):
+    video = mw.image_controller.current_video()
+    if video is None:
         QMessageBox.information(
             mw,
             "Export Annotated Frames",
             "Open a video and select it first, then export its annotated frames.",
         )
         return
-
-    base_name = os.path.splitext(info["file_name"])[0]
-    handler = mw.video_handlers.get(base_name)
-    if handler is None:
-        QMessageBox.information(
-            mw,
-            "Export Annotated Frames",
-            "No video handler is loaded for the selected image.",
-        )
-        return
+    base_name, handler, _info = video
 
     directory = QFileDialog.getExistingDirectory(
         mw, "Select Output Directory for Annotated Frames"
@@ -450,20 +435,29 @@ def export_annotated_frames(mw):
 
     indices = sorted(mw.image_controller.annotated_frame_indices(base_name))
     written = 0
+    failed = 0
     for idx in indices:
         qimage = handler.get_frame(idx)  # one frame at a time (lazy, #47)
-        if qimage is not None:
-            qimage.save(
-                os.path.join(directory, f"{frame_key(base_name, idx)}.png"), "PNG"
-            )
+        # Count a frame as failed if it can't be decoded OR the PNG write
+        # fails (qimage.save returns False), so the summary can't claim
+        # success for a frame that silently vanished.
+        if qimage is not None and qimage.save(
+            os.path.join(directory, f"{frame_key(base_name, idx)}.png"), "PNG"
+        ):
             written += 1
+        else:
+            failed += 1
 
-    QMessageBox.information(
-        mw,
-        "Export Complete",
+    message = (
         f"{written} annotated frame{'' if written == 1 else 's'} "
-        f"written to:\n{directory}",
+        f"written to:\n{directory}"
     )
+    if failed:
+        message += (
+            f"\n\n{failed} frame{'' if failed == 1 else 's'} could not be "
+            "decoded or written."
+        )
+    QMessageBox.information(mw, "Export Complete", message)
 
 
 def save_slices(mw, directory):

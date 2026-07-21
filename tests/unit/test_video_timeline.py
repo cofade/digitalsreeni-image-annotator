@@ -24,6 +24,24 @@ def test_set_video_configures_slider_range(timeline):
     assert timeline.slider.maximum() == 99
 
 
+def test_set_video_clamp_does_not_emit(qt_application):
+    # THE feedback-loop invariant: set_video reconfigures the range, and if a
+    # smaller total clamps a non-zero slider value Qt fires valueChanged. The
+    # _updating guard must swallow it, or reconfiguring the timeline on an
+    # annotation mutation would spuriously emit frameSelected -> switch_slice
+    # -> jump to frame 0.
+    from digitalsreeni_image_annotator.widgets.video_timeline import VideoTimeline
+
+    tl = VideoTimeline()
+    tl.set_video(100, 25.0)
+    tl.set_current_frame(80)          # slider now at 80
+    emitted = []
+    tl.frameSelected.connect(emitted.append)
+    tl.set_video(10, 25.0)            # setMaximum(9) clamps 80 -> 9 (valueChanged)
+    assert emitted == []              # guard swallowed the clamp emission
+    tl.deleteLater()
+
+
 def test_set_current_frame_does_not_emit(timeline):
     """Programmatic sync (from switch_slice) must NOT emit frameSelected —
     otherwise it re-enters switch_slice (feedback loop)."""

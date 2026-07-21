@@ -9,9 +9,13 @@ pure VIEW — it never changes any frame itself. User interaction emits
 ``set_current_frame`` (which must NOT re-emit ``frameSelected``, or it would
 re-enter ``switch_slice``).
 
-Colours come exclusively from the widget PALETTE (``highlight`` / ``mid`` /
-``text``), never colour literals, so the marks stay visible in both the light
-and soft-dark themes (No Hardcoded Colors Rule, CLAUDE.md).
+Colours come from the widget PALETTE (``highlight`` / ``mid`` / ``text``), never
+colour literals (No Hardcoded Colors Rule, CLAUDE.md). Note the app themes via a
+QSS stylesheet and never calls ``setPalette``, so ``highlight``/``mid`` resolve
+to the *static default* palette (a saturated accent + mid-grey that both read on
+the light and soft-dark backgrounds), while the ``text`` role — used for the
+high-contrast current-frame tick — does follow the stylesheet's ``color`` rule.
+The marks are legible in both themes; the current tick additionally tracks it.
 
 A follow-up (issue #51) may extend ``set_annotated_frames`` to carry per-frame
 states (e.g. reviewed vs. auto-accepted) — kept deliberately simple here.

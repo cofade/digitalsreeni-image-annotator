@@ -84,6 +84,30 @@ def test_annotating_a_frame_lights_its_mark(
     assert 2 in window.video_timeline.annotated_frames
 
 
+def test_annotation_refresh_does_not_emit_frame_selected(
+    window, make_test_video, tmp_path, no_native_dialogs
+):
+    """An annotation mutation refreshes the timeline (update_slice_list_colors ->
+    update_video_timeline -> set_video + set_current_frame) but must NOT emit
+    frameSelected, which would re-enter switch_slice and jump the frame."""
+    n = _load_video(window, make_test_video, tmp_path)
+    assert n >= 4
+    window.add_class("cell", QColor("#ff0000"))
+    window.image_controller.switch_slice(window.slice_list.item(3))
+    assert window.current_slice.endswith("_F00003")
+
+    emitted = []
+    window.video_timeline.frameSelected.connect(emitted.append)
+    # Real mutation path: annotate + save routes through update_slice_list_colors,
+    # which is the timeline-refresh hook.
+    window.image_label.annotations = {"cell": [dict(POLY)]}
+    window.save_current_annotations()
+
+    assert emitted == []                             # no feedback loop
+    assert window.current_slice.endswith("_F00003")  # frame unchanged
+    assert 3 in window.video_timeline.annotated_frames
+
+
 def test_timeline_hidden_for_plain_image(
     window, make_test_video, tmp_path, no_native_dialogs
 ):

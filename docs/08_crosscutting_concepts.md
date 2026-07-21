@@ -883,8 +883,12 @@ only. It is a **view**, never a second source of truth for the current frame:
   `parse_frame_index`, exact) and refreshed at the `update_slice_list_colors`
   choke point — the same hook the slice list uses — so they stay correct after
   every save/accept/undo/delete without a frame switch.
-- **Palette-only colours** (`highlight`/`mid`/`text`) so ticks read in both
-  themes; the slider has `NoFocus` so it never swallows arrow-key slice nav.
+- **Palette-derived colours** (`highlight`/`mid`/`text`), no literals. The app
+  themes via QSS (no `setPalette`), so `highlight`/`mid` are effectively the
+  static default palette — chosen because a saturated accent + mid-grey both
+  read on the light and soft-dark backgrounds — while the `text` role (the
+  high-contrast current-frame tick) does follow the stylesheet. The slider has
+  `NoFocus` so it never swallows arrow-key slice nav.
 
 ## Image List Groups & Status Badges (issue #43)
 

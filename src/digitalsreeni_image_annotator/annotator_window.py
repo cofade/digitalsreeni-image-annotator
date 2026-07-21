@@ -418,15 +418,8 @@ class ImageAnnotator(QMainWindow):
         return self.image_controller.update_video_timeline()
 
     def _current_image_is_video(self):
-        """True if the currently-selected image is a video (issue #48)."""
-        item = self.image_list.currentItem()
-        if item is None:
-            return False
-        info = next(
-            (img for img in self.all_images if img["file_name"] == item.text()),
-            None,
-        )
-        return bool(info and info.get("is_video"))
+        """True if the currently-selected image is a loaded video (issue #48)."""
+        return self.image_controller.current_video() is not None
 
     def adjust_zoom_to_fit(self):
         if not self.current_image:

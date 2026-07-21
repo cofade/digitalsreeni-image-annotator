@@ -616,6 +616,29 @@ class ImageController(QObject):
                     out.add(idx)
         return out
 
+    def current_video(self):
+        """``(base_name, handler, info)`` if the active image is a loaded video,
+        else ``None`` (issue #48).
+
+        Single source of truth for the ``currentItem → is_video → handler``
+        resolution shared by the timeline sync, Home/End nav and frame export,
+        so those three call sites can't drift.
+        """
+        item = self.mw.image_list.currentItem()
+        if item is None:
+            return None
+        info = next(
+            (img for img in self.mw.all_images if img["file_name"] == item.text()),
+            None,
+        )
+        if not (info and info.get("is_video")):
+            return None
+        base_name = os.path.splitext(info["file_name"])[0]
+        handler = self.mw.video_handlers.get(base_name)
+        if handler is None:
+            return None
+        return base_name, handler, info
+
     def update_video_timeline(self):
         """Sync the video timeline widget to the active image (issue #48).
 
@@ -630,28 +653,17 @@ class ImageController(QObject):
         if timeline is None:
             return
 
-        current_item = self.mw.image_list.currentItem()
-        info = None
-        if current_item is not None:
-            file_name = current_item.text()
-            info = next(
-                (img for img in self.mw.all_images if img["file_name"] == file_name),
-                None,
-            )
-
-        if info and info.get("is_video"):
-            base_name = os.path.splitext(info["file_name"])[0]
-            handler = self.mw.video_handlers.get(base_name)
-            if handler is not None:
-                timeline.set_video(handler.total_frames, handler.fps)
-                idx = parse_frame_index(self.mw.current_slice or "")
-                if idx is not None:
-                    timeline.set_current_frame(idx)
-                timeline.set_annotated_frames(self.annotated_frame_indices(base_name))
-                timeline.setVisible(True)
-                return
-
-        timeline.setVisible(False)
+        video = self.current_video()
+        if video is not None:
+            base_name, handler, _info = video
+            timeline.set_video(handler.total_frames, handler.fps)
+            idx = parse_frame_index(self.mw.current_slice or "")
+            if idx is not None:
+                timeline.set_current_frame(idx)
+            timeline.set_annotated_frames(self.annotated_frame_indices(base_name))
+            timeline.setVisible(True)
+        else:
+            timeline.setVisible(False)
 
     def update_all_images(self, new_image_info):
         for info in new_image_info:

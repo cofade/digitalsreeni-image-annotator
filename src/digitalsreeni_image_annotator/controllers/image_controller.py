@@ -45,6 +45,7 @@ from ..core import image_utils
 from ..core.slice_cache import (
     LazySliceList,
     SliceProvider,
+    get_shared_lru,
     release_slices,
     slice_names,
 )
@@ -400,7 +401,6 @@ class ImageController(QObject):
             # rebinding mw.slices = [] (mw.slices is no longer the same object
             # as image_slices[base]) would leak every previously-open stack for
             # the session. Mirrors clear_all (issue #45).
-            from ..core.slice_cache import get_shared_lru
             get_shared_lru().clear()
             self.mw.image_slices.clear()
             self.mw.slices = []

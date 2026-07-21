@@ -52,7 +52,9 @@ from ..core.slice_cache import (
 from ..core.video_handler import (
     VideoHandler,
     VideoSliceProvider,
+    file_dialog_filter,
     is_video,
+    parse_frame_index,
 )
 
 from ..core.logging_config import get_logger
@@ -389,10 +391,7 @@ class ImageController(QObject):
 
     def open_images(self):
         file_names, _ = QFileDialog.getOpenFileNames(
-            self.mw,
-            "Open Images",
-            "",
-            "Image Files (*.png *.jpg *.bmp *.tif *.tiff *.czi *.mp4 *.avi *.mov)",
+            self.mw, "Open Images or Videos", "", file_dialog_filter()
         )
         if file_names:
             self.mw.image_list.clear()
@@ -597,6 +596,72 @@ class ImageController(QObject):
 
         logger.info(f"Loaded video {base_name}: {handler.total_frames} frames")
         return lazy
+
+    def annotated_frame_indices(self, base_name):
+        """Frame indices of ``base_name`` (a video) that carry annotations.
+
+        A frame is annotated if ``all_annotations[frame_key]`` is non-empty and
+        holds at least one non-empty class list. Prefix-match ``base + "_F"``
+        and parse the exact index (a bare ``base + "_"`` would also swallow
+        multi-dim slice keys) — see issue #48.
+        """
+        prefix = base_name + "_F"
+        out = set()
+        for key, by_class in self.mw.all_annotations.items():
+            if key.startswith(prefix) and by_class and any(by_class.values()):
+                idx = parse_frame_index(key)
+                if idx is not None:
+                    out.add(idx)
+        return out
+
+    def current_video(self):
+        """``(base_name, handler, info)`` if the active image is a loaded video,
+        else ``None`` (issue #48).
+
+        Single source of truth for the ``currentItem → is_video → handler``
+        resolution shared by the timeline sync, Home/End nav and frame export,
+        so those three call sites can't drift.
+        """
+        item = self.mw.image_list.currentItem()
+        if item is None:
+            return None
+        info = next(
+            (img for img in self.mw.all_images if img["file_name"] == item.text()),
+            None,
+        )
+        if not (info and info.get("is_video")):
+            return None
+        base_name = os.path.splitext(info["file_name"])[0]
+        handler = self.mw.video_handlers.get(base_name)
+        if handler is None:
+            return None
+        return base_name, handler, info
+
+    def update_video_timeline(self):
+        """Sync the video timeline widget to the active image (issue #48).
+
+        Shows + configures the timeline when the active image is a video,
+        otherwise hides it. The timeline is a pure VIEW: it never changes the
+        frame itself (user scrubs route back through ``switch_slice`` via
+        ``on_timeline_frame_selected``). Called after every frame switch and at
+        the end of ``update_slice_list_colors`` so annotation marks stay current
+        without a frame change.
+        """
+        timeline = getattr(self.mw, "video_timeline", None)
+        if timeline is None:
+            return
+
+        video = self.current_video()
+        if video is not None:
+            base_name, handler, _info = video
+            timeline.set_video(handler.total_frames, handler.fps)
+            idx = parse_frame_index(self.mw.current_slice or "")
+            if idx is not None:
+                timeline.set_current_frame(idx)
+            timeline.set_annotated_frames(self.annotated_frame_indices(base_name))
+            timeline.setVisible(True)
+        else:
+            timeline.setVisible(False)
 
     def update_all_images(self, new_image_info):
         for info in new_image_info:

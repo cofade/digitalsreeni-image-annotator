@@ -151,6 +151,10 @@ def build_menu_bar(window):
     dicom_converter_action.triggered.connect(window.show_dicom_converter)
     tools_menu.addAction(dicom_converter_action)
 
+    export_frames_action = QAction("Export Annotated Video Frames…", window)
+    export_frames_action.triggered.connect(window.export_annotated_frames)
+    tools_menu.addAction(export_frames_action)
+
     tools_menu.addSeparator()
 
     unload_models_action = QAction("Unload AI Models (Free GPU Memory)", window)

@@ -361,11 +361,10 @@ class ProjectController(QObject):
             self.load_missing_images(missing_images)
 
     def load_missing_images(self, missing_images):
+        from ..core.video_handler import file_dialog_filter
+
         files, _ = QFileDialog.getOpenFileNames(
-            self.mw,
-            "Select Missing Images",
-            "",
-            "Image Files (*.png *.jpg *.bmp *.tif *.tiff *.czi *.mp4 *.avi *.mov)",
+            self.mw, "Select Missing Images or Videos", "", file_dialog_filter()
         )
         if files:
             images_loaded = 0

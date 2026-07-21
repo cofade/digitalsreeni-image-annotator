@@ -405,6 +405,61 @@ def export_annotations(mw):
     QMessageBox.information(mw, "Export Complete", message)
 
 
+def export_annotated_frames(mw):
+    """Save each annotated frame of the current video as a PNG (issue #48).
+
+    Requires a video to be the active image. Decodes ONE frame at a time via
+    the ``VideoHandler`` (the issue-#47 lazy fetch — never bulk pre-extracts)
+    and writes each under its frame key, e.g. ``clip_F00003.png``.
+    """
+    from ..core.video_handler import frame_key
+
+    video = mw.image_controller.current_video()
+    if video is None:
+        QMessageBox.information(
+            mw,
+            "Export Annotated Frames",
+            "Open a video and select it first, then export its annotated frames.",
+        )
+        return
+    base_name, handler, _info = video
+
+    directory = QFileDialog.getExistingDirectory(
+        mw, "Select Output Directory for Annotated Frames"
+    )
+    if not directory:
+        return
+
+    # Flush the current frame's in-progress annotations so it's counted.
+    mw.save_current_annotations()
+
+    indices = sorted(mw.image_controller.annotated_frame_indices(base_name))
+    written = 0
+    failed = 0
+    for idx in indices:
+        qimage = handler.get_frame(idx)  # one frame at a time (lazy, #47)
+        # Count a frame as failed if it can't be decoded OR the PNG write
+        # fails (qimage.save returns False), so the summary can't claim
+        # success for a frame that silently vanished.
+        if qimage is not None and qimage.save(
+            os.path.join(directory, f"{frame_key(base_name, idx)}.png"), "PNG"
+        ):
+            written += 1
+        else:
+            failed += 1
+
+    message = (
+        f"{written} annotated frame{'' if written == 1 else 's'} "
+        f"written to:\n{directory}"
+    )
+    if failed:
+        message += (
+            f"\n\n{failed} frame{'' if failed == 1 else 's'} could not be "
+            "decoded or written."
+        )
+    QMessageBox.information(mw, "Export Complete", message)
+
+
 def save_slices(mw, directory):
     # Decode ONLY the annotated slices (issue #45): iterate names first (no
     # pixel work) and materialise a slice's QImage only when it has

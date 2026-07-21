@@ -57,6 +57,7 @@ src/digitalsreeni_image_annotator/
 │   ├── canvas_renderer.py        # CanvasRenderer painting/overlays (ADR-034)
 │   ├── edit_gestures.py          # EditGestures + pure fns: #40/#35 handles (ADR-034)
 │   ├── canvas_context.py         # CanvasContext read accessor (ADR-018)
+│   ├── video_timeline.py         # VideoTimeline scrub bar + frame markers (#48)
 │   └── tools/                    # Per-tool handlers (ADR-019): rectangle,
 │                                 #   polygon, paint, eraser
 ├── inference/                    # sam_utils.py, dino_utils.py
@@ -277,6 +278,7 @@ See [Risks and Technical Debt](docs/11_risks_and_technical_debt.md) for full lis
 | Backspace (keypoint tool) | Remove the last placed keypoint |
 | Right-click a selected pose's point | Toggle its visibility (visible ↔ occluded) |
 | Up/Down | Navigate slices |
+| Home/End (video) | Jump to first/last frame (#48) |
 | -/= | Brush size |
 
 ## Quick Tips

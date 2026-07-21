@@ -124,7 +124,7 @@ digitalsreeni-image-annotator      # or:  sreeni      # or:  python -m digitalsr
 Golden path:
 
 1. **New Project** (Ctrl+N).
-2. **Add New Images** — including TIFF stacks and CZI files.
+2. **Add Images / Videos** — images (including TIFF stacks and CZI files) or videos (MP4/AVI/MOV).
 3. **Add a class** and pick its colour.
 4. **Annotate** — draw manually, or pick a SAM model and use **SAM-box** /
    **SAM-points** (Enter accepts the mask, Esc discards it). For text prompts,

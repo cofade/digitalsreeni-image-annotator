@@ -571,7 +571,7 @@ offered once the project is disk-backed.
 
 ## Video Loading (issue #47, ADR-037)
 
-1. User adds `clip.mp4` (or `.avi`/`.mov`) via Add New Images / Open Images.
+1. User adds `clip.mp4` (or `.avi`/`.mov`) via Add Images / Videos / Open Images.
 2. `add_images_to_list` detects the video extension (`is_video`) and calls
    `ImageController.load_video(path)`:
    - `VideoHandler(path)` opens the capture and reads metadata once
@@ -591,6 +591,16 @@ offered once the project is disk-backed.
 5. Save writes `is_video`/`video_metadata` + per-frame annotations (no pixels);
    load branches to `load_video`. A missing video flows through the existing
    missing-images prompt.
+6. **Timeline (issue #48):** for a video, `ImageController.update_video_timeline`
+   shows `window.video_timeline` (a scrub slider + `F i/N • MM:SS / MM:SS`
+   label + a marker strip ticking every annotated frame). Scrubbing emits
+   `frameSelected(idx)` → `on_timeline_frame_selected` → `switch_slice`
+   (never a direct `current_image` write); `set_current_frame` re-syncs the
+   slider WITHOUT re-emitting. Marks refresh from `annotated_frame_indices`
+   at the `update_slice_list_colors` choke point, so they update live on
+   annotate/delete/undo/accept. `Home`/`End` jump to the first/last frame.
+   "Tools → Export Annotated Video Frames…" writes one `{frame_key}.png`
+   per annotated frame, decoding one frame at a time via `VideoHandler`.
 
 ## Multi-dimensional Image Loading
 

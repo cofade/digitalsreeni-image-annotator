@@ -1804,6 +1804,61 @@ demand):
 
 ---
 
+## ADR-037: Video Frames as Multi-dimensional Slices (Lazy, Keyed `_F#####`, Reusing LazySliceList)
+
+**Status**: Accepted (issue #47)
+
+**Context**: Video annotation is the next platform feature. The app already handles
+"one file, many annotatable 2D planes" for multi-dim TIFF/CZI stacks — per-slice
+annotation storage, a slice list, Up/Down navigation, per-slice colour, save/load and
+export all key on a slice *name*. The cheapest correct design is to treat a video frame
+exactly like a stack slice. The one thing frames must NOT inherit is eager loading: a
+300-frame 1080p clip is ~1.8 GB of QImages.
+
+**Decision**: Model a video as a stack whose slices are frames, and **reuse the #45
+lazy-slice machinery** rather than a parallel frame cache (the #45/#47 reconciliation):
+- `core/video_handler.py::VideoHandler` wraps `cv2.VideoCapture` — metadata read once,
+  `get_frame(idx)` seeks + decodes ONE frame (BGR→RGB via `cvtColor`, mandatory `.copy()`
+  because the numpy buffer dies at return), `release()` idempotent. Decoding only, no
+  internal LRU. GUI-thread only (`cv2.VideoCapture` is not thread-safe).
+- `VideoSliceProvider` is **duck-type compatible** with `slice_cache.SliceProvider`
+  (`provider_id` / `names` / `extract(name)`), so a video's `image_slices[base]` is an
+  ordinary `LazySliceList` and the shared bounded `SliceLRU` (ADR-036) caps live frame
+  QImages. Frame slice keys are `frame_key(base, idx) = f"{base}_F{idx:05d}"` (0-based),
+  parsed by `parse_frame_index` (`_F(\d+)$` anchored at end so it never matches a
+  `stack_T1_Z5` key).
+- `ImageController.load_video` builds the handler + provider + `LazySliceList` (stored as
+  both `image_slices[base]` and `mw.slices`); `add_images_to_list` gains an
+  `is_video(...)` branch setting `is_multi_slice=True`, `is_video=True`,
+  `video_metadata=handler.metadata()`; `open_images` accepts `*.mp4 *.avi *.mov`.
+  Handlers live in `mw.video_handlers[base]` and are `release()`d on every drop path
+  (delete/remove/redefine/`open_images`/`clear_all`). `.iap` round-trips `is_video`
+  +`video_metadata`; load branches to `load_video`.
+
+**Consequences**:
+- ✅ Because a video is a `LazySliceList`, EVERY existing slice consumer
+  (`switch_slice`/`activate_slice` `.get()`+prefetch, `switch_image` `slices[0]`, `.names`,
+  `__iter__`, exporters, DINO batch, save-touches-no-pixels, delete→`release_slices`)
+  works for video **unchanged** — no parallel resolver, no `None`-placeholder path.
+- ✅ Frames decode lazily and are bounded by the shared LRU for interactive use
+  (navigation, display); opening a video decodes nothing beyond frame 0;
+  `save_project` decodes zero frames (test-asserted).
+- ⚠️ One batch path is NOT LRU-bounded: `DINOController._collect_dino_batch_work_items`
+  builds a flat `[(name, QImage), …]` list, so running DINO batch over a long video
+  materialises all its frames at once (pre-existing for stacks; more costly for video).
+  Streaming that collector frame-by-frame is a documented follow-up.
+- ✅ Annotation storage, per-frame independence, navigation, save/load and export path
+  matching all come for free from the slice machinery.
+- ⚠️ `cv2.VideoCapture` seeking is per-codec-variable; heavy random scrubbing re-seeks.
+  The LRU + `prefetch_around(±1)` keep sequential nav responsive; whole-video
+  pre-decode is deliberately never done.
+- ⚠️ Base-name collision (`video.mp4` vs `video.tif` → same `image_slices` key) is
+  refused with a warning in `add_images_to_list`.
+- Feeds #48 (timeline over `video_handlers`/frame keys) and #51 (SAM 3 tracking seeds a
+  mask on a frame and writes per-frame annotations).
+
+---
+
 ## Decisions Under Consideration
 
 ### Consider Relative Paths with Image Copying

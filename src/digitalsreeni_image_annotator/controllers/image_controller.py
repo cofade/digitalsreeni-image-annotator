@@ -49,6 +49,11 @@ from ..core.slice_cache import (
     release_slices,
     slice_names,
 )
+from ..core.video_handler import (
+    VideoHandler,
+    VideoSliceProvider,
+    is_video,
+)
 
 from ..core.logging_config import get_logger
 
@@ -387,7 +392,7 @@ class ImageController(QObject):
             self.mw,
             "Open Images",
             "",
-            "Image Files (*.png *.jpg *.bmp *.tif *.tiff *.czi)",
+            "Image Files (*.png *.jpg *.bmp *.tif *.tiff *.czi *.mp4 *.avi *.mov)",
         )
         if file_names:
             self.mw.image_list.clear()
@@ -403,6 +408,11 @@ class ImageController(QObject):
             # the session. Mirrors clear_all (issue #45).
             get_shared_lru().clear()
             self.mw.image_slices.clear()
+            # Video handlers own an open cv2.VideoCapture each — release them
+            # before the dict is wiped so no file handle leaks (issue #47).
+            for handler in self.mw.video_handlers.values():
+                handler.release()
+            self.mw.video_handlers.clear()
             self.mw.slices = []
             self.mw.current_stack = None
             self.mw.current_slice = None
@@ -413,6 +423,22 @@ class ImageController(QObject):
         for file_name in file_names:
             base_name = os.path.basename(file_name)
             if base_name not in self.mw.image_paths:
+                # Slices, video frames and their annotations are all keyed by
+                # the EXT-STRIPPED base name, so `video.mp4` and `video.tif`
+                # would silently clobber each other's slices. Refuse the
+                # colliding file instead (issue #47).
+                if self._base_name_collision(base_name):
+                    QMessageBox.warning(
+                        self.mw,
+                        "Duplicate Name",
+                        f"An image named "
+                        f"'{os.path.splitext(base_name)[0]}' is already loaded "
+                        "from a different file. Rename one of the files and "
+                        "reopen it — slices and annotations are keyed by this "
+                        "base name.",
+                    )
+                    continue
+
                 image_info = {
                     "file_name": base_name,
                     "height": 0,
@@ -458,6 +484,19 @@ class ImageController(QObject):
                         image_info["shape"] = self.mw.image_shapes.get(
                             base_name_without_ext, []
                         )
+                elif is_video(file_name):
+                    # Video frames become lazy slices (issue #47). Read the
+                    # probe from the handler's metadata — do NOT force a frame
+                    # decode just to fill height/width. `dimensions`/`shape`
+                    # are omitted (a video has none).
+                    self.load_video(file_name)
+                    base_name_without_ext = os.path.splitext(base_name)[0]
+                    handler = self.mw.video_handlers[base_name_without_ext]
+                    image_info["height"] = handler.height
+                    image_info["width"] = handler.width
+                    image_info["is_multi_slice"] = True
+                    image_info["is_video"] = True
+                    image_info["video_metadata"] = handler.metadata()
                 else:
                     image = QImage(file_name)
                     image_info["height"] = image.height()
@@ -491,6 +530,73 @@ class ImageController(QObject):
         silently swallow unrelated ValueErrors behind a misleading dialog.
         """
         return "imagecodecs" in str(exc).lower()
+
+    def _base_name_collision(self, base_name):
+        """True if a DIFFERENT already-loaded image shares this file's
+        ext-stripped base name (issue #47).
+
+        Slice keys, video frame keys and ``image_slices`` are all keyed by
+        the ext-stripped base, so two files that differ only by extension
+        (``video.mp4`` vs ``video.tif``) would clobber each other's slices.
+        """
+        base_no_ext = os.path.splitext(base_name)[0]
+        for info in self.mw.all_images:
+            other = info["file_name"]
+            if other != base_name and os.path.splitext(other)[0] == base_no_ext:
+                return True
+        return False
+
+    def load_video(self, image_path):
+        """Load a video as a stack whose slices are its frames (issue #47).
+
+        Reuses the #45 lazy-slice machinery: a :class:`VideoSliceProvider`
+        decodes each frame on demand and the shared ``SliceLRU`` bounds the
+        live QImages. ``mw.slices`` and ``mw.image_slices[base]`` are the SAME
+        :class:`LazySliceList` object (the #45 guardrail), so every existing
+        slice consumer works for video unchanged.
+        """
+        base_name = os.path.splitext(os.path.basename(image_path))[0]
+
+        # Release + replace any prior handler / slice list under this base
+        # BEFORE overwriting, mirroring create_slices' release-before-replace:
+        # the old objects stay referenced until the reassignment below, so the
+        # new provider is guaranteed a distinct id() and a recycled id can't
+        # alias stale LRU entries.
+        old_handler = self.mw.video_handlers.get(base_name)
+        if old_handler is not None:
+            old_handler.release()
+        release_slices(self.mw.image_slices.get(base_name))
+
+        handler = VideoHandler(image_path)
+        self.mw.video_handlers[base_name] = handler
+
+        provider = VideoSliceProvider(handler, base_name)
+        lazy = LazySliceList(provider)
+        self.mw.image_slices[base_name] = lazy
+        self.mw.slices = lazy
+
+        self.mw.slice_list.clear()
+        for slice_name in lazy.names:
+            self.add_slice_to_list(slice_name)
+
+        if lazy:
+            first_name, first_image = lazy[0]
+            self.mw.current_image = first_image
+            self.mw.current_slice = first_name
+            self.mw.slice_list.setCurrentRow(0)
+            self.activate_slice(self.mw.current_slice)
+
+            meta = handler.metadata()
+            slice_info = (
+                f"Total frames: {meta['total_frames']}, "
+                f"{meta['width']}x{meta['height']}, {meta['fps']:.2f} fps"
+            )
+            self.mw.update_image_info(additional_info=slice_info)
+        else:
+            logger.warning(f"No frames decoded for video: {base_name}")
+
+        logger.info(f"Loaded video {base_name}: {handler.total_frames} frames")
+        return lazy
 
     def update_all_images(self, new_image_info):
         for info in new_image_info:
@@ -581,6 +687,12 @@ class ImageController(QObject):
                             self.mw.current_slice = self.mw.slices[0][0]
                             self.update_slice_list()
                             self.activate_slice(self.mw.current_slice)
+                    elif image_info.get("is_video"):
+                        # Video whose frames aren't in image_slices yet (e.g. a
+                        # future path that dropped them): rebuild via load_video,
+                        # never load_multi_slice_image (which handles neither
+                        # branch for a video and would leave a stale display).
+                        self.load_video(image_path)
                     else:
                         self.load_multi_slice_image(
                             image_path,
@@ -1022,6 +1134,12 @@ class ImageController(QObject):
                 release_slices(self.mw.image_slices[base_name])
                 del self.mw.image_slices[base_name]
 
+            # A video never reaches here (redefine only runs for tif/czi), but
+            # release its capture defensively so no path can leak one (#47).
+            if base_name in self.mw.video_handlers:
+                self.mw.video_handlers[base_name].release()
+                del self.mw.video_handlers[base_name]
+
             if self.mw.image_file_name == file_name:
                 self.mw.current_image = None
                 self.mw.image_label.clear()
@@ -1064,6 +1182,11 @@ class ImageController(QObject):
                 del self.mw.image_slices[base_name]
 
                 self.mw.slice_list.clear()
+
+            # Release the video's cv2 capture, if any (issue #47).
+            if base_name in self.mw.video_handlers:
+                self.mw.video_handlers[base_name].release()
+                del self.mw.video_handlers[base_name]
 
             if self.mw.image_file_name == file_name:
                 self.mw.current_image = None
@@ -1118,6 +1241,11 @@ class ImageController(QObject):
                     del self.mw.image_slices[base_name]
 
                     self.mw.slice_list.clear()
+
+                # Release the video's cv2 capture, if any (issue #47).
+                if base_name in self.mw.video_handlers:
+                    self.mw.video_handlers[base_name].release()
+                    del self.mw.video_handlers[base_name]
 
                 if self.mw.image_file_name == file_name:
                     self.mw.current_image = None

@@ -215,9 +215,14 @@ class ProjectController(QObject):
             self.mw.image_paths[image_info["file_name"]] = image_path
 
             if image_info.get("is_multi_slice", False):
-                dimensions = image_info.get("dimensions", [])
-                shape = image_info.get("shape", [])
-                self.mw.load_multi_slice_image(image_path, dimensions, shape)
+                if image_info.get("is_video"):
+                    # A missing video already flowed through resolve_image_path
+                    # → missing_images above, so image_path exists here (#47).
+                    self.mw.image_controller.load_video(image_path)
+                else:
+                    dimensions = image_info.get("dimensions", [])
+                    shape = image_info.get("shape", [])
+                    self.mw.load_multi_slice_image(image_path, dimensions, shape)
             else:
                 self.mw.add_images_to_list([image_path])
 
@@ -360,7 +365,7 @@ class ProjectController(QObject):
             self.mw,
             "Select Missing Images",
             "",
-            "Image Files (*.png *.jpg *.bmp *.tif *.tiff *.czi)",
+            "Image Files (*.png *.jpg *.bmp *.tif *.tiff *.czi *.mp4 *.avi *.mov)",
         )
         if files:
             images_loaded = 0
@@ -482,6 +487,13 @@ class ProjectController(QObject):
                 image_data["shape"] = image_utils.convert_to_serializable(
                     self.mw.image_shapes.get(base_name_without_ext, [])
                 )
+                # Videos carry no dimensions/shape but need their metadata so
+                # a reload knows to re-open them via load_video (issue #47).
+                # Slice entries (name + annotations) serialize unchanged — the
+                # LazySliceList persists names only, no pixels (issue #45).
+                if image_info.get("is_video"):
+                    image_data["is_video"] = True
+                    image_data["video_metadata"] = image_info.get("video_metadata")
             else:
                 image_data["annotations"] = {}
                 for class_name, annotations in self.mw.all_annotations.get(

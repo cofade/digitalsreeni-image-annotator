@@ -599,7 +599,12 @@ class YOLOController(QObject):
             self.process_yolo_results(results, image_name)
 
     def predict_single_image(self, file_name):
-        if self.mw.is_multi_dimensional(file_name):
+        from ..core.video_handler import is_video
+
+        # Plain 2D images only: stacks have no single frame, and a video would
+        # run Ultralytics over the whole clip on the GUI thread then fail in
+        # cv2.imread (#47). The context menu already hides this for both.
+        if self.mw.is_multi_dimensional(file_name) or is_video(file_name):
             return
 
         if not self.mw.yolo_trainer or not self.mw.yolo_trainer.model:

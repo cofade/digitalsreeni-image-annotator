@@ -34,6 +34,13 @@ The mask-supervision loss used during SAM fine-tuning: a focal term (down-weight
 ### Mask Decoder
 The lightweight SAM head that turns image embeddings + prompt embeddings into mask logits. The default fine-tuning target (`sam_mask_decoder`, ~4.2M params for the tiny model) since it is small and adapts quickly.
 
+### Frame Key
+The slice name of a single video frame (issue #47): `f"{base_name}_F{idx:05d}"` with a
+0-based, zero-padded frame index (e.g. `clip_F00042`). Produced by
+`core/video_handler.py::frame_key` and parsed by `parse_frame_index` (`_F(\d+)$`
+anchored at the end so an ordinary multi-dim slice key like `stack_T1_Z5` is not
+mistaken for a frame). It is the annotation key + export filename for that frame.
+
 ### Keypoint / Pose Instance
 A single labelled instance of a **pose class** (issue #35, [ADR-029](09_architecture_decisions.md#adr-029-keypoint--pose-annotation--per-class-schema-coco-instance-model-3-state-visibility)):
 an ordered set of K keypoints stored flat as `[x1, y1, v1, x2, y2, v2, ...]` (COCO
@@ -159,6 +166,13 @@ A 2D image extracted from a multi-dimensional image stack. Named with format `{f
 
 ### Stack
 A multi-dimensional image, typically a TIFF or CZI file with multiple 2D slices in Z-dimension (depth).
+
+### Video (Frames as Slices)
+A video file (`.mp4`/`.avi`/`.mov`) opened as a stack whose slices are its frames
+(issue #47, [ADR-037](09_architecture_decisions.md)). Frames decode lazily on demand via
+`core/video_handler.py::VideoHandler` (OpenCV) and are held in the same shared bounded
+`SliceLRU` as multi-dim slices, so a long clip never materialises all its frames. Each
+frame is keyed by its [Frame Key](#frame-key).
 
 ### Subprocess Worker (historical)
 A standalone Python script (`sam_worker.py`, `dino_worker.py`) that ran ML model inference in its own process to dodge a PyQt5 + Torch DLL load-order conflict on Windows + Python 3.14. Removed once the codebase migrated to PyQt6 (the conflict no longer manifests). See [ADR-011](09_architecture_decisions.md#adr-011-run-torch-based-workers-in-isolated-subprocesses) (Superseded) and [ADR-013](09_architecture_decisions.md#adr-013-in-process-inference-with-qthread-wrapping).

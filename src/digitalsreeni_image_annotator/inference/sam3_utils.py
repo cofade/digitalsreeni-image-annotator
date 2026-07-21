@@ -86,10 +86,12 @@ SAM3_CONF_FLOOR = 0.05
 class SAM3Utils(QObject):
     """In-process Ultralytics SAM 3 text-prompt wrapper with a cached model.
 
-    Public API (kept stable — #51 extends this with ``track``):
+    Public API:
 
     - ``ensure_loaded() -> None``
     - ``detect_text(image: QImage, class_configs: list[dict]) -> list[dict] | None``
+    - ``track(video_path, seed_idx, seed_bbox, direction="both", should_cancel=None)
+      -> list[tuple[int, dict | None]]`` (issue #51 — video object tracking)
     - ``unload() -> None``
     - ``weights_available() -> bool``
     - attributes ``loaded: bool`` and ``_predictor`` (None until loaded)
@@ -298,3 +300,123 @@ class SAM3Utils(QObject):
         phrases = list(cfg.get("phrases") or [name])
         clean = [p.strip().rstrip(".") for p in phrases if p and p.strip()]
         return clean or [name]
+
+    # ── video object tracking (issue #51, ADR-038) ─────────────────────
+
+    def track(
+        self,
+        video_path: str,
+        seed_idx: int,
+        seed_bbox,
+        direction: str = "both",
+        should_cancel=None,
+    ):
+        """Propagate a single seeded object across a video's frames.
+
+        ``seed_bbox`` is the object's box on frame ``seed_idx`` in **xyxy**
+        pixel coordinates (Ultralytics ``bboxes=`` convention, same as
+        :meth:`apply_sam_prediction`). Returns a list of
+        ``(frame_idx, result)`` where ``result`` is
+        ``{"segmentation": [x1, y1, ...], "score": float}`` for a frame in
+        which the object was found, or ``None`` for a frame where it is
+        absent. The caller maps each ``frame_idx`` to its frame-key.
+
+        The WHOLE propagation runs inside a single :func:`_run_sync` call
+        (one worker thread for the entire clip), so it serialises against
+        SAM 2 / DINO / SAM 3-detect on the shared in-flight flag and cannot
+        race them on the GPU. The worker reads the video by **path** (cv2 /
+        SAM 3) and never touches Qt objects — see ADR-013.
+
+        ``should_cancel`` (optional) is polled between frames; when it
+        returns True the propagation stops and returns what has accumulated
+        so far (matching the DINO batch cancel semantics). It is read on the
+        worker thread — pass a callable that only reads a plain flag (e.g.
+        ``QProgressDialog.wasCanceled``, a benign cross-thread bool read).
+
+        Not loaded → returns ``[]`` (never half-work); the call is serialised
+        by the shared in-flight guard via ``_run_sync``.
+        """
+        if not self.loaded or self._predictor is None:
+            logger.warning("track: SAM 3 not loaded")
+            return []
+        return _run_sync(
+            self._track_blocking,
+            video_path,
+            int(seed_idx),
+            list(seed_bbox),
+            direction,
+            should_cancel,
+        )
+
+    def _track_blocking(self, video_path, seed_idx, seed_bbox, direction, should_cancel):
+        """Worker-thread propagation — **THE monkeypatch seam**.
+
+        Tests replace this whole method (or the predictor it constructs) so
+        the real ~3.45 GB gated ``SAM3VideoPredictor`` is never instantiated
+        without weights + a GPU. It returns a list of ``(frame_idx, result)``
+        tuples; all the tested value (commit / review-routing / rollback,
+        timeline states) lives in the controller and the timeline, driven by
+        that list.
+
+        Lazy import (ADR-012 / ADR-016): keeps the app importable on
+        ultralytics builds without SAM 3 and torch out of app startup.
+
+        NOTE (ADR-038 — UNRESOLVED, verify-first on GPU + weights): the exact
+        behaviour of the SAM 3 video API for *arbitrary-frame* seeding,
+        *backward* propagation and *long-video* memory is unverified and
+        cannot be checked in CI (no weights, no GPU). This implements the
+        documented whole-video streaming path: construct the video predictor
+        with the SAME override rules as ``detect`` (model / task / conf /
+        device only — no ``quantize=`` which raises on ultralytics 8.4.51, no
+        ``mode=``), seed it with the object's bbox, then stream per-frame
+        results across the clip and map each to its frame index. ``seed_idx``
+        and ``direction`` are carried through for the eventual arbitrary-frame
+        / bidirectional seed; wiring them into the real predictor call is the
+        manual GPU verification step.
+        """
+        from ultralytics.models.sam import SAM3VideoPredictor
+
+        weights = self._resolve_weights_path() or SAM3_WEIGHTS_FILENAME
+        overrides = dict(
+            model=weights, task="segment", conf=self._conf, device=self._device
+        )
+        predictor = SAM3VideoPredictor(overrides=overrides)
+
+        # Stream per-frame results for the whole clip (see ADR-038 note above).
+        results = predictor(source=video_path, bboxes=[seed_bbox], stream=True)
+
+        out = []
+        for frame_idx, res in enumerate(results):
+            # Poll cancellation between frames (benign cross-thread bool read).
+            if callable(should_cancel) and should_cancel():
+                break
+            out.append((frame_idx, self._frame_result(res)))
+        return out
+
+    @staticmethod
+    def _frame_result(res):
+        """One per-frame video result → ``{"segmentation", "score"}`` or
+        ``None`` (object absent this frame).
+
+        Reuses :func:`_mask_to_polygon` (shared area-floor + biggest-contour
+        rules) so tracked masks are geometrically identical to detect / DINO
+        output. A video track follows a single object, so the first (highest
+        scoring) mask is taken.
+        """
+        masks = getattr(res, "masks", None)
+        if masks is None:
+            return None
+        mask_arr = masks.data.cpu().numpy()
+        if len(mask_arr) == 0:
+            return None
+        polygon = _mask_to_polygon(mask_arr[0])
+        if polygon is None:
+            return None
+        score = 1.0
+        boxes = getattr(res, "boxes", None)
+        conf = getattr(boxes, "conf", None) if boxes is not None else None
+        if conf is not None:
+            conf_arr = conf.cpu().numpy()
+            if len(conf_arr):
+                score = float(conf_arr[0])
+        return {"segmentation": polygon, "score": score}

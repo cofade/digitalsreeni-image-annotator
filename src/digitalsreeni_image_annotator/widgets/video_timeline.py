@@ -17,12 +17,14 @@ the light and soft-dark backgrounds), while the ``text`` role — used for the
 high-contrast current-frame tick — does follow the stylesheet's ``color`` rule.
 The marks are legible in both themes; the current tick additionally tracks it.
 
-A follow-up (issue #51) may extend ``set_annotated_frames`` to carry per-frame
-states (e.g. reviewed vs. auto-accepted) — kept deliberately simple here.
+Issue #51 extends this with per-frame STATES (``annotated`` / ``tracked`` /
+``needs_review``) painted as contiguous coloured segments; the plain
+``set_annotated_frames`` set-based API still works, delegating to the states
+model with every frame marked ``"annotated"``.
 """
 
 from PyQt6.QtCore import Qt, pyqtSignal
-from PyQt6.QtGui import QPainter, QPen
+from PyQt6.QtGui import QColor, QPainter, QPen
 from PyQt6.QtWidgets import (
     QHBoxLayout,
     QLabel,
@@ -35,12 +37,39 @@ from PyQt6.QtWidgets import (
 # fps guard: containers sometimes report 0/NaN fps; treat as 30 for MM:SS.
 _DEFAULT_FPS = 30.0
 
+# The per-frame states the marker strip understands (issue #51). Any other
+# value is ignored by the painter (treated as unmarked).
+FRAME_STATES = ("annotated", "tracked", "needs_review")
+
+
+def compute_state_runs(states, total):
+    """Collapse a ``{frame_idx: state}`` map into maximal contiguous runs.
+
+    Returns a list of ``(start_idx, end_idx, state)`` in ascending order, one
+    per run of consecutive frame indices that share the same state. A gap in
+    the indices or a change of state starts a new run. Frames outside
+    ``[0, total)`` are dropped. Pure logic (no Qt) so the run computation is
+    unit-testable without painting. (issue #51)
+    """
+    runs = []
+    for idx in sorted(states):
+        if not (0 <= idx < total):
+            continue
+        state = states[idx]
+        if runs and runs[-1][1] + 1 == idx and runs[-1][2] == state:
+            runs[-1][1] = idx
+        else:
+            runs.append([idx, idx, state])
+    return [(start, end, state) for start, end, state in runs]
+
 
 class _MarkerStrip(QWidget):
-    """Thin painted strip that ticks annotated frames + the current frame.
+    """Thin painted strip that colours per-frame state segments + the current
+    frame.
 
-    Holds only its own render state (total / current / annotated set); the
-    parent :class:`VideoTimeline` pushes updates via :meth:`configure`.
+    Holds only its own render state (total / current / states map); the parent
+    :class:`VideoTimeline` pushes updates via :meth:`configure`. Same-state
+    consecutive frames are painted as one contiguous segment (issue #51).
     """
 
     _STRIP_HEIGHT = 6
@@ -53,12 +82,12 @@ class _MarkerStrip(QWidget):
         )
         self._total = 0
         self._current = 0
-        self._annotated = set()
+        self._states = {}
 
-    def configure(self, total, current, annotated):
+    def configure(self, total, current, states):
         self._total = total
         self._current = current
-        self._annotated = annotated
+        self._states = dict(states)
         self.update()
 
     def _x_for(self, idx, width):
@@ -67,6 +96,24 @@ class _MarkerStrip(QWidget):
         if self._total <= 1:
             return 0
         return int(idx / (self._total - 1) * (width - 1))
+
+    @staticmethod
+    def _state_color(pal, state):
+        """Palette-derived colour per state — no hex literals (dark-mode rule).
+
+        - ``annotated``   → ``highlight`` (the saturated accent, unchanged).
+        - ``tracked``     → a **desaturated** highlight (same hue, muted) so a
+          machine-propagated frame reads distinct from a hand-annotated one
+          without introducing a hardcoded colour.
+        - ``needs_review``→ ``brightText`` (a high-contrast warning-ish role).
+        """
+        if state == "tracked":
+            base = pal.highlight().color()
+            h, s, v, a = base.getHsv()
+            return QColor.fromHsv(h, int(s * 0.4), v, a)
+        if state == "needs_review":
+            return pal.brightText().color()
+        return pal.highlight().color()
 
     def paintEvent(self, event):
         painter = QPainter(self)
@@ -82,16 +129,16 @@ class _MarkerStrip(QWidget):
         if self._total <= 0:
             return
 
-        # Annotated frames: 1px highlight (accent) ticks spanning the strip.
-        painter.setPen(QPen(pal.highlight().color(), 1))
-        for idx in self._annotated:
-            if 0 <= idx < self._total:
-                x = self._x_for(idx, width)
-                painter.drawLine(x, 0, x, height)
+        # Contiguous same-state runs painted as filled segments.
+        for start, end, state in compute_state_runs(self._states, self._total):
+            color = self._state_color(pal, state)
+            x0 = self._x_for(start, width)
+            x1 = self._x_for(end, width)
+            painter.fillRect(x0, 0, max(1, x1 - x0 + 1), height, color)
 
         # Current frame: a distinct, high-contrast 2px tick. `text()` always
         # contrasts the widget background in both themes, so it reads clearly
-        # over the accent-coloured annotated marks.
+        # over the accent-coloured state segments.
         if 0 <= self._current < self._total:
             painter.setPen(QPen(pal.text().color(), 2))
             x = self._x_for(self._current, width)
@@ -101,15 +148,19 @@ class _MarkerStrip(QWidget):
 class VideoTimeline(QWidget):
     """Scrub slider + annotated-frame markers + position label (issue #48).
 
-    Public API (relied on by the wiring in :mod:`annotator_window` and by the
-    #51 follow-up):
+    Public API (relied on by the wiring in :mod:`annotator_window` and the
+    #51 tracking controller):
 
     - ``set_video(total_frames: int, fps: float)``
     - ``set_current_frame(idx: int)`` — programmatic, never emits ``frameSelected``
-    - ``set_annotated_frames(indices: set[int])``
+    - ``set_frame_states(states: dict[int, str])`` — per-frame states (#51)
+    - ``set_annotated_frames(indices: set[int])`` — back-compat, delegates to
+      ``set_frame_states`` with every index marked ``"annotated"``
+    - ``frame_state_runs()`` — the computed ``(start, end, state)`` segments
     - ``clear()``
     - signal ``frameSelected = pyqtSignal(int)`` — user interaction only
-    - attribute ``annotated_frames`` — the stored annotated-index set
+    - attribute ``frame_states`` — the stored ``{idx: state}`` map (#51)
+    - attribute ``annotated_frames`` — the stored marked-index set (all states)
     """
 
     frameSelected = pyqtSignal(int)
@@ -122,6 +173,9 @@ class VideoTimeline(QWidget):
         # Re-entrancy guard: set True around programmatic slider.setValue so the
         # resulting valueChanged never re-emits frameSelected (feedback loop).
         self._updating = False
+        # Per-frame states (issue #51): {idx: "annotated"|"tracked"|"needs_review"}.
+        self.frame_states = {}
+        # Back-compat alias — the set of ALL marked frame indices (any state).
         self.annotated_frames = set()
 
         root = QHBoxLayout(self)
@@ -169,6 +223,7 @@ class VideoTimeline(QWidget):
         self._total_frames = max(0, int(total_frames))
         self._fps = fps if fps and fps > 0 else _DEFAULT_FPS
         self._current_frame = 0
+        self.frame_states = {}
         self.annotated_frames = set()
 
         self._updating = True
@@ -193,20 +248,40 @@ class VideoTimeline(QWidget):
         self._refresh_strip()
         self._update_label()
 
-    def set_annotated_frames(self, indices):
-        """Store the annotated-frame index set and repaint the strip.
+    def set_frame_states(self, states):
+        """Store the per-frame ``{idx: state}`` map and repaint the strip (#51).
 
-        Kept simple (a plain set of ints); issue #51 may extend this to carry
-        per-frame states.
+        ``state`` is one of ``"annotated"`` / ``"tracked"`` / ``"needs_review"``
+        (see :data:`FRAME_STATES`); unknown values are ignored by the painter.
+        Keeps :attr:`annotated_frames` in sync as the set of all marked indices
+        so the older set-based consumers/tests still read the marked set.
         """
-        self.annotated_frames = set(indices)
+        self.frame_states = dict(states)
+        self.annotated_frames = set(self.frame_states.keys())
         self._refresh_strip()
+
+    def set_annotated_frames(self, indices):
+        """Back-compat: mark ``indices`` as plain ``"annotated"`` frames.
+
+        Delegates to :meth:`set_frame_states` so the single set-based call site
+        (and its tests) keep working after the #51 states migration.
+        """
+        self.set_frame_states({int(i): "annotated" for i in indices})
+
+    def frame_state_runs(self):
+        """The computed ``(start, end, state)`` contiguous segments (#51).
+
+        Exposed for tests + any consumer that needs the run decomposition
+        without reaching into the painter.
+        """
+        return compute_state_runs(self.frame_states, self._total_frames)
 
     def clear(self):
         """Reset to the empty state (no video)."""
         self._total_frames = 0
         self._fps = _DEFAULT_FPS
         self._current_frame = 0
+        self.frame_states = {}
         self.annotated_frames = set()
         self._updating = True
         self.slider.setMaximum(0)
@@ -237,7 +312,7 @@ class VideoTimeline(QWidget):
 
     def _refresh_strip(self):
         self.strip.configure(
-            self._total_frames, self._current_frame, self.annotated_frames
+            self._total_frames, self._current_frame, self.frame_states
         )
 
     def _fmt_time(self, idx):

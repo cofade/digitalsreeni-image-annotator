@@ -1994,6 +1994,60 @@ reuse everything downstream verbatim:
 
 ---
 
+## ADR-040: SAM 3 Video Object Tracking — Standard Commit Path, Per-Frame Undo + Run Rollback
+
+**Status**: Accepted (issue #51; builds on ADR-037 video, ADR-039 SAM 3, ADR-026 undo)
+
+**Context**: With videos as lazily-decoded frame slices (#47) and SAM 3 wired in (#50), the
+flagship video feature: select an object's mask on one frame and track it across the clip,
+writing a per-frame annotation. Two facts are **verify-first** per ADR-038 and CANNOT be
+confirmed without a GPU + the gated 3.45 GB `sam3.pt`: (a) the SAM 3 video API's exact
+arbitrary-frame seeding + backward-propagation behaviour, and (b) long-video predictor memory.
+
+**Decision**:
+- **Backend** — `SAM3Utils.track(video_path, seed_idx, seed_bbox, direction, should_cancel)`
+  runs the WHOLE propagation inside ONE `_run_sync` call (the worker never touches Qt) and
+  returns `[(frame_idx, {"segmentation","score"} | None), …]`. ALL real-model interaction is
+  isolated in `_track_blocking` (the single monkeypatch seam): it lazy-imports
+  `SAM3VideoPredictor`, constructs with the SAME overrides as detect (`model/task/conf/device`,
+  no `quantize`/`mode`), seeds via the **video file path** + bbox with `stream=True`, and maps
+  each per-frame result through `_mask_to_polygon`. **ADR-038 unresolved items are handled
+  defensively**: the documented whole-video streaming path is used (enumeration index = frame
+  index); `seed_idx`/`direction` are threaded through but not yet wired into the predictor call.
+  A real GPU+weights run is the manual verification step; if state grows with video length,
+  chunked propagation is the follow-up.
+- **Controller** — new `TrackingController`: `can_track()` (active video + SAM 3 loaded + exactly
+  one selected annotation carrying a `"segmentation"` — pose instances excluded, ADR-029);
+  `run_tracking()` (confirm dialog + confidence-threshold spinbox default 0.5; **modal**
+  `QProgressDialog` blocks GUI navigation during the track and feeds `should_cancel`). Results
+  route: `score >= threshold` → `_commit_tracked_result` (MIRRORS `_commit_dino_results`:
+  `record_history(frame_name)` FIRST, `source=="sam3-track"`, a shared `track_run` uuid,
+  per-class `number`, write to `image_label.annotations` if current else
+  `all_annotations[frame_name]`); `0 < score < threshold` → a temp entry in `dino_batch_results`
+  (`source=="sam3"`) so the EXISTING DINO batch-review pipeline + Enter/Escape filter handle it
+  verbatim; `None` → nothing. The seed frame is skipped (it already carries the source). One
+  `auto_save()` at the end, not per frame.
+- **Undo granularity** (the explicit decision): per-frame Ctrl+Z undoes ONE frame (each commit
+  `record_history`s its own key); `undo_last_track()` is the bulk convenience — removes every
+  annotation whose `track_run == run_id` across the run's frames (per-frame `record_history`
+  first, so it too is undoable). Rollback finds annotations by EXACT `track_run` match.
+- **Timeline** — `VideoTimeline.set_frame_states({idx: "annotated"|"tracked"|"needs_review"})`
+  paints palette-derived coloured segments (precedence needs_review > tracked > annotated);
+  `set_annotated_frames` delegates to it (C2 back-compat). `needs_review` derives from
+  `dino_batch_results` keys, `tracked` from `sam3-track` annotations.
+
+**Consequences**:
+- ✅ Tracked masks are ordinary annotations — saved, exported, undoable — with zero new review UI
+  (uncertain frames reuse the DINO pipeline; commits reuse the `record_history` discipline).
+- ✅ The model call is a single stub seam; the full controller/timeline logic is covered by
+  stubbed tests (per-frame + run-rollback undo, commit/review routing, pose exclusion,
+  save/reload). Real-model tracking is a documented manual GPU step.
+- ⚠️ Two ADR-038 items stay UNVERIFIED (arbitrary-frame seed/backward; long-video memory).
+  `seed_idx`/`direction` are plumbed but inert until a weights run confirms the API; chunked
+  propagation is the memory follow-up if needed.
+
+---
+
 ## Decisions Under Consideration
 
 ### Consider Relative Paths with Image Copying

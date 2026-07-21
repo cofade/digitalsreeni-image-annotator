@@ -26,6 +26,7 @@ from .controllers.image_controller import ImageController
 from .controllers.project_controller import ProjectController
 from .controllers.sam_controller import SAMController
 from .controllers.sam_train_controller import SAMTrainController
+from .controllers.tracking_controller import TrackingController
 from .controllers.yolo_controller import YOLOController
 from .core import image_utils
 from .ui import theme
@@ -138,6 +139,10 @@ class ImageAnnotator(QMainWindow):
         self.sam_controller = SAMController(self)
         self.sam_train_controller = SAMTrainController(self)
         self.dino_controller = DINOController(self)
+        # SAM 3 video object tracking (issue #51). Reuses the DINO review
+        # pipeline for uncertain frames; commits confident frames tagged with a
+        # shared track_run id (bulk-undoable via Undo Last Track).
+        self.tracking_controller = TrackingController(self)
         self.yolo_controller = YOLOController(self)
         self.annotation_controller = AnnotationController(self)
         self.class_controller = ClassController(self)
@@ -707,6 +712,17 @@ class ImageAnnotator(QMainWindow):
 
     def reject_dino_results(self):
         return self.dino_controller.reject_dino_results()
+
+    # --- SAM 3 video object tracking (issue #51) ---
+
+    def can_track(self):
+        return self.tracking_controller.can_track()
+
+    def track_selected_object(self):
+        return self.tracking_controller.run_tracking()
+
+    def undo_last_track(self):
+        return self.tracking_controller.undo_last_track()
 
     def apply_theme_and_font(self):
         theme.apply_theme_and_font(self)

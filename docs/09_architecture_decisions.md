@@ -1878,13 +1878,17 @@ ultralytics`, an import smoke) rather than trusting docs.
    dependency is needed. This dev environment already has `ultralytics 8.4.51`, `torch 2.11.0+cu128`,
    and `from ultralytics.models.sam import SAM3SemanticPredictor` imports successfully.
 2. **Text-prompt image API** — `SAM3SemanticPredictor(overrides=dict(model="sam3.pt", task="segment",
-   mode="predict", conf=0.25, quantize=16))`; `predictor.set_image(img)`; `results = predictor(text=["person",
-   "bus"])` (a list of noun phrases). Returns a Results object with `.masks` and `.boxes` (numpy via
-   `.cpu().numpy()`; boxes carry confidence). Image-exemplar prompting via `predictor(bboxes=[[x1,y1,x2,y2]])`;
-   feature reuse via `inference_features(features, src_shape=..., text=[...])`. **Confidence is the single
-   knob (`conf`)** — our DINO UI's per-class box/txt/nms thresholds map only to `conf` (reuse `box_thr` as
-   the confidence filter; txt/nms have no SAM 3 equivalent). SAM 2-style visual prompts:
+   conf=0.25))`; `predictor.set_image(img)`; `results = predictor(text=["person", "bus"])` (a list of noun
+   phrases). Returns a Results object with `.masks` and `.boxes` (numpy via `.cpu().numpy()`; boxes carry
+   confidence). Image-exemplar prompting via `predictor(bboxes=[[x1,y1,x2,y2]])`; feature reuse via
+   `inference_features(features, src_shape=..., text=[...])`. **Confidence is the single knob (`conf`)** —
+   our DINO UI's per-class box/txt/nms thresholds map only to `conf` (reuse `box_thr` as the confidence
+   filter; txt/nms have no SAM 3 equivalent). SAM 2-style visual prompts:
    `SAM("sam3.pt").predict(source, points=..., bboxes=...)`.
+   **Correction (probed in ultralytics 8.4.51):** the published Ultralytics docs example also passes
+   `quantize=16` and `mode="predict"`; `get_cfg(overrides=dict(..., quantize=16))` **raises**
+   `'quantize' is not a valid YOLO argument`, and `mode` is redundant for a predictor — **D2 must omit
+   both**. This is why the spike probes the environment instead of trusting the docs verbatim.
 3. **Video tracking API** — `SAM3VideoPredictor` (visual: box/point/mask) and `SAM3VideoSemanticPredictor`
    (text). `predictor(source="video.mp4", bboxes=[[...]], stream=True)` yields **one Results per frame** in
    file order; `stream=True` is a frame-by-frame generator, omitting it processes the whole video. Docs seed
@@ -1892,9 +1896,11 @@ ultralytics`, an import smoke) rather than trusting docs.
    `VideoHandler` decodes on demand) is **UNRESOLVED** — resolve by testing on a GPU box before D3 commits
    to feeding frames vs. a path. **Backward propagation is not explicitly documented**; the predictor
    propagates automatically from the seed, so D3 should treat backward as "feed frames in reverse index
-   order" and verify. **Long-video predictor memory behaviour is UNRESOLVED** and is D3's verify-first item
+   order" and verify (this is an inference from the streaming-forward API, **not confirmed** without weights).
+   **Long-video predictor memory behaviour is UNRESOLVED** and is D3's verify-first item
    (measure RSS over 500+ frames; decide whole-video vs chunked).
-4. **Models & download** — `sam3.pt` is **3.45 GB, 473.6M params**. It is **NOT auto-downloaded**: the user
+4. **Models & download** — `sam3.pt` is **3.45 GB, 473.6M params** (per the Ultralytics SAM 3 docs
+   model table, docs.ultralytics.com/models/sam-3/). It is **NOT auto-downloaded**: the user
    must request access on the gated HF page `facebook/sam3`, accept Meta's terms, and download/place it
    manually (or pass a full path). Mirror our DINO gated-download UX + a clear status message. A CLIP
    dependency quirk may require `pip install git+https://github.com/ultralytics/CLIP.git`.
@@ -1904,10 +1910,13 @@ ultralytics`, an import smoke) rather than trusting docs.
    terminates); **redistributed weights/derivatives must stay under the SAM License**. Consequence: **we
    must NOT vendor or redistribute `sam3.pt`** — users accept Meta's terms and download it themselves (same
    posture as our gated DINO/HF models). Source: https://huggingface.co/facebook/sam3/blob/main/LICENSE.
-6. **Minimum versions** — **ultralytics >= 8.3.237** (our floor is `>=8.3.27,<9`; #50 must raise it to
-   `>=8.3.237,<9`). Python/torch/torchvision minima are not separately pinned by the SAM 3 docs; our
-   installed torch 2.11 + Python 3.10+ floor satisfy it (verified by the successful import). No conflict with
-   the #38-reconciled `<9` upper bound.
+6. **Minimum versions** — **ultralytics >= 8.3.237** (per the Ultralytics SAM 3 docs; our floor is
+   `>=8.3.27,<9`; #50 must raise it to `>=8.3.237,<9`). **Caveat**: the installed 8.4.51 only proves
+   `>= 8.3.237`, not that 8.3.237 was the *first* integrated version — **D2 must independently re-confirm
+   the exact first-integrated release before pinning the floor** (check the Ultralytics changelog/release
+   notes). Python/torch/torchvision minima are not separately pinned by the SAM 3 docs; our installed torch
+   2.11 + Python 3.10+ floor satisfy it (verified by the successful import). No conflict with the
+   #38-reconciled `<9` upper bound.
 7. **CPU fallback** — GPU latency ~30 ms/image on an H200 at 100+ objects. **CPU is not documented and is
    impractical** given 3.45 GB / 473.6M params. Recommendation: document SAM 3 as **GPU-recommended**; keep
    the Grounding-DINO two-stage pipeline as the CPU fallback (D2 keeps DINO selectable).

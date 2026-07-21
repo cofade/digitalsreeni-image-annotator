@@ -51,9 +51,10 @@ src/digitalsreeni_image_annotator/
 	│       ├── eraser_tool.py
 	│       └── keypoint_tool.py       # KeypointTool - pose placement (ADR-029, #35)
 	├── controllers/                   # Project/Image/SAM/DINO/YOLO/Annotation/Class
-	├── inference/                     # sam_utils.py, dino_utils.py
+	├── inference/                     # sam_utils.py, dino_utils.py, sam3_utils.py
 	│   ├── sam_utils.py
-	│   └── dino_utils.py
+	│   ├── dino_utils.py
+	│   └── sam3_utils.py              # SAM3Utils - text-prompt segmentation (ADR-038/039, #50)
 	├── io/                            # export_formats.py, import_formats.py
 	│   ├── export_formats.py
 	│   └── import_formats.py
@@ -246,7 +247,8 @@ the controller graph.
 | `AnnotationController` | Annotation CRUD, list sorting, highlight, edit-mode entry/exit, `finish_polygon`, `finish_rectangle`, `replace_annotations` (eraser path). Validates writes before mutating `all_annotations`. |
 | `ClassController` | Class add / delete / rename / colour / visibility. `update_slice_list_colors`, `is_class_visible`. |
 | `SAMController` | SAM box/points tool lifecycle, debounce timer, `_sam_inference_in_flight` re-entrancy guard (ADR-013), model picker. |
-| `DINOController` | Single + batch detection, batch review navigation, temp-annotation accept/reject, custom-model browse, `DINOReviewEventFilter` ownership (ADR-015). |
+| `DINOController` | Single + batch detection, batch review navigation, temp-annotation accept/reject, custom-model browse, `DINOReviewEventFilter` ownership (ADR-015). **Dual-backend (ADR-039):** `_run_text_detection` routes to either the Grounding-DINO two-stage path OR SAM 3's one-stage `SAM3Utils.detect_text` (the "SAM 3 (text prompt)" picker entry); both feed the same review/batch/accept pipeline. |
+| `SAM3Utils` | inference/sam3_utils.py — in-process Ultralytics `SAM3SemanticPredictor` wrapper (text→masks). Reuses `SAMUtils`'s `_run_sync`/`_qimage_to_numpy`/`_mask_to_polygon` + shared in-flight flag; gated `sam3.pt` (never auto-downloaded). ADR-038/039, #50. |
 | `YOLOController` | Training menu, `TrainingThread`, prediction dialog, result processing. Surfaces the run's MLflow deep link (`_on_mlflow_run_url`, mirrors SAM) and reports the saved `best.pt` path on completion. |
 | `SAMTrainController` | SAM fine-tuning menu, GPU gate, `SAMTrainingThread`, config dialog, registers fine-tuned checkpoints into the SAM selector (ADR-021). |
 | `io_controller` *(module-level functions, not a class)* | Thin UI wrappers around the pure `io/export_formats.py` and `io/import_formats.py` modules. |

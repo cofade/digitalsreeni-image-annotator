@@ -381,9 +381,19 @@ User accepts prediction
     └─> Clear SAM state, reset to normal mode
 ```
 
-## LLM-Assisted Detection (Grounding DINO + SAM)
+## LLM-Assisted Detection (Grounding DINO + SAM, or SAM 3 one-stage)
 
-End-to-end flow when the user clicks "Detect Current Image" in the DINO panel:
+The DINO panel's model picker chooses the **producer** (ADR-039): the
+Grounding-DINO two-stage path below, or **"SAM 3 (text prompt)"** which does
+text→masks in ONE stage. `DINOController._run_text_detection(qimage)` is the
+fork: for SAM 3 it calls `SAM3Utils.detect_text` and splits each instance into
+the `(results, sam_results)` shape the DINO pipeline already zips; for DINO it
+runs the two stages. Everything after the fork — temp-annotation overlay,
+Enter/Escape accept/reject, batch over images+slices, auto-accept, persistence —
+is identical. SAM 3 skips the "No SAM Model" guard (it needs no SAM 2 refinement)
+and its temps carry `source: "sam3"`; the Grounding-DINO flow is unchanged:
+
+End-to-end flow when the user clicks "Detect Current Image" with a DINO model:
 
 ```
 User clicks "Detect Current Image"

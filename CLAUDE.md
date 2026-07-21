@@ -60,7 +60,7 @@ src/digitalsreeni_image_annotator/
 │   ├── video_timeline.py         # VideoTimeline scrub bar + frame markers (#48)
 │   └── tools/                    # Per-tool handlers (ADR-019): rectangle,
 │                                 #   polygon, paint, eraser
-├── inference/                    # sam_utils.py, dino_utils.py
+├── inference/                    # sam_utils.py, dino_utils.py, sam3_utils.py (ADR-039)
 ├── training/                     # SAM fine-tuning (ADR-021): sam_trainer.py
 │                                 #   (SAMFineTuner), sam_dataset.py;
 │                                 #   lr_schedule.py + early_stop.py (ADR-028)
@@ -88,6 +88,7 @@ src/digitalsreeni_image_annotator/
 | `DINOController` | controllers/dino_controller.py | DINO single/batch detection, batch review, temp-class workflow |
 | `YOLOController` | controllers/yolo_controller.py | YOLO training menu + prediction wiring |
 | `SAMUtils` | inference/sam_utils.py | Load SAM models (built-in + fine-tuned), run inference |
+| `SAM3Utils` | inference/sam3_utils.py | SAM 3 text-prompt segmentation (`SAM3SemanticPredictor`); a second producer into the DINO review pipeline, gated `sam3.pt` (ADR-038/039, #50) |
 | `DINOUtils` | inference/dino_utils.py | Grounding-DINO model load + inference |
 | `SAMFineTuner` | training/sam_trainer.py | Fine-tune SAM 2 decoder/encoder via custom loop over Ultralytics SAM2Model (ADR-021) |
 | `SAMTrainController` | controllers/sam_train_controller.py | SAM fine-tune menu, GPU gate, training thread, selector registration |

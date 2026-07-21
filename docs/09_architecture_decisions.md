@@ -1861,7 +1861,7 @@ lazy-slice machinery** rather than a parallel frame cache (the #45/#47 reconcili
 
 ## ADR-038: SAM 3 Integration Path (Spike — #49)
 
-**Status**: Proposed (issue #49 spike; to be flipped to Accepted + amended by the D2/#50 PR)
+**Status**: Accepted (issue #49 spike; findings confirmed in-env and implemented by #50 — see ADR-039. The D3 video items — numpy-frame seeding, long-video memory — remain verify-first for #51.)
 
 **Context**: Milestone D plans two SAM 3 features — native text-prompt segmentation reusing the DINO
 review workflow (#50) and video object tracking (#51). Both hinge on facts that were unverified when
@@ -1943,6 +1943,52 @@ building on them.
 **Sources** (dated 2026-07-21): docs.ultralytics.com/models/sam-3/ ; github.com/ultralytics/ultralytics
 docs/en/models/sam-3.md ; newreleases.io … ultralytics v8.3.237 ; huggingface.co/facebook/sam3 (gated) +
 /blob/main/LICENSE ; github.com/orgs/ultralytics/discussions/22378 ; local `pip show ultralytics` (8.4.51).
+
+---
+
+## ADR-039: SAM 3 Text-Prompt Segmentation via the DINO Review-Pipeline Reuse
+
+**Status**: Accepted (issue #50; implements ADR-038's D2 recommendation)
+
+**Context**: Text-prompted segmentation existed as a two-stage pipeline — Grounding-DINO turns
+per-class phrases into boxes, then SAM 2 refines each box into a mask — wrapped in a mature review
+workflow (temp-annotation overlay, Enter/Escape accept/reject, batch over images+slices, auto-accept,
+`.iap` persistence). SAM 3 (ADR-038) does text→masks natively in one stage. The goal was to add SAM 3
+WITHOUT a second review UI.
+
+**Decision**: Plug SAM 3 in as a new **producer** at the exact spot "DINO boxes → SAM masks" sits, and
+reuse everything downstream verbatim:
+- New `inference/sam3_utils.py::SAM3Utils` mirrors `SAMUtils`/`DINOUtils`: lazy-imports
+  `SAM3SemanticPredictor` (ADR-012/016), constructs with `overrides=dict(model="sam3.pt",
+  task="segment", conf=<floor>)` — **no `quantize`/`mode`** (ADR-038: `quantize` raises in ultralytics
+  8.4.51) — and reuses `sam_utils._run_sync` / `_qimage_to_numpy` / `_mask_to_polygon` + the shared
+  `_inference_in_flight` flag (so SAM 3 serialises against SAM 2/DINO on the GPU). `detect_text(image,
+  class_configs)` returns per-instance `{class_name, score, segmentation, bbox}`; `box_thr` is the
+  confidence filter (SAM 3's only knob — `txt_thr`/`nms_thr` ignored). Weights (`sam3.pt`, 3.45 GB,
+  gated) are never auto-downloaded; `_weights_available()` drives a "request access + place sam3.pt"
+  status, mirroring the DINO gated-download UX.
+- `DINOController` gains a `_run_text_detection(qimage) -> (results, sam_results)` choke point used by
+  BOTH single + batch: for SAM 3 it splits each instance into a `results`-shaped `{class_name, score,
+  bbox, source:"sam3"}` and a parallel `sam_results`-shaped `{segmentation, score}` — SAME length +
+  order — so the existing zip/commit/temp-attach logic is byte-identical; for DINO it runs the unchanged
+  two-stage path. SAM 3 skips the "No SAM Model" guard; DINO keeps it.
+- Produced temps carry `"source": "sam3"`; every `source == "dino"` check (esp. the
+  `DINOReviewEventFilter` Enter/Escape gate) was widened to `in ("dino", "sam3")` via a
+  `.get("source", "dino")` default that keeps DINO's un-tagged dicts resolving to `"dino"`. SAM 3 batch
+  results land in the SAME `dino_batch_results` dict (the single-field `_refresh_dino_temp_for_current`
+  re-sync is untouched).
+
+**Consequences**:
+- ✅ One-stage SAM 3 masks flow through the entire existing review/accept/batch/auto-accept/undo/persist
+  machinery with zero new review UI; commits reuse `_commit_dino_results` (so `record_history` fires —
+  undoable).
+- ✅ Grounding-DINO two-stage path is behaviourally unchanged (its tests pass unmodified); the model
+  picker's "SAM 3 (text prompt)" entry sits alongside the DINO models.
+- ✅ `ultralytics` floor raised to `>=8.3.237,<9` (ADR-038). SAM 3 lazy-imports, so older installs still
+  launch and the app stays importable.
+- ⚠️ Real end-to-end verification needs a GPU + the gated 3.45 GB `sam3.pt` (cannot run in CI or a
+  weightless dev box) — the wiring is covered by monkeypatched/stubbed tests; the real-model check is a
+  documented manual step (CLAUDE.md inference checklist). CPU is impractical — DINO stays the CPU fallback.
 
 ---
 

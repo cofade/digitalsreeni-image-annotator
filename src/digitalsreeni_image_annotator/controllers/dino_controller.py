@@ -40,6 +40,8 @@ from PyQt6.QtWidgets import (
 from ..core.constants import default_class_color
 from ..core.keypoint_schema import schema_k
 from ..core.slice_cache import slice_names
+from ..inference.sam3_utils import SAM3_MODEL_LABEL
+from ..inference.sam_utils import InferenceBusyError
 
 from ..core.logging_config import get_logger
 
@@ -75,7 +77,12 @@ class DINOReviewEventFilter(QObject):
         if isinstance(focused, (QLineEdit, QTextEdit)):
             return False
         temp = self.main_window.image_label.temp_annotations
-        if not temp or not any(a.get("source") == "dino" for a in temp):
+        # SAM 3 (issue #50) produces temp annotations tagged "sam3"; DINO
+        # tags "dino". Both reuse this Enter/Escape review gate — widen the
+        # membership so SAM 3 review isn't dead. See ADR-038.
+        if not temp or not any(
+            a.get("source") in ("dino", "sam3") for a in temp
+        ):
             return False
         if key in (Qt.Key.Key_Return, Qt.Key.Key_Enter):
             self.main_window.accept_dino_results()
@@ -96,9 +103,17 @@ class DINOController(QObject):
         from ..inference.dino_utils import GDINO_MODEL_PATHS
         return GDINO_MODEL_PATHS.get(model_name)
 
+    def _is_sam3_selected(self):
+        """True when the DINO dropdown is on the SAM 3 text-prompt entry."""
+        return self.mw.dino_model_selector.currentText() == SAM3_MODEL_LABEL
+
     def _on_dino_model_changed(self, text):
         """Selection → ready state. Downloads happen lazily on first Detect."""
         self.mw.dino_browse_row.setVisible(text == "Custom / fine-tuned (browse)")
+
+        if text == SAM3_MODEL_LABEL:
+            self._on_sam3_selected()
+            return
 
         if text == "Pick a DINO Model":
             self.mw.dino_model_loaded = False
@@ -133,6 +148,51 @@ class DINOController(QObject):
             self.mw.lbl_dino_status.setText(f"Ready: {text}")
         else:
             self.mw.lbl_dino_status.setText(f"{text} — will download on first detection")
+
+    def _on_sam3_selected(self):
+        """SAM 3 (text prompt) selected in the DINO dropdown.
+
+        SAM 3 needs no SAM 2 refinement, so the ``dino_model_loaded`` flag
+        stays False — detection is gated on ``sam3_utils.loaded`` instead.
+        If ``sam3.pt`` isn't on disk we show the gated-download status and
+        leave Detect disabled (weights are gated on HF; never auto-download).
+        Otherwise we load eagerly and, on failure, pop an error and reset
+        the picker — mirrors ``SAMController.change_sam_model``.
+        """
+        self.mw.dino_model_loaded = False
+        sam3 = self.mw.sam3_utils
+
+        if not sam3._weights_available():
+            self.mw.lbl_dino_status.setText(
+                "SAM 3 weights (sam3.pt) not found. Request access on Hugging "
+                "Face, then place sam3.pt in the working directory or the "
+                "models/sam/ folder."
+            )
+            self.mw.btn_detect_single.setEnabled(False)
+            self.mw.btn_detect_batch.setEnabled(False)
+            return
+
+        self.mw.lbl_dino_status.setText("Loading SAM 3 ...")
+        QApplication.processEvents()
+        try:
+            sam3.ensure_loaded()
+        except Exception as e:
+            logger.exception("Failed to load SAM 3")
+            QMessageBox.critical(
+                self.mw, "SAM 3 Model Error",
+                f"Failed to load SAM 3:\n\n{e}\n\n"
+                "Check that sam3.pt is a valid checkpoint and that torch is "
+                "correctly installed for your platform / GPU.",
+            )
+            self.mw.btn_detect_single.setEnabled(False)
+            self.mw.btn_detect_batch.setEnabled(False)
+            # Reset to the neutral entry (fires _on_dino_model_changed again).
+            self.mw.dino_model_selector.setCurrentIndex(0)
+            return
+
+        self.mw.btn_detect_single.setEnabled(True)
+        self.mw.btn_detect_batch.setEnabled(True)
+        self.mw.lbl_dino_status.setText(f"Ready: {SAM3_MODEL_LABEL}")
 
     def _ensure_dino_model_downloaded(self, model_name):
         """If the preset model isn't on disk yet, download it. Returns success."""
@@ -207,17 +267,82 @@ class DINOController(QObject):
 
     # --- Detection workflows ---
 
+    def _run_text_detection(self, qimage):
+        """Detect + mask for one image, returning ``(results, sam_results)``.
+
+        The single shared detect+mask step for BOTH the single and batch
+        paths. Returns two parallel lists the existing DINO pipeline zips:
+
+        - ``results``:     ``[{"class_name", "score", "bbox"[, "source"]}, ...]``
+        - ``sam_results``: ``[{"segmentation", "score"}, ...]``
+
+        SAME length + order, so every downstream consumer (auto-accept
+        commit, temp attach, ``_commit_dino_results``,
+        ``_store_dino_batch_results``) is byte-identical regardless of
+        producer.
+
+        SAM 3 path (issue #50): ``sam3_utils.detect_text`` already produces
+        per-instance masks+boxes; we split each instance into the two
+        shapes and tag ``source="sam3"`` on the ``results`` half so the
+        temp annotations carry it downstream.
+
+        DINO path (unchanged): the two-stage ``dino_utils.detect`` →
+        ``sam_utils.apply_sam_predictions_batch``.
+
+        Returns ``(None, None)`` when the producer returns None (model
+        resolution failure) and ``([], [])`` for "ran, nothing survived".
+        Raises on hard errors (incl. ``InferenceBusyError``) — callers
+        handle that.
+        """
+        class_configs = self._build_dino_class_configs()
+
+        if self._is_sam3_selected():
+            instances = self.mw.sam3_utils.detect_text(qimage, class_configs)
+            if instances is None:
+                return None, None
+            results = [
+                {"class_name": inst["class_name"], "score": inst["score"],
+                 "bbox": inst["bbox"], "source": "sam3"}
+                for inst in instances
+            ]
+            sam_results = [
+                {"segmentation": inst["segmentation"], "score": inst["score"]}
+                for inst in instances
+            ]
+            return results, sam_results
+
+        # DINO two-stage (byte-for-byte behaviourally unchanged).
+        model_name = self.mw.dino_model_selector.currentText()
+        results = self.mw.dino_utils.detect(
+            qimage, class_configs,
+            model_name=model_name,
+            custom_model_path=self.mw.dino_custom_model_path,
+        )
+        if results is None:
+            return None, None
+        if not results:
+            return [], []
+        bboxes = [r["bbox"] for r in results]
+        sam_results = self.mw.sam_utils.apply_sam_predictions_batch(qimage, bboxes)
+        return results, sam_results
+
     def run_dino_detection_single(self):
-        if not self.mw.dino_model_loaded:
-            QMessageBox.warning(self.mw, "No DINO Model",
-                                "Please pick a DINO model first.")
-            return
-        if not self.mw.sam_utils.current_sam_model:
-            QMessageBox.warning(
-                self.mw, "No SAM Model",
-                "DINO produces bounding boxes; SAM is needed to convert them "
-                "into segmentation masks. Please pick a SAM model first.",
-            )
+        is_sam3 = self._is_sam3_selected()
+        if not is_sam3:
+            if not self.mw.dino_model_loaded:
+                QMessageBox.warning(self.mw, "No DINO Model",
+                                    "Please pick a DINO model first.")
+                return
+            if not self.mw.sam_utils.current_sam_model:
+                QMessageBox.warning(
+                    self.mw, "No SAM Model",
+                    "DINO produces bounding boxes; SAM is needed to convert them "
+                    "into segmentation masks. Please pick a SAM model first.",
+                )
+                return
+        elif not self.mw.sam3_utils.loaded:
+            QMessageBox.warning(self.mw, "No SAM 3 Model",
+                                "Please load the SAM 3 model first.")
             return
         if not self.mw.current_image or self.mw.current_image.isNull():
             QMessageBox.warning(self.mw, "No Image",
@@ -241,7 +366,9 @@ class DINOController(QObject):
         # accept from a previous run doesn't bleed into the results handler.
         self.mw.image_label.temp_annotations = []
 
-        if not self._ensure_dino_model_downloaded(model_name):
+        # SAM 3 needs no gated-DINO download step (its weights are handled
+        # at model selection). Keep the download gate for the DINO path.
+        if not is_sam3 and not self._ensure_dino_model_downloaded(model_name):
             self.mw.btn_detect_single.setEnabled(True)
             self.mw.btn_detect_batch.setEnabled(True)
             return
@@ -251,14 +378,17 @@ class DINOController(QObject):
 
         logger.debug(f"detect_single: model={model_name!r} class_configs={class_configs}")
         try:
-            results = self.mw.dino_utils.detect(
-                self.mw.current_image, class_configs,
-                model_name=model_name,
-                custom_model_path=self.mw.dino_custom_model_path,
-            )
+            results, sam_results = self._run_text_detection(self.mw.current_image)
+        except InferenceBusyError:
+            # Another inference is still pumping (ADR-013). Skip; the user
+            # can retry once it finishes.
+            self.mw.btn_detect_single.setEnabled(True)
+            self.mw.btn_detect_batch.setEnabled(True)
+            self.mw.lbl_dino_status.setText("Busy — another inference is running.")
+            return
         except Exception as e:
-            logger.exception("DINO detect failed")
-            QMessageBox.critical(self.mw, "DINO Error", str(e))
+            logger.exception("Text detection failed")
+            QMessageBox.critical(self.mw, "Detection Error", str(e))
             self.mw.btn_detect_single.setEnabled(True)
             self.mw.btn_detect_batch.setEnabled(True)
             self.mw.lbl_dino_status.setText("Detection failed.")
@@ -281,23 +411,8 @@ class DINOController(QObject):
             self.mw.lbl_dino_status.setText("No detections found.")
             return
 
-        self.mw.lbl_dino_status.setText(f"{len(results)} detection(s). Running SAM...")
-        QApplication.processEvents()
-
-        bboxes = [r["bbox"] for r in results]
-        logger.debug(f"batch call: {len(bboxes)} bbox(es), first 3 = {bboxes[:3]}")
-        try:
-            sam_results = self.mw.sam_utils.apply_sam_predictions_batch(
-                self.mw.current_image, bboxes
-            )
-        except Exception as e:
-            logger.exception("SAM batch failed")
-            QMessageBox.critical(self.mw, "SAM Error", str(e))
-            self.mw.lbl_dino_status.setText("SAM segmentation failed.")
-            return
-
         if sam_results is None:
-            logger.warning("batch returned None (no SAM model loaded)")
+            logger.warning("mask step returned None (no SAM model loaded)")
             QMessageBox.warning(self.mw, "SAM Error",
                                 "Failed to segment detections with SAM.")
             self.mw.lbl_dino_status.setText("SAM segmentation failed.")
@@ -305,7 +420,7 @@ class DINOController(QObject):
 
         n_errors = sum(1 for s in sam_results if "error" in s)
         n_ok = sum(1 for s in sam_results if "segmentation" in s)
-        logger.debug(f"batch returned {len(sam_results)} result(s): {n_ok} ok, {n_errors} error(s)")
+        logger.debug(f"mask step returned {len(sam_results)} result(s): {n_ok} ok, {n_errors} error(s)")
 
         # Honor the batch-mode dropdown for the single-image case too:
         # "Auto-accept" means commit straight to annotations without
@@ -346,7 +461,7 @@ class DINOController(QObject):
                 "segmentation": s["segmentation"],
                 "category_name": r["class_name"],
                 "score": r["score"],
-                "source": "dino",
+                "source": r.get("source", "dino"),
                 "temp": True,
             })
 
@@ -359,16 +474,22 @@ class DINOController(QObject):
         logger.debug(f"detection complete: {len(results)} boxes, {len(temp_annotations)} masks attached to canvas")
 
     def run_dino_detection_batch(self):
-        if not self.mw.dino_model_loaded:
-            QMessageBox.warning(self.mw, "No DINO Model",
-                                "Please pick a DINO model first.")
-            return
-        if not self.mw.sam_utils.current_sam_model:
-            QMessageBox.warning(
-                self.mw, "No SAM Model",
-                "DINO produces bounding boxes; SAM is needed to convert them "
-                "into segmentation masks. Please pick a SAM model first.",
-            )
+        is_sam3 = self._is_sam3_selected()
+        if not is_sam3:
+            if not self.mw.dino_model_loaded:
+                QMessageBox.warning(self.mw, "No DINO Model",
+                                    "Please pick a DINO model first.")
+                return
+            if not self.mw.sam_utils.current_sam_model:
+                QMessageBox.warning(
+                    self.mw, "No SAM Model",
+                    "DINO produces bounding boxes; SAM is needed to convert them "
+                    "into segmentation masks. Please pick a SAM model first.",
+                )
+                return
+        elif not self.mw.sam3_utils.loaded:
+            QMessageBox.warning(self.mw, "No SAM 3 Model",
+                                "Please load the SAM 3 model first.")
             return
         if not self.mw.all_images:
             QMessageBox.warning(self.mw, "No Images",
@@ -389,7 +510,9 @@ class DINOController(QObject):
         # confusing the batch results handler or the DINOReviewEventFilter.
         self.mw.image_label.temp_annotations = []
 
-        if not self._ensure_dino_model_downloaded(model_name):
+        # SAM 3 handles its weights at model selection; only DINO needs the
+        # gated on-demand download here.
+        if not is_sam3 and not self._ensure_dino_model_downloaded(model_name):
             return
 
         auto_accept = (
@@ -425,25 +548,15 @@ class DINOController(QObject):
             QApplication.processEvents()
 
             try:
-                results = self.mw.dino_utils.detect(
-                    qimage, class_configs,
-                    model_name=model_name,
-                    custom_model_path=self.mw.dino_custom_model_path,
-                )
+                results, sam_results = self._run_text_detection(qimage)
+            except InferenceBusyError:
+                logger.warning(f"inference busy, skipping {image_name}")
+                continue
             except Exception:
-                logger.exception(f"DINO failed for {image_name}")
+                logger.exception(f"text detection failed for {image_name}")
                 continue
 
             if not results:
-                continue
-
-            bboxes = [r["bbox"] for r in results]
-            try:
-                sam_results = self.mw.sam_utils.apply_sam_predictions_batch(
-                    qimage, bboxes
-                )
-            except Exception:
-                logger.exception(f"SAM failed for {image_name}")
                 continue
             if sam_results is None:
                 continue
@@ -545,7 +658,7 @@ class DINOController(QObject):
                 "category_id": self.mw.class_mapping[class_name],
                 "category_name": class_name,
                 "score": r["score"],
-                "source": "dino",
+                "source": r.get("source", "dino"),
                 "number": number,
             }
             target.setdefault(class_name, []).append(ann)
@@ -563,7 +676,7 @@ class DINOController(QObject):
                     "segmentation": s["segmentation"],
                     "category_name": r["class_name"],
                     "score": r["score"],
-                    "source": "dino",
+                    "source": r.get("source", "dino"),
                     "temp": True,
                 })
         self.mw.dino_batch_results[image_name] = valid
@@ -672,7 +785,7 @@ class DINOController(QObject):
                 "category_id": self.mw.class_mapping[class_name],
                 "category_name": class_name,
                 "score": ann.get("score", 0.0),
-                "source": "dino",
+                "source": ann.get("source", "dino"),
             }
             self.mw.image_label.annotations.setdefault(class_name, []).append(new_ann)
             self.mw.add_annotation_to_list(new_ann)

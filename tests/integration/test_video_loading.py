@@ -199,3 +199,45 @@ def test_video_roundtrip_save_reload(
     assert reloaded["video_metadata"]["total_frames"] == handler.total_frames
     # Reload rebuilt the lazy frame slices.
     assert isinstance(window.image_slices["clip"], LazySliceList)
+
+
+def test_add_images_button_path_accepts_and_loads_video(
+    window, make_test_video, tmp_path, monkeypatch
+):
+    """The visible "Add Images / Videos" button (``add_images``) must let the user
+    pick AND load a video.
+
+    Regression for the #47/#48 gap: ``add_images`` — the only method the
+    sidebar button is wired to — kept an image-only file filter
+    (``*.png…*.czi``), so no ``.mp4/.avi/.mov`` could be selected even though
+    the downstream ``add_images_to_list`` fully supports video. The earlier
+    video tests all called ``add_images_to_list``/``load_video`` directly and
+    so drove *below* the dialog, missing this. This drives the full button
+    path: the dialog's filter must offer the video extensions, and a selected
+    video must load as lazy frame slices.
+    """
+    path = make_test_video(tmp_path, name="clip.avi", frames=8)
+
+    captured = {}
+
+    def fake_get_open(parent, caption, directory, filt):
+        captured["filter"] = filt
+        return ([path], "")
+
+    monkeypatch.setattr(
+        QFileDialog, "getOpenFileNames", staticmethod(fake_get_open)
+    )
+    monkeypatch.setattr(
+        QMessageBox, "question",
+        staticmethod(lambda *a, **k: QMessageBox.StandardButton.Yes),
+    )
+    for m in ("information", "warning", "critical"):
+        monkeypatch.setattr(QMessageBox, m, staticmethod(lambda *a, **k: None))
+
+    window.add_images()
+
+    # The dialog must offer the video container extensions...
+    filt = captured["filter"].lower()
+    assert ".mp4" in filt and ".avi" in filt and ".mov" in filt
+    # ...and the selected video must actually load as lazy frame slices.
+    assert isinstance(window.image_slices.get("clip"), LazySliceList)

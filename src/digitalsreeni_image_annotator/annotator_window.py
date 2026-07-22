@@ -812,8 +812,10 @@ class ImageAnnotator(QMainWindow):
     def add_images(self):
         if not self.image_label.check_unsaved_changes():
             return
+        from .core.video_handler import file_dialog_filter
+
         file_names, _ = QFileDialog.getOpenFileNames(
-            self, "Add Images", "", "Image Files (*.png *.jpg *.bmp *.tif *.tiff *.czi)"
+            self, "Add Images or Videos", "", file_dialog_filter()
         )
         if file_names:
             self.add_images_to_list(file_names)

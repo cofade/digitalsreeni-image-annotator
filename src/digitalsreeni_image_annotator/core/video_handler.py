@@ -40,6 +40,24 @@ def is_video(file_name):
     return file_name.lower().endswith(VIDEO_EXTS)
 
 
+# Image container globs the app can open. Paired with VIDEO_EXTS to build the
+# file-open dialog filter. Kept next to VIDEO_EXTS so the dialog and is_video()
+# can never drift on the video part -- the #47 gap was exactly three filter
+# string literals updated for video and one (add_images) missed. (#47/#48)
+_IMAGE_GLOBS = "*.png *.jpg *.bmp *.tif *.tiff *.czi"
+
+
+def file_dialog_filter():
+    """Qt ``getOpenFileNames`` filter string for images + videos.
+
+    The video globs are derived from :data:`VIDEO_EXTS`, so registering a new
+    container there updates every Add/Open dialog at once instead of the app
+    silently accepting a format no file picker ever offers.
+    """
+    video_globs = " ".join(f"*{ext}" for ext in VIDEO_EXTS)
+    return f"Images & Videos ({_IMAGE_GLOBS} {video_globs})"
+
+
 def frame_key(base_name, idx):
     """Slice name for frame ``idx`` (0-based) of the video ``base_name``."""
     return f"{base_name}_F{idx:05d}"

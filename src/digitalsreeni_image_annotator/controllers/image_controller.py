@@ -52,6 +52,7 @@ from ..core.slice_cache import (
 from ..core.video_handler import (
     VideoHandler,
     VideoSliceProvider,
+    file_dialog_filter,
     is_video,
     parse_frame_index,
 )
@@ -390,10 +391,7 @@ class ImageController(QObject):
 
     def open_images(self):
         file_names, _ = QFileDialog.getOpenFileNames(
-            self.mw,
-            "Open Images",
-            "",
-            "Image Files (*.png *.jpg *.bmp *.tif *.tiff *.czi *.mp4 *.avi *.mov)",
+            self.mw, "Open Images or Videos", "", file_dialog_filter()
         )
         if file_names:
             self.mw.image_list.clear()

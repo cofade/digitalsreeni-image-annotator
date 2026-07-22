@@ -215,9 +215,14 @@ def test_load_overrides_omit_quantize_and_mode(sam3, monkeypatch):
     ov = captured["overrides"]
     # device is REQUIRED (CPU-fallback safety, mirrors SAMUtils); quantize/mode
     # must be absent (quantize raises in ultralytics 8.4.51, mode is redundant).
-    assert set(ov) == {"model", "task", "conf", "device"}
+    # save/verbose are forced False to suppress the runs/ dir + per-call console
+    # summary Ultralytics writes on every detection (verified in the #50 manual
+    # GPU run, 2026-07-22 -- accepted without raising).
+    assert set(ov) == {"model", "task", "conf", "device", "save", "verbose"}
     assert "quantize" not in ov
     assert "mode" not in ov
+    assert ov["save"] is False
+    assert ov["verbose"] is False
     assert ov["task"] == "segment"
     assert isinstance(ov["conf"], float)
     assert ov["device"] == sam3._device

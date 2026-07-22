@@ -88,7 +88,7 @@ src/digitalsreeni_image_annotator/
 | `DINOController` | controllers/dino_controller.py | DINO single/batch detection, batch review, temp-class workflow |
 | `YOLOController` | controllers/yolo_controller.py | YOLO training menu + prediction wiring |
 | `SAMUtils` | inference/sam_utils.py | Load SAM models (built-in + fine-tuned), run inference |
-| `SAM3Utils` | inference/sam3_utils.py | SAM 3 text-prompt segmentation (`SAM3SemanticPredictor`); a second producer into the DINO review pipeline, gated `sam3.pt` (ADR-038/039, #50) |
+| `SAM3Utils` | inference/sam3_utils.py | SAM 3 text-prompt segmentation (`SAM3SemanticPredictor`); a second producer into the DINO review pipeline, gated `sam3.pt` (ADR-038/039, #50). First SAM 3 use pip-installs `clip`+`timm` via ultralytics AutoUpdate (needs network; completes in-process, no restart needed); overrides force `save=False`/`verbose=False` to avoid `runs/` clutter. Real-model check verified 2026-07-22 on an RTX 4070 |
 | `DINOUtils` | inference/dino_utils.py | Grounding-DINO model load + inference |
 | `SAMFineTuner` | training/sam_trainer.py | Fine-tune SAM 2 decoder/encoder via custom loop over Ultralytics SAM2Model (ADR-021) |
 | `SAMTrainController` | controllers/sam_train_controller.py | SAM fine-tune menu, GPU gate, training thread, selector registration |

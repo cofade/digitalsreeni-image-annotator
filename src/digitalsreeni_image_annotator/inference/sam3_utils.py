@@ -41,6 +41,16 @@ never a half-loaded state.
 inside the load function (ADR-012 / ADR-016): keeps app startup fast,
 keeps the app importable on older ultralytics that predate SAM 3, and
 avoids pulling torch in early.
+
+First-run note: SAM 3's text/vision encoders need ``clip``
+(``git+https://github.com/ultralytics/CLIP.git``) and ``timm``. Ultralytics
+AutoUpdate ``pip install``s them on the first predictor call, so the FIRST
+SAM 3 use needs network + pip (an offline box without them pre-installed
+fails here). Ultralytics prints "Restart runtime or rerun command for
+updates to take effect", but the install + import complete IN-PROCESS -- the
+first detection succeeds without a restart. Observed on a clean env in the
+#50 manual GPU run (2026-07-22, RTX 4070): AutoUpdate fetched both clip+timm,
+then the same run's detect_text returned masks.
 """
 
 from __future__ import annotations
@@ -159,15 +169,20 @@ class SAM3Utils(QObject):
         self._device, _ = resolve_torch_device()
 
         weights = self._resolve_weights_path() or SAM3_WEIGHTS_FILENAME
-        # NOTE (ADR-038): pass model/task/conf/device only. `quantize=` raises
-        # "'quantize' is not a valid YOLO argument" on ultralytics 8.4.51, and
-        # `mode=` is redundant. conf is the single threshold knob. `device` is
-        # REQUIRED (mirrors SAMUtils): resolve_torch_device() may force "cpu"
-        # even when CUDA is present (unsupported compute capability / probe
-        # failure); without it Ultralytics auto-picks cuda:0 and crashes on the
-        # exact GPU the fallback rejected.
+        # NOTE (ADR-038): pass model/task/conf/device/save/verbose only.
+        # `quantize=` raises "'quantize' is not a valid YOLO argument" on
+        # ultralytics 8.4.51, and `mode=` is redundant. conf is the single
+        # threshold knob. `device` is REQUIRED (mirrors SAMUtils):
+        # resolve_torch_device() may force "cpu" even when CUDA is present
+        # (unsupported compute capability / probe failure); without it
+        # Ultralytics auto-picks cuda:0 and crashes on the exact GPU the
+        # fallback rejected. `save=False`/`verbose=False` stop Ultralytics from
+        # writing a runs/segment/predict/ dir and printing a per-call summary
+        # on EVERY detection (confirmed effective + non-raising in the #50
+        # manual GPU run, 2026-07-22 -- unlike `quantize`, these don't raise).
         overrides = dict(
-            model=weights, task="segment", conf=self._conf, device=self._device
+            model=weights, task="segment", conf=self._conf,
+            device=self._device, save=False, verbose=False,
         )
         predictor = SAM3SemanticPredictor(overrides=overrides)
 

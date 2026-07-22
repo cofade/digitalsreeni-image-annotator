@@ -1960,8 +1960,10 @@ WITHOUT a second review UI.
 reuse everything downstream verbatim:
 - New `inference/sam3_utils.py::SAM3Utils` mirrors `SAMUtils`/`DINOUtils`: lazy-imports
   `SAM3SemanticPredictor` (ADR-012/016), constructs with `overrides=dict(model="sam3.pt",
-  task="segment", conf=<floor>)` — **no `quantize`/`mode`** (ADR-038: `quantize` raises in ultralytics
-  8.4.51) — and reuses `sam_utils._run_sync` / `_qimage_to_numpy` / `_mask_to_polygon` + the shared
+  task="segment", conf=<floor>, device=<resolved>, save=False, verbose=False)` — **no `quantize`/`mode`**
+  (ADR-038: `quantize` raises in ultralytics 8.4.51); `save`/`verbose` are `False` to stop a
+  `runs/segment/predict/` dir + per-call console summary on every detection — and reuses
+  `sam_utils._run_sync` / `_qimage_to_numpy` / `_mask_to_polygon` + the shared
   `_inference_in_flight` flag (so SAM 3 serialises against SAM 2/DINO on the GPU). `detect_text(image,
   class_configs)` returns per-instance `{class_name, score, segmentation, bbox}`; `box_thr` is the
   confidence filter (SAM 3's only knob — `txt_thr`/`nms_thr` ignored). Weights (`sam3.pt`, 3.45 GB,
@@ -1991,6 +1993,14 @@ reuse everything downstream verbatim:
 - ⚠️ Real end-to-end verification needs a GPU + the gated 3.45 GB `sam3.pt` (cannot run in CI or a
   weightless dev box) — the wiring is covered by monkeypatched/stubbed tests; the real-model check is a
   documented manual step (CLAUDE.md inference checklist). CPU is impractical — DINO stays the CPU fallback.
+- ✅ Real-model check **done** (2026-07-22, RTX 4070, ultralytics 8.4.51): `detect_text` on `bus.jpg`
+  returned sensible masks (bus 0.97 + 6 persons; `box_thr=0.25` filtered the raw 3 buss / 31 persons down
+  to 1 + 6), and the live `SAM3SemanticPredictor` API (`set_image(np)` + `__call__(text=…)` →
+  `.masks.data` / `.boxes.conf` / `.boxes.xyxy`) matches the code. Two real-only findings, both handled:
+  (a) first use pip-installs `clip` + `timm` via ultralytics AutoUpdate (needs network — documented, not
+  vendored; despite ultralytics' "restart runtime" warning the install+import complete in-process, so the
+  first detection succeeds without a restart — observed on a clean env); (b) `save`/`verbose` are forced
+  `False` (added to the overrides) to avoid a `runs/` dir + console spam on every detection.
 
 ---
 

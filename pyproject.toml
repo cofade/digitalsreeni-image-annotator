@@ -34,7 +34,7 @@ dependencies = [
     "opencv-python>=4.8.0",
     "pyyaml>=6.0.0",
     "scikit-image>=0.21.0",
-    "ultralytics>=8.3.27,<9", # SAM 2 integration; trainer verified on 8.4.51
+    "ultralytics>=8.3.237,<9", # SAM 2/3 integration; SAM 3 text prompt (SAM3SemanticPredictor) needs >=8.3.237 — issue #50 / ADR-038; trainer verified on 8.4.51
     "plotly>=5.0.0",
     "shapely>=2.0.0",
     "pystackreg>=0.2.7",

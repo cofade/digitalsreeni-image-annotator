@@ -32,6 +32,7 @@ from ..core.constants import (
     ANNOT_COL_ID,
 )
 from ..dialogs.dino_phrase_editor import ClassThresholdTable, PhraseEditorPanel
+from ..inference.sam3_utils import SAM3_MODEL_LABEL
 from ..widgets.video_timeline import VideoTimeline
 
 
@@ -184,6 +185,9 @@ def build_sidebar(window):
     window.dino_model_selector.addItem("Pick a DINO Model")
     window.dino_model_selector.addItem("grounding-dino-base")
     window.dino_model_selector.addItem("grounding-dino-tiny")
+    # SAM 3 text-prompt producer (issue #50): reuses the whole DINO review
+    # pipeline; no SAM 2 refinement step. See dino_controller._run_text_detection.
+    window.dino_model_selector.addItem(SAM3_MODEL_LABEL)
     window.dino_model_selector.addItem("Custom / fine-tuned (browse)")
     window.dino_model_selector.currentTextChanged.connect(window._on_dino_model_changed)
     dino_layout.addWidget(window.dino_model_selector)

@@ -45,6 +45,7 @@ from .widgets.canvas_context import CanvasContext
 from .widgets.image_label import ImageLabel
 from .dialogs.image_patcher import show_image_patcher
 from .inference.sam_utils import SAMUtils
+from .inference.sam3_utils import SAM3Utils
 from .dialogs.slice_registration import SliceRegistrationTool
 from .dialogs.snake_game import SnakeGame
 from .dialogs.stack_interpolator import StackInterpolator
@@ -118,6 +119,11 @@ class ImageAnnotator(QMainWindow):
         self.dino_utils = DINOUtils()
         self.dino_model_loaded = False
         self.dino_custom_model_path = None
+
+        # SAM 3 text-prompt producer (issue #50, ADR-038). Plugs into the
+        # DINO review pipeline as an alternative to the two-stage
+        # DINO→SAM path; selected via the DINO model dropdown.
+        self.sam3_utils = SAM3Utils()
 
         # Debounce timer for SAM points: wait 1s after last click before inference
         self.sam_inference_timer = QTimer(self)
@@ -612,6 +618,7 @@ class ImageAnnotator(QMainWindow):
         """
         self.sam_utils.unload()
         self.dino_utils.unload()
+        self.sam3_utils.unload()
         # Reset the dropdowns to a neutral state so the user knows they
         # need to re-pick the model.
         self.sam_model_selector.setCurrentIndex(0)

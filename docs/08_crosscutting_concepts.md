@@ -632,6 +632,14 @@ diagnostic channel, dialogs are the user channel; the two are independent
 
 ## DINO Temp Annotations — Single Field, Many Images
 
+> **Two producers (ADR-039):** the temp-annotation pipeline is fed by BOTH the
+> Grounding-DINO two-stage path and SAM 3's one-stage `SAM3Utils.detect_text`.
+> Temps are tagged `source: "dino"` or `source: "sam3"`; every `source ==`
+> check (the `DINOReviewEventFilter` Enter/Escape gate, commit/store/accept)
+> is `in ("dino", "sam3")`. SAM 3 batch results share the SAME
+> `dino_batch_results` dict, so the single-field re-sync rule below applies to
+> both unchanged.
+
 `ImageLabel.temp_annotations` is a **single list on the image_label**,
 not a per-image cache. It holds the pending DINO+SAM masks shown as
 an overlay while the user decides accept/reject. The per-image batch

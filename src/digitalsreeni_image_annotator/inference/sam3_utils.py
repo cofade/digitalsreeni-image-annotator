@@ -376,37 +376,116 @@ class SAM3Utils(QObject):
         Lazy import (ADR-012 / ADR-016): keeps the app importable on
         ultralytics builds without SAM 3 and torch out of app startup.
 
-        NOTE (ADR-038 — UNRESOLVED, verify-first on GPU + weights): the exact
-        behaviour of the SAM 3 video API for *arbitrary-frame* seeding,
-        *backward* propagation and *long-video* memory is unverified and
-        cannot be checked in CI (no weights, no GPU). This implements the
-        documented whole-video streaming path: construct the video predictor
-        with the SAME override rules as ``detect`` (model / task / conf /
-        device only — no ``quantize=`` which raises on ultralytics 8.4.51, no
-        ``mode=``), seed it with the object's bbox, then stream per-frame
-        results across the clip and map each to its frame index. ``seed_idx``
-        and ``direction`` are carried through for the eventual arbitrary-frame
-        / bidirectional seed; wiring them into the real predictor call is the
-        manual GPU verification step.
+        Arbitrary-frame seed + bidirectional propagation (VERIFIED on the #51
+        GPU run, 2026-07-22, RTX 4070). Ultralytics' streaming predictor
+        (``predictor(source=video, bboxes=[bbox], stream=True)``) seeds the
+        object on the FIRST frame of the source and propagates FORWARD only,
+        and BOTH it and the low-level ``init_state`` path hard-require a
+        *video* source (a list of frames is rejected as ``mode=="images"``).
+        So to seed on an arbitrary ``seed_idx`` and go in either ``direction``
+        we slice the clip's frames and re-mux each run as a short temp video:
+        the forward run is ``frames[seed_idx:]``, the backward run is
+        ``frames[seed_idx::-1]`` -- each seeds the bbox on ITS frame 0 (== the
+        real ``seed_idx``) and we map each streamed position back to the real
+        frame index. ``both`` runs forward then backward; the shared seed frame
+        de-dupes (same index, same seeded mask).
+
+        Overrides mirror ``detect`` (model/task/conf/device; **no** ``quantize=``
+        which raises on ultralytics 8.4.51, no ``mode=``) plus ``save=False`` /
+        ``verbose=False`` (no ``runs/`` dir, no per-frame spam). TorchDynamo is
+        disabled so the video encoder runs eager -- its ``torch.compile`` path
+        needs Triton, which has no Windows build.
+
+        Memory: the clip's frames are held in RAM for the track's duration
+        (bounded by clip length -- fine for typical annotation clips; a very
+        long clip is the documented long-video limit, ADR-040). ``should_cancel``
+        is polled once per streamed frame.
         """
+        import os as _os
+        import shutil
+        import tempfile
+
+        import cv2
+
         from ultralytics.models.sam import SAM3VideoPredictor
 
-        weights = self._resolve_weights_path() or SAM3_WEIGHTS_FILENAME
-        overrides = dict(
-            model=weights, task="segment", conf=self._conf, device=self._device
-        )
-        predictor = SAM3VideoPredictor(overrides=overrides)
+        # SAM 3's VIDEO image-encoder forward is torch.compile'd (inductor ->
+        # Triton). Triton has no working Windows build, so the compile raises
+        # TritonMissing and tracking dies. Disable TorchDynamo so it runs eager.
+        # VERIFIED (#51 GPU run, 2026-07-22): eager tracks fine (~3-4 fps);
+        # `config.suppress_errors` is NOT enough (the error raises through), and
+        # a pre-launch TORCHDYNAMO_DISABLE env is too late (torch is imported
+        # long before track()), so set the runtime config here. Text-detect
+        # never hits this -- only the video encoder compiles.
+        import torch._dynamo
+        torch._dynamo.config.disable = True
 
-        # Stream per-frame results for the whole clip (see ADR-038 note above).
-        results = predictor(source=video_path, bboxes=[seed_bbox], stream=True)
-
-        out = []
-        for frame_idx, res in enumerate(results):
-            # Poll cancellation between frames (benign cross-thread bool read).
-            if callable(should_cancel) and should_cancel():
+        cap = cv2.VideoCapture(video_path)
+        fps = cap.get(cv2.CAP_PROP_FPS) or 30.0
+        frames = []
+        while True:
+            ok, frame = cap.read()
+            if not ok:
                 break
-            out.append((frame_idx, self._frame_result(res)))
-        return out
+            frames.append(frame)
+        cap.release()
+        if not frames:
+            return []
+
+        n_total = len(frames)
+        seed_idx = max(0, min(int(seed_idx), n_total - 1))
+        height, width = frames[0].shape[:2]
+
+        # Ordered lists of REAL frame indices, one per propagation run. Each run
+        # seeds on its own frame 0 (== seed_idx), so the bbox stays valid; the
+        # shared seed frame in `both` de-dupes through `by_frame`.
+        d = (direction or "both").lower()
+        runs = []
+        if d in ("forward", "both"):
+            runs.append(list(range(seed_idx, n_total)))       # seed .. end
+        if d in ("backward", "both"):
+            runs.append(list(range(seed_idx, -1, -1)))        # seed .. 0
+        if not runs:                                          # unknown direction
+            runs.append(list(range(seed_idx, n_total)))
+
+        weights = self._resolve_weights_path() or SAM3_WEIGHTS_FILENAME
+        tmpdir = tempfile.mkdtemp(prefix="sam3track_")
+        # MJPG/.avi is bundled with OpenCV everywhere (no external codec) and is
+        # intra-frame, so the seed frame isn't smeared by inter-frame coding.
+        fourcc = cv2.VideoWriter_fourcc(*"MJPG")
+        by_frame = {}
+        try:
+            for real_indices in runs:
+                tmp = _os.path.join(
+                    tmpdir, f"seg_{real_indices[0]}_{real_indices[-1]}.avi"
+                )
+                writer = cv2.VideoWriter(tmp, fourcc, fps, (width, height))
+                for fi in real_indices:
+                    writer.write(frames[fi])
+                writer.release()
+
+                # Fresh predictor per run so its per-object memory bank starts
+                # clean. Same overrides as detect + save/verbose off.
+                predictor = SAM3VideoPredictor(overrides=dict(
+                    model=weights, task="segment", conf=self._conf,
+                    device=self._device, save=False, verbose=False,
+                ))
+                stopped = False
+                for j, res in enumerate(
+                    predictor(source=tmp, bboxes=[seed_bbox], stream=True)
+                ):
+                    if callable(should_cancel) and should_cancel():
+                        stopped = True
+                        break
+                    if j < len(real_indices):
+                        by_frame[real_indices[j]] = self._frame_result(res)
+                del predictor
+                if stopped:
+                    break
+        finally:
+            shutil.rmtree(tmpdir, ignore_errors=True)
+
+        return sorted(by_frame.items())
 
     @staticmethod
     def _frame_result(res):
@@ -427,10 +506,13 @@ class SAM3Utils(QObject):
         polygon = _mask_to_polygon(mask_arr[0])
         if polygon is None:
             return None
-        # TODO(ADR-038 verify-first): defaults to fully-confident when the
-        # predictor returns no per-frame confidence. The GPU+weights run MUST
-        # confirm SAM 3 video returns per-frame conf — otherwise every frame
-        # commits as confident and the review-threshold UI is decorative.
+        # VERIFIED (#51 GPU run, 2026-07-22): SAM 3 video DOES expose
+        # `res.boxes.conf`, but it is a CONSTANT 1.0 on every tracked frame --
+        # object *absence* is signalled by an empty mask (-> None above), not by
+        # a low score. So the review-threshold is effectively decorative for
+        # tracking (near-everything commits as confident); it is kept as a
+        # harmless safety valve, and we still read conf in case a future model
+        # returns a genuine per-frame score.
         score = 1.0
         boxes = getattr(res, "boxes", None)
         conf = getattr(boxes, "conf", None) if boxes is not None else None

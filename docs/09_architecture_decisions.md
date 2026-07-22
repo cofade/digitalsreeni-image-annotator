@@ -1864,7 +1864,7 @@ lazy-slice machinery** rather than a parallel frame cache (the #45/#47 reconcili
 
 ## ADR-038: SAM 3 Integration Path (Spike — #49)
 
-**Status**: Accepted (issue #49 spike; findings confirmed in-env and implemented by #50 — see ADR-039. The D3 video items — numpy-frame seeding, long-video memory — remain verify-first for #51.)
+**Status**: Accepted (issue #49 spike; findings confirmed in-env and implemented by #50 — see ADR-039. The D3 video items — arbitrary-frame seed/backward propagation, per-frame confidence, long-video memory — were **resolved on a real GPU run by #51**; see ADR-040 Consequences.)
 
 **Context**: Milestone D plans two SAM 3 features — native text-prompt segmentation reusing the DINO
 review workflow (#50) and video object tracking (#51). Both hinge on facts that were unverified when
@@ -2013,9 +2013,9 @@ reuse everything downstream verbatim:
 
 **Context**: With videos as lazily-decoded frame slices (#47) and SAM 3 wired in (#50), the
 flagship video feature: select an object's mask on one frame and track it across the clip,
-writing a per-frame annotation. Two facts are **verify-first** per ADR-038 and CANNOT be
-confirmed without a GPU + the gated 3.45 GB `sam3.pt`: (a) the SAM 3 video API's exact
-arbitrary-frame seeding + backward-propagation behaviour, and (b) long-video predictor memory.
+writing a per-frame annotation. The ADR-038 verify-first items were **RESOLVED on a real GPU
+run** (2026-07-23, RTX 4070, ultralytics 8.4.51 + gated `sam3.pt`); the design below was updated
+to match what the real `SAM3VideoPredictor` actually does (see Consequences).
 
 **Decision**:
 - **Backend** — `SAM3Utils.track(video_path, seed_idx, seed_bbox, direction, should_cancel)`
@@ -2024,11 +2024,15 @@ arbitrary-frame seeding + backward-propagation behaviour, and (b) long-video pre
   isolated in `_track_blocking` (the single monkeypatch seam): it lazy-imports
   `SAM3VideoPredictor`, constructs with the SAME overrides as detect (`model/task/conf/device`,
   no `quantize`/`mode`), seeds via the **video file path** + bbox with `stream=True`, and maps
-  each per-frame result through `_mask_to_polygon`. **ADR-038 unresolved items are handled
-  defensively**: the documented whole-video streaming path is used (enumeration index = frame
-  index); `seed_idx`/`direction` are threaded through but not yet wired into the predictor call.
-  A real GPU+weights run is the manual verification step; if state grows with video length,
-  chunked propagation is the follow-up.
+  each per-frame result through `_mask_to_polygon`. **Arbitrary-frame seeding + bidirectional
+  propagation are implemented and VERIFIED**: ultralytics' streaming predictor only seeds the
+  FIRST frame and propagates forward, and both it and the low-level `init_state` path reject a
+  frame *list* (`mode=="images"`), so `_track_blocking` slices the clip and re-muxes a short temp
+  video per run -- forward = `frames[seed_idx:]`, backward = `frames[seed_idx::-1]` -- each seeding
+  the bbox on its own frame 0 (== `seed_idx`) and mapping the streamed position back to the real
+  index; `direction="both"` (the controller default) runs both and de-dupes the shared seed frame.
+  `torch._dynamo.config.disable = True` is set before the video predictor (its encoder's
+  `torch.compile` needs Triton, which has no Windows build); overrides add `save=False`/`verbose=False`.
 - **Controller** — new `TrackingController`: `can_track()` (active video + SAM 3 loaded + exactly
   one selected annotation carrying a `"segmentation"` — pose instances excluded, ADR-029);
   `run_tracking()` (confirm dialog + confidence-threshold spinbox default 0.5; **modal**
@@ -2055,13 +2059,22 @@ arbitrary-frame seeding + backward-propagation behaviour, and (b) long-video pre
 - ✅ The model call is a single stub seam; the full controller/timeline logic is covered by
   stubbed tests (per-frame + run-rollback undo, commit/review routing, pose exclusion,
   save/reload). Real-model tracking is a documented manual GPU step.
-- ⚠️ Two ADR-038 items stay UNVERIFIED (arbitrary-frame seed/backward; long-video memory).
-  `seed_idx`/`direction` are plumbed but inert until a weights run confirms the API; chunked
-  propagation is the memory follow-up if needed.
-- ⚠️ The confident/uncertain split depends on the predictor returning **per-frame confidence**
-  (`_frame_result` defaults `score=1.0` when absent → everything would commit as confident and
-  the threshold UI becomes decorative). Confirming per-frame conf is an explicit GPU-verification
-  checkpoint (TODO in `_frame_result`).
+- ✅ **Verified on the real model** (2026-07-23, RTX 4070, gated `sam3.pt`, 191-frame clip): a
+  mid-clip seed (frame 60) with `direction="both"` returns a contiguous `0..190` with a mask on
+  every frame (forward 60→190 and backward 60→0 both work). Findings that reshaped the design:
+  (a) SAM 3 video's encoder is `torch.compile`'d and **crashes on Windows without Triton** →
+  TorchDynamo disabled (eager; `suppress_errors` is not enough); (b) the streaming API is
+  frame-0-forward-only and needs a *video* source → arbitrary seed + backward via the temp-video
+  slices above; (c) it writes a `runs/` dir + per-frame console spam → `save=False`/`verbose=False`.
+- ⚠️ **Per-frame confidence is a constant 1.0** (VERIFIED): SAM 3 video exposes `res.boxes.conf`
+  but always at 1.0, so the confident/uncertain threshold is effectively **decorative** — object
+  *absence* is signalled by an empty mask (→ `None`), not a low score. `_frame_result` still reads
+  conf (future-proof) but near-everything commits as confident; the threshold UI is kept as a
+  harmless safety valve and the uncertain→review path rarely fires for SAM 3 tracks.
+- ⚠️ **Long-video memory**: `_track_blocking` holds the clip's frames in RAM for the track's
+  duration (191 frames → ~7 GB VRAM incl. both the semantic + video models, comfortable on 12 GB).
+  Bounded by clip length — fine for typical annotation clips; a very long clip is the documented
+  limit (a frame-window/chunked read is the follow-up).
 
 ---
 

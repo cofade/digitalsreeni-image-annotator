@@ -2071,10 +2071,17 @@ to match what the real `SAM3VideoPredictor` actually does (see Consequences).
   *absence* is signalled by an empty mask (→ `None`), not a low score. `_frame_result` still reads
   conf (future-proof) but near-everything commits as confident; the threshold UI is kept as a
   harmless safety valve and the uncertain→review path rarely fires for SAM 3 tracks.
-- ⚠️ **Long-video memory**: `_track_blocking` holds the clip's frames in RAM for the track's
-  duration (191 frames → ~7 GB VRAM incl. both the semantic + video models, comfortable on 12 GB).
-  Bounded by clip length — fine for typical annotation clips; a very long clip is the documented
-  limit (a frame-window/chunked read is the follow-up).
+- ⚠️ **Long-video memory**: `_track_blocking` decodes the whole clip into **host RAM** for the
+  track's duration (~`n·H·W·3` bytes) plus a per-run temp `.avi` on disk (2× for `both`). This
+  host-RAM frame buffer is one clip-length growth path; the OTHER is **VRAM**: the ~7 GB measured on
+  the 191-frame run is mostly model weights (clip-length-independent), but SAM-lineage video
+  predictors also accumulate a per-object memory bank across the propagated frames, so a run's VRAM
+  activations rise with the number of frames it walks (`del predictor` resets it only between the
+  forward and backward runs). Bounded by clip length — fine for typical annotation clips;
+  a very long clip is the documented limit, and a frame-window/chunked read (avoiding the full
+  RAM->disk->RAM round-trip) is the follow-up. **Revisit if a future ultralytics exposes video
+  `init_state` with an in-memory tensor source** — that would drop the temp-video re-mux entirely;
+  this is a version-pinned workaround, not the intended shape.
 
 ---
 

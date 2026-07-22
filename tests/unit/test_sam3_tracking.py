@@ -81,6 +81,38 @@ def _install_fake_predictor(monkeypatch, frames):
     )
 
 
+def _install_frame_echo_predictor(monkeypatch):
+    """Fake predictor that DECODES its ``source`` temp video and returns one
+    result per real decoded frame, tagging the result's score with the frame's
+    IDENTITY (the ``make_test_video`` red-ramp value / 10 == the original frame
+    index). Lets a test assert the re-mux wrote ``frames[real_indices[j]]`` at
+    temp position ``j`` -- i.e. the whole slice / re-mux / re-map pipeline is
+    correct, not just the index arithmetic (which the fixed fake can't guard)."""
+    import cv2
+
+    class _EchoPredictor:
+        def __init__(self, overrides=None):
+            self.overrides = overrides
+
+        def __call__(self, source=None, bboxes=None, stream=False):
+            cap = cv2.VideoCapture(source)
+            out = []
+            while True:
+                ok, bgr = cap.read()
+                if not ok:
+                    break
+                # make_test_video fills frame i's red channel with 10*i; MJPG on
+                # a uniform fill round-trips exactly, so this recovers i.
+                identity = round(float(bgr[:, :, 2].mean()) / 10.0)
+                out.append(_FakeResult(_square_mask(), conf=[identity]))
+            cap.release()
+            return out
+
+    monkeypatch.setattr(
+        "ultralytics.models.sam.SAM3VideoPredictor", _EchoPredictor, raising=False
+    )
+
+
 def _loaded_utils():
     u = SAM3Utils()
     # Mark loaded WITHOUT constructing the real predictor (track() gates on it).
@@ -141,17 +173,18 @@ def test_track_should_cancel_stops_early(
     calls = {"n": 0}
 
     def cancel():
-        # Cancel is polled at the START of each streamed frame; return True on
-        # the 2nd poll so exactly one frame is accumulated before the break.
+        # Polled after the frame read (1), after the temp-video write (2), then
+        # once per streamed frame. Return True on the 4th poll: read+write pass,
+        # frame 0 commits (poll 3), the 4th poll breaks -> exactly one frame.
         calls["n"] += 1
-        return calls["n"] >= 2
+        return calls["n"] >= 4
 
     out = u.track(video, 0, [1, 1, 15, 15], direction="forward", should_cancel=cancel)
 
     assert len(out) == 1
     assert out[0][0] == 0
-    # The fake genuinely saw the cancel signal (polled at least twice).
-    assert calls["n"] >= 2
+    # The fake genuinely saw the cancel signal through the pre-stream polls.
+    assert calls["n"] >= 4
 
 
 def test_track_absent_when_no_conf_defaults_score_one(
@@ -168,21 +201,40 @@ def test_track_absent_when_no_conf_defaults_score_one(
     assert out[0][1]["score"] == pytest.approx(1.0)
 
 
-def test_track_arbitrary_seed_bidirectional(
+def test_track_remux_maps_real_frames_bidirectional(
     qt_application, monkeypatch, make_test_video, tmp_path
 ):
-    """Seed on a NON-zero frame with direction='both': the forward run covers
-    seed..end and the backward run covers seed..0, so every frame is mapped and
-    the shared seed frame de-dupes. Guards the temp-video slice/re-map wiring
-    (#51 arbitrary-frame seed + bidirectional)."""
-    # Fake streams 3 frames per run (forward [2,3,4], backward [2,1,0]).
-    frames = [_FakeResult(_square_mask(), conf=[0.9]) for _ in range(3)]
-    _install_fake_predictor(monkeypatch, frames)
+    """Seed frame 2, direction='both' on a 5-frame clip: forward covers [2,3,4],
+    backward [2,1,0]. Using a source-DECODING fake, every output frame's identity
+    (score, recovered from the red-ramp CONTENT) must equal its frame index --
+    proving the re-mux wrote the right real frame at each temp position and the
+    mapping is correct (#51 arbitrary-frame seed + bidirectional), not just that
+    the index arithmetic lines up."""
+    _install_frame_echo_predictor(monkeypatch)
     video = make_test_video(tmp_path, name="clip.avi", frames=5)
     u = _loaded_utils()
 
     out = u.track(video, 2, [1, 1, 15, 15], direction="both")
 
-    # forward {2,3,4} + backward {2,1,0}, seed 2 de-duped -> all 5 frames sorted.
     assert [idx for idx, _ in out] == [0, 1, 2, 3, 4]
-    assert all(r is not None for _, r in out)
+    # The frame the model actually saw at each mapped index IS that real frame.
+    for frame_idx, result in out:
+        assert result is not None
+        assert round(result["score"]) == frame_idx
+
+
+def test_track_remux_asymmetric_seed(
+    qt_application, monkeypatch, make_test_video, tmp_path
+):
+    """Asymmetric seed (frame 1, 'both'): forward [1,2,3,4] (len 4), backward
+    [1,0] (len 2) -- unequal runs, so the streamed length differs per run. The
+    content identity must still line up with every mapped frame index."""
+    _install_frame_echo_predictor(monkeypatch)
+    video = make_test_video(tmp_path, name="clip.avi", frames=5)
+    u = _loaded_utils()
+
+    out = u.track(video, 1, [1, 1, 15, 15], direction="both")
+
+    assert [idx for idx, _ in out] == [0, 1, 2, 3, 4]
+    for frame_idx, result in out:
+        assert round(result["score"]) == frame_idx

@@ -396,10 +396,14 @@ class SAM3Utils(QObject):
         disabled so the video encoder runs eager -- its ``torch.compile`` path
         needs Triton, which has no Windows build.
 
-        Memory: the clip's frames are held in RAM for the track's duration
-        (bounded by clip length -- fine for typical annotation clips; a very
-        long clip is the documented long-video limit, ADR-040). ``should_cancel``
-        is polled once per streamed frame.
+        Memory: the clip's frames are decoded into HOST RAM for the track's
+        duration (~``n * H * W * 3`` bytes) plus the per-run temp ``.avi`` on
+        disk -- bounded by clip length; fine for typical annotation clips, a
+        very long clip is the documented long-video limit (ADR-040). TorchDynamo
+        is disabled around the runs (save/restore) so the video encoder runs
+        eager; ``should_cancel`` is polled after the frame read, after each
+        per-run temp-video write (before the model load), and once per streamed
+        frame.
         """
         import os as _os
         import shutil
@@ -408,17 +412,6 @@ class SAM3Utils(QObject):
         import cv2
 
         from ultralytics.models.sam import SAM3VideoPredictor
-
-        # SAM 3's VIDEO image-encoder forward is torch.compile'd (inductor ->
-        # Triton). Triton has no working Windows build, so the compile raises
-        # TritonMissing and tracking dies. Disable TorchDynamo so it runs eager.
-        # VERIFIED (#51 GPU run, 2026-07-22): eager tracks fine (~3-4 fps);
-        # `config.suppress_errors` is NOT enough (the error raises through), and
-        # a pre-launch TORCHDYNAMO_DISABLE env is too late (torch is imported
-        # long before track()), so set the runtime config here. Text-detect
-        # never hits this -- only the video encoder compiles.
-        import torch._dynamo
-        torch._dynamo.config.disable = True
 
         cap = cv2.VideoCapture(video_path)
         fps = cap.get(cv2.CAP_PROP_FPS) or 30.0
@@ -431,6 +424,8 @@ class SAM3Utils(QObject):
         cap.release()
         if not frames:
             return []
+        if callable(should_cancel) and should_cancel():
+            return []                       # cancelled during the (long) read
 
         n_total = len(frames)
         seed_idx = max(0, min(int(seed_idx), n_total - 1))
@@ -451,26 +446,56 @@ class SAM3Utils(QObject):
         weights = self._resolve_weights_path() or SAM3_WEIGHTS_FILENAME
         tmpdir = tempfile.mkdtemp(prefix="sam3track_")
         # MJPG/.avi is bundled with OpenCV everywhere (no external codec) and is
-        # intra-frame, so the seed frame isn't smeared by inter-frame coding.
+        # intra-frame -- no inter-frame smearing of the seed frame. It IS lossy
+        # JPEG (a 2nd-generation re-encode of already-decoded frames), but the
+        # loss is negligible for mask tracking (verified: masks unchanged).
         fourcc = cv2.VideoWriter_fourcc(*"MJPG")
         by_frame = {}
+
+        # SAM 3's VIDEO image-encoder forward is torch.compile'd (inductor ->
+        # Triton), which has no Windows build -> TritonMissing crash. Run eager
+        # by disabling TorchDynamo. VERIFIED (#51 GPU run, 2026-07-22): eager
+        # tracks fine; `suppress_errors` is NOT enough (raises through) and a
+        # pre-launch TORCHDYNAMO_DISABLE env is too late (torch is imported long
+        # before track()). SAVE/RESTORE rather than set-and-leak, set as the LAST
+        # statement before the `try` so the finally's restore is unconditional
+        # (the weights/mkdtemp calls above can't leave it leaked). The whole
+        # track is serialised by the shared in-flight guard (one _run_sync), so
+        # there's no concurrent torch user; text-detect never compiles anyway.
+        import torch._dynamo
+        _prev_dynamo_disable = torch._dynamo.config.disable
+        torch._dynamo.config.disable = True
         try:
             for real_indices in runs:
                 tmp = _os.path.join(
                     tmpdir, f"seg_{real_indices[0]}_{real_indices[-1]}.avi"
                 )
                 writer = cv2.VideoWriter(tmp, fourcc, fps, (width, height))
+                if not writer.isOpened():
+                    # Fail loudly rather than silently produce an empty track:
+                    # write() on a closed writer is a no-op -> empty temp video.
+                    raise RuntimeError(
+                        f"SAM 3 track: OpenCV could not open a temp video "
+                        f"writer (MJPG/.avi) at {tmp}"
+                    )
                 for fi in real_indices:
                     writer.write(frames[fi])
                 writer.release()
+                if callable(should_cancel) and should_cancel():
+                    break               # cancelled after the write, before the load
 
                 # Fresh predictor per run so its per-object memory bank starts
-                # clean. Same overrides as detect + save/verbose off.
+                # clean; the cost is one model construction per run (two for
+                # `both`). Same overrides as detect + save/verbose off.
                 predictor = SAM3VideoPredictor(overrides=dict(
                     model=weights, task="segment", conf=self._conf,
                     device=self._device, save=False, verbose=False,
                 ))
                 stopped = False
+                # Mapping assumes the stream yields exactly len(real_indices)
+                # frames (it did on the GPU run); a container round-trip that
+                # dropped the final frame would leave that index absent (a
+                # silent gap) -- the `j < len` guard only bounds the overflow.
                 for j, res in enumerate(
                     predictor(source=tmp, bboxes=[seed_bbox], stream=True)
                 ):
@@ -484,6 +509,7 @@ class SAM3Utils(QObject):
                     break
         finally:
             shutil.rmtree(tmpdir, ignore_errors=True)
+            torch._dynamo.config.disable = _prev_dynamo_disable
 
         return sorted(by_frame.items())
 

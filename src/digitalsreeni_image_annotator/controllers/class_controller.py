@@ -297,6 +297,9 @@ class ClassController(QObject):
             ):
                 self.mw.activate_tool(None)
         else:
+            # Deliberately one-directional: an empty top-list selection leaves
+            # the DINO table/panel showing the last class rather than blanking
+            # the phrase editor. Sync follows *selection*, not deselection.
             self.mw.current_class = None
             self.mw.disable_annotation_tools()
 
@@ -439,6 +442,15 @@ class ClassController(QObject):
                 self.mw.keypoint_schemas[new_name] = (
                     self.mw.keypoint_schemas.pop(old_name)
                 )
+
+            # The DINO threshold row and phrase list are keyed by class name
+            # too. Without this they stay under the dead name: detection runs
+            # against a class that no longer exists, and the next project load
+            # silently discards the renamed class's phrases *and* thresholds
+            # (both are filtered against the live class list). Same
+            # registry-drift family as #63.
+            self.mw.dino_class_table.rename_class(old_name, new_name)
+            self.mw.dino_phrase_panel.on_class_renamed(old_name, new_name)
 
             for image_name, image_annotations in self.mw.all_annotations.items():
                 if old_name in image_annotations:

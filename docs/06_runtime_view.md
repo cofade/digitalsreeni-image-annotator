@@ -612,6 +612,29 @@ offered once the project is disk-backed.
    "Tools → Export Annotated Video Frames…" writes one `{frame_key}.png`
    per annotated frame, decoding one frame at a time via `VideoHandler`.
 
+## Track an Object Across a Video (issue #51, ADR-040)
+
+1. On a video frame, the user selects exactly one mask (segmentation) and
+   triggers "Tools → Track Selected Object…". `TrackingController.can_track`
+   gates it (active video + SAM 3 loaded + one segmentation selected; pose
+   instances excluded).
+2. A confirm dialog offers a confidence threshold (default 0.5). A **modal**
+   `QProgressDialog` blocks frame navigation during the track and feeds
+   `should_cancel`.
+3. `SAM3Utils.track(handler.path, seed_idx, seed_bbox, should_cancel)` runs the
+   whole propagation in ONE `_run_sync` (the worker reads the video by path via
+   `SAM3VideoPredictor`, never Qt objects) and returns `[(frame_idx, result)]`.
+4. Each result routes: `score >= threshold` → `_commit_tracked_result`
+   (`record_history(frame_name)` first, `source:"sam3-track"`, shared `track_run`
+   id) written to the frame's annotations; `0 < score < threshold` → a temp
+   entry in `dino_batch_results` (`source:"sam3"`); `None` → nothing. The seed
+   frame is skipped. One `auto_save()` at the end.
+5. If any uncertain frames, the user is offered the existing batch review
+   (`_show_dino_batch_review`) — Enter/Escape accept/reject, verbatim.
+6. Undo: per-frame Ctrl+Z undoes one frame; "Undo Last Track" removes the whole
+   run by `track_run` id. The timeline paints tracked / needs-review / annotated
+   segments (`set_frame_states`).
+
 ## Multi-dimensional Image Loading
 
 ```

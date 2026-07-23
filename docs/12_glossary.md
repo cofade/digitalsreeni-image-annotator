@@ -41,6 +41,20 @@ The slice name of a single video frame (issue #47): `f"{base_name}_F{idx:05d}"` 
 anchored at the end so an ordinary multi-dim slice key like `stack_T1_Z5` is not
 mistaken for a frame). It is the annotation key + export filename for that frame.
 
+### Track Run
+One SAM 3 video-tracking pass (issue #51, [ADR-040](09_architecture_decisions.md)): the user
+seeds an object's mask on one frame and `TrackingController` propagates it across the video.
+Every annotation the run commits carries a shared `track_run` uuid and `source: "sam3-track"`,
+so "Undo Last Track" can remove the whole run in one action (per-frame Ctrl+Z still undoes a
+single frame). "Undo Last Track" is session-scoped — it targets the most recent run of the
+current session; after a project reload the `track_run` ids persist but the bulk affordance
+resets (per-frame undo still works).
+
+### Seed Frame
+The video frame whose selected mask seeds a [Track Run](#track-run). Tracking propagates the
+seed's object to the other frames; the seed frame itself is skipped on commit (its source
+annotation already lives there).
+
 ### Keypoint / Pose Instance
 A single labelled instance of a **pose class** (issue #35, [ADR-029](09_architecture_decisions.md#adr-029-keypoint--pose-annotation--per-class-schema-coco-instance-model-3-state-visibility)):
 an ordered set of K keypoints stored flat as `[x1, y1, v1, x2, y2, v2, ...]` (COCO

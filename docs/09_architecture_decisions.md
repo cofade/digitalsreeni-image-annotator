@@ -1864,7 +1864,7 @@ lazy-slice machinery** rather than a parallel frame cache (the #45/#47 reconcili
 
 ## ADR-038: SAM 3 Integration Path (Spike — #49)
 
-**Status**: Accepted (issue #49 spike; findings confirmed in-env and implemented by #50 — see ADR-039. The D3 video items — numpy-frame seeding, long-video memory — remain verify-first for #51.)
+**Status**: Accepted (issue #49 spike; findings confirmed in-env and implemented by #50 — see ADR-039. The D3 video items — arbitrary-frame seed/backward propagation, per-frame confidence, long-video memory — were **resolved on a real GPU run by #51**; see ADR-040 Consequences.)
 
 **Context**: Milestone D plans two SAM 3 features — native text-prompt segmentation reusing the DINO
 review workflow (#50) and video object tracking (#51). Both hinge on facts that were unverified when
@@ -2004,6 +2004,84 @@ reuse everything downstream verbatim:
   vendored; despite ultralytics' "restart runtime" warning the install+import complete in-process, so the
   first detection succeeds without a restart — observed on a clean env); (b) `save`/`verbose` are forced
   `False` (added to the overrides) to avoid a `runs/` dir + console spam on every detection.
+
+---
+
+## ADR-040: SAM 3 Video Object Tracking — Standard Commit Path, Per-Frame Undo + Run Rollback
+
+**Status**: Accepted (issue #51; builds on ADR-037 video, ADR-039 SAM 3, ADR-026 undo)
+
+**Context**: With videos as lazily-decoded frame slices (#47) and SAM 3 wired in (#50), the
+flagship video feature: select an object's mask on one frame and track it across the clip,
+writing a per-frame annotation. The ADR-038 verify-first items were **RESOLVED on a real GPU
+run** (2026-07-23, RTX 4070, ultralytics 8.4.51 + gated `sam3.pt`); the design below was updated
+to match what the real `SAM3VideoPredictor` actually does (see Consequences).
+
+**Decision**:
+- **Backend** — `SAM3Utils.track(video_path, seed_idx, seed_bbox, direction, should_cancel)`
+  runs the WHOLE propagation inside ONE `_run_sync` call (the worker never touches Qt) and
+  returns `[(frame_idx, {"segmentation","score"} | None), …]`. ALL real-model interaction is
+  isolated in `_track_blocking` (the single monkeypatch seam): it lazy-imports
+  `SAM3VideoPredictor`, constructs with the SAME overrides as detect (`model/task/conf/device`,
+  no `quantize`/`mode`), seeds via the **video file path** + bbox with `stream=True`, and maps
+  each per-frame result through `_mask_to_polygon`. **Arbitrary-frame seeding + bidirectional
+  propagation are implemented and VERIFIED**: ultralytics' streaming predictor only seeds the
+  FIRST frame and propagates forward, and both it and the low-level `init_state` path reject a
+  frame *list* (`mode=="images"`), so `_track_blocking` slices the clip and re-muxes a short temp
+  video per run -- forward = `frames[seed_idx:]`, backward = `frames[seed_idx::-1]` -- each seeding
+  the bbox on its own frame 0 (== `seed_idx`) and mapping the streamed position back to the real
+  index; `direction="both"` (the controller default) runs both and de-dupes the shared seed frame.
+  `torch._dynamo.config.disable = True` is set before the video predictor (its encoder's
+  `torch.compile` needs Triton, which has no Windows build); overrides add `save=False`/`verbose=False`.
+- **Controller** — new `TrackingController`: `can_track()` (active video + SAM 3 loaded + exactly
+  one selected annotation carrying a `"segmentation"` — pose instances excluded, ADR-029);
+  `run_tracking()` (confirm dialog + confidence-threshold spinbox default 0.5; **modal**
+  `QProgressDialog` blocks GUI navigation during the track and feeds `should_cancel`). Results
+  route: `score >= threshold` → `_commit_tracked_result` (MIRRORS `_commit_dino_results`:
+  `record_history(frame_name)` FIRST, `source=="sam3-track"`, a shared `track_run` uuid,
+  per-class `number`, write to `image_label.annotations` if current else
+  `all_annotations[frame_name]`); `0 < score < threshold` → a temp entry in `dino_batch_results`
+  (`source=="sam3"`) so the EXISTING DINO batch-review pipeline + Enter/Escape filter handle it
+  verbatim; `None` → nothing. The seed frame is skipped (it already carries the source). One
+  `auto_save()` at the end, not per frame.
+- **Undo granularity** (the explicit decision): per-frame Ctrl+Z undoes ONE frame (each commit
+  `record_history`s its own key); `undo_last_track()` is the bulk convenience — removes every
+  annotation whose `track_run == run_id` across the run's frames (per-frame `record_history`
+  first, so it too is undoable). Rollback finds annotations by EXACT `track_run` match.
+- **Timeline** — `VideoTimeline.set_frame_states({idx: "annotated"|"tracked"|"needs_review"})`
+  paints palette-derived coloured segments (precedence needs_review > tracked > annotated);
+  `set_annotated_frames` delegates to it (C2 back-compat). `needs_review` derives from
+  `dino_batch_results` keys, `tracked` from `sam3-track` annotations.
+
+**Consequences**:
+- ✅ Tracked masks are ordinary annotations — saved, exported, undoable — with zero new review UI
+  (uncertain frames reuse the DINO pipeline; commits reuse the `record_history` discipline).
+- ✅ The model call is a single stub seam; the full controller/timeline logic is covered by
+  stubbed tests (per-frame + run-rollback undo, commit/review routing, pose exclusion,
+  save/reload). Real-model tracking is a documented manual GPU step.
+- ✅ **Verified on the real model** (2026-07-23, RTX 4070, gated `sam3.pt`, 191-frame clip): a
+  mid-clip seed (frame 60) with `direction="both"` returns a contiguous `0..190` with a mask on
+  every frame (forward 60→190 and backward 60→0 both work). Findings that reshaped the design:
+  (a) SAM 3 video's encoder is `torch.compile`'d and **crashes on Windows without Triton** →
+  TorchDynamo disabled (eager; `suppress_errors` is not enough); (b) the streaming API is
+  frame-0-forward-only and needs a *video* source → arbitrary seed + backward via the temp-video
+  slices above; (c) it writes a `runs/` dir + per-frame console spam → `save=False`/`verbose=False`.
+- ⚠️ **Per-frame confidence is a constant 1.0** (VERIFIED): SAM 3 video exposes `res.boxes.conf`
+  but always at 1.0, so the confident/uncertain threshold is effectively **decorative** — object
+  *absence* is signalled by an empty mask (→ `None`), not a low score. `_frame_result` still reads
+  conf (future-proof) but near-everything commits as confident; the threshold UI is kept as a
+  harmless safety valve and the uncertain→review path rarely fires for SAM 3 tracks.
+- ⚠️ **Long-video memory**: `_track_blocking` decodes the whole clip into **host RAM** for the
+  track's duration (~`n·H·W·3` bytes) plus a per-run temp `.avi` on disk (2× for `both`). This
+  host-RAM frame buffer is one clip-length growth path; the OTHER is **VRAM**: the ~7 GB measured on
+  the 191-frame run is mostly model weights (clip-length-independent), but SAM-lineage video
+  predictors also accumulate a per-object memory bank across the propagated frames, so a run's VRAM
+  activations rise with the number of frames it walks (`del predictor` resets it only between the
+  forward and backward runs). Bounded by clip length — fine for typical annotation clips;
+  a very long clip is the documented limit, and a frame-window/chunked read (avoiding the full
+  RAM->disk->RAM round-trip) is the follow-up. **Revisit if a future ultralytics exposes video
+  `init_state` with an in-memory tensor source** — that would drop the temp-video re-mux entirely;
+  this is a version-pinned workaround, not the intended shape.
 
 ---
 

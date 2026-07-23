@@ -632,7 +632,13 @@ diagnostic channel, dialogs are the user channel; the two are independent
 
 ## DINO Temp Annotations — Single Field, Many Images
 
-> **Two producers (ADR-039):** the temp-annotation pipeline is fed by BOTH the
+> **Three producers (ADR-039/040):** the temp-annotation / `dino_batch_results`
+> pipeline is fed by the Grounding-DINO two-stage path, SAM 3's one-stage
+> `SAM3Utils.detect_text`, AND SAM 3 video tracking's uncertain frames
+> (`TrackingController`, source `"sam3"`). Tracking's CONFIDENT frames bypass
+> review and commit directly as `source:"sam3-track"`.
+
+> **Two detect producers (ADR-039):** the temp-annotation pipeline is fed by BOTH the
 > Grounding-DINO two-stage path and SAM 3's one-stage `SAM3Utils.detect_text`.
 > Temps are tagged `source: "dino"` or `source: "sam3"`; every `source ==`
 > check (the `DINOReviewEventFilter` Enter/Escape gate, commit/store/accept)

@@ -108,3 +108,60 @@ def test_clear_resets_and_emits_nothing(timeline):
     assert timeline.annotated_frames == set()
     assert timeline.slider.maximum() == 0
     assert timeline.label.text() == ""
+
+
+# --- per-frame states (issue #51) -------------------------------------------
+
+def test_set_frame_states_stores_map_and_marked_set(timeline):
+    timeline.set_video(100, 25.0)
+    timeline.set_frame_states({1: "annotated", 5: "tracked", 9: "needs_review"})
+    assert timeline.frame_states == {1: "annotated", 5: "tracked", 9: "needs_review"}
+    # annotated_frames is the back-compat set of ALL marked indices (any state).
+    assert timeline.annotated_frames == {1, 5, 9}
+
+
+def test_set_annotated_frames_delegates_to_states(timeline):
+    """Back-compat: the set-based API still works AND now records state."""
+    timeline.set_video(100, 25.0)
+    timeline.set_annotated_frames({0, 99})
+    assert timeline.annotated_frames == {0, 99}
+    assert timeline.frame_states == {0: "annotated", 99: "annotated"}
+
+
+def test_frame_state_runs_collapses_contiguous_same_state(timeline):
+    timeline.set_video(100, 25.0)
+    # 3,4,5 share a state → one run; 7 is a lone tracked run; 8,9 needs_review.
+    timeline.set_frame_states({
+        3: "annotated", 4: "annotated", 5: "annotated",
+        7: "tracked",
+        8: "needs_review", 9: "needs_review",
+    })
+    assert timeline.frame_state_runs() == [
+        (3, 5, "annotated"),
+        (7, 7, "tracked"),
+        (8, 9, "needs_review"),
+    ]
+
+
+def test_frame_state_runs_breaks_on_state_change_within_contiguous(timeline):
+    timeline.set_video(100, 25.0)
+    # Consecutive indices but a state change at 5 → two separate runs.
+    timeline.set_frame_states({4: "annotated", 5: "tracked", 6: "tracked"})
+    assert timeline.frame_state_runs() == [
+        (4, 4, "annotated"),
+        (5, 6, "tracked"),
+    ]
+
+
+def test_frame_state_runs_drops_out_of_range(timeline):
+    timeline.set_video(10, 25.0)  # valid indices 0..9
+    timeline.set_frame_states({8: "annotated", 9: "annotated", 12: "tracked"})
+    assert timeline.frame_state_runs() == [(8, 9, "annotated")]
+
+
+def test_set_video_resets_frame_states(timeline):
+    timeline.set_video(100, 25.0)
+    timeline.set_frame_states({3: "tracked"})
+    timeline.set_video(50, 30.0)
+    assert timeline.frame_states == {}
+    assert timeline.annotated_frames == set()

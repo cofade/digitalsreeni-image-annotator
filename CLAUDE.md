@@ -49,9 +49,9 @@ src/digitalsreeni_image_annotator/
 ├── __init__.py                   # Public API re-exports
 │
 ├── core/                         # constants, annotation_utils, image_utils
-├── controllers/                  # 8 controllers (project, image, sam,
+├── controllers/                  # 9 controllers (project, image, sam,
 │                                 #   sam_train, dino, yolo, annotation,
-│                                 #   class) + io_controller
+│                                 #   class, tracking) + io_controller
 ├── widgets/
 │   ├── image_label.py            # ImageLabel canvas widget (dispatcher)
 │   ├── canvas_renderer.py        # CanvasRenderer painting/overlays (ADR-034)
@@ -88,7 +88,8 @@ src/digitalsreeni_image_annotator/
 | `DINOController` | controllers/dino_controller.py | DINO single/batch detection, batch review, temp-class workflow |
 | `YOLOController` | controllers/yolo_controller.py | YOLO training menu + prediction wiring |
 | `SAMUtils` | inference/sam_utils.py | Load SAM models (built-in + fine-tuned), run inference |
-| `SAM3Utils` | inference/sam3_utils.py | SAM 3 text-prompt segmentation (`SAM3SemanticPredictor`); a second producer into the DINO review pipeline, gated `sam3.pt` (ADR-038/039, #50). First SAM 3 use pip-installs `clip`+`timm` via ultralytics AutoUpdate (needs network; completes in-process, no restart needed); overrides force `save=False`/`verbose=False` to avoid `runs/` clutter. Real-model check verified 2026-07-22 on an RTX 4070 |
+| `SAM3Utils` | inference/sam3_utils.py | SAM 3 text-prompt segmentation (`SAM3SemanticPredictor`) + `track()` video propagation (`SAM3VideoPredictor`); a second producer into the DINO review pipeline, gated `sam3.pt` (ADR-038/039/040, #50/#51). First SAM 3 use pip-installs `clip`+`timm` via ultralytics AutoUpdate (needs network; completes in-process, no restart needed); overrides force `save=False`/`verbose=False` to avoid `runs/` clutter. Real-model check verified 2026-07-22 on an RTX 4070 |
+| `TrackingController` | controllers/tracking_controller.py | SAM 3 video object tracking (#51, ADR-040): seed one mask → propagate across frames; confident→commit (`source:"sam3-track"`, `track_run` id), uncertain→`dino_batch_results` review; per-frame undo + `undo_last_track`. **Real-model verified 2026-07-23 (RTX 4070)**: arbitrary-frame seed + bidirectional via temp-video slices (`_track_blocking`); TorchDynamo disabled (SAM 3 video needs Triton, no Windows build); per-frame conf is constant 1.0 so the review threshold is mostly decorative |
 | `DINOUtils` | inference/dino_utils.py | Grounding-DINO model load + inference |
 | `SAMFineTuner` | training/sam_trainer.py | Fine-tune SAM 2 decoder/encoder via custom loop over Ultralytics SAM2Model (ADR-021) |
 | `SAMTrainController` | controllers/sam_train_controller.py | SAM fine-tune menu, GPU gate, training thread, selector registration |

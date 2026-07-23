@@ -201,6 +201,37 @@ def test_video_roundtrip_save_reload(
     assert isinstance(window.image_slices["clip"], LazySliceList)
 
 
+@pytest.mark.parametrize("remove_method", ["remove_image", "delete_selected_image"])
+def test_remove_video_clears_orphaned_slices(
+    window, make_test_video, tmp_path, no_native_dialogs, remove_method
+):
+    """Removing a video (via the context-menu Remove path OR the Delete-key
+    ``delete_selected_image`` path) must drop its frame slices AND reset
+    ``mw.slices``.
+
+    Regression: both methods deleted ``image_slices[base]`` + released the
+    handler + cleared the slice-list widget, but left ``mw.slices`` pointing at
+    the removed video's LazySliceList. ``update_ui`` -> ``update_slice_list``
+    then rebuilt the list from that dangling ref, so the orphaned frames
+    reappeared and selecting one showed no preview (its handler was released).
+    """
+    video = make_test_video(tmp_path, name="clip.avi", frames=8)
+    window.image_controller.add_images_to_list([video])
+    assert "clip" in window.image_slices
+    assert window.slice_list.count() == 8
+
+    window.image_list.setCurrentRow(0)          # select the (only) video
+    getattr(window.image_controller, remove_method)()
+
+    assert "clip" not in window.image_slices
+    assert "clip" not in window.video_handlers
+    assert window.slices == []                  # dangling ref dropped
+    assert window.slice_list.count() == 0
+    # A UI refresh must NOT resurrect the orphaned frames from mw.slices.
+    window.update_ui()
+    assert window.slice_list.count() == 0
+
+
 def test_add_images_button_path_accepts_and_loads_video(
     window, make_test_video, tmp_path, monkeypatch
 ):

@@ -658,10 +658,47 @@ class ImageController(QObject):
             idx = parse_frame_index(self.mw.current_slice or "")
             if idx is not None:
                 timeline.set_current_frame(idx)
-            timeline.set_annotated_frames(self.annotated_frame_indices(base_name))
+            timeline.set_frame_states(self.video_frame_states(base_name))
             timeline.setVisible(True)
         else:
             timeline.setVisible(False)
+
+    def video_frame_states(self, base_name):
+        """Per-frame timeline states for the video ``base_name`` (issue #51).
+
+        Returns ``{frame_idx: state}`` where ``state`` is one of
+        ``"tracked"`` / ``"needs_review"`` / ``"annotated"``. Cheap name-only
+        scans of ``all_annotations`` + ``dino_batch_results`` (no frame decode).
+
+        Precedence (highest wins, so a frame appears once at its top state):
+        ``needs_review`` (a pending SAM 3 / DINO review result for this frame)
+        > ``tracked`` (holds a committed ``source == "sam3-track"`` annotation)
+        > ``annotated`` (any other committed annotation). ``needs_review`` is
+        applied last so it overrides a committed state on the same frame.
+        """
+        prefix = base_name + "_F"
+        states = {}
+        for key, by_class in self.mw.all_annotations.items():
+            if not key.startswith(prefix):
+                continue
+            idx = parse_frame_index(key)
+            if idx is None:
+                continue
+            anns = [a for lst in by_class.values() for a in lst]
+            if not anns:
+                continue
+            if any(a.get("source") == "sam3-track" for a in anns):
+                states[idx] = "tracked"
+            else:
+                states[idx] = "annotated"
+        # Pending review results override any committed state on the frame.
+        for key in getattr(self.mw, "dino_batch_results", {}):
+            if not key.startswith(prefix):
+                continue
+            idx = parse_frame_index(key)
+            if idx is not None:
+                states[idx] = "needs_review"
+        return states
 
     def update_all_images(self, new_image_info):
         for info in new_image_info:
@@ -1246,6 +1283,14 @@ class ImageController(QObject):
                 release_slices(stack_slices)  # evict cached QImages (issue #45)
                 del self.mw.image_slices[base_name]
 
+                # If the removed stack/video was the ACTIVE one, drop the live
+                # slice references too -- otherwise update_ui() ->
+                # update_slice_list() rebuilds the slice list from the dangling
+                # mw.slices and the orphaned frames reappear (and a video's
+                # frames can't decode, its handler having just been released).
+                if self.mw.slices is stack_slices:
+                    self.mw.slices = []
+
                 self.mw.slice_list.clear()
 
             # Release the video's cv2 capture, if any (issue #47).
@@ -1304,6 +1349,13 @@ class ImageController(QObject):
                         self.mw.all_annotations.pop(slice_name, None)
                     release_slices(stack_slices)  # evict cached QImages (issue #45)
                     del self.mw.image_slices[base_name]
+
+                    # Drop live slice refs if the removed stack/video was the
+                    # active one, else update_ui() rebuilds the list from the
+                    # dangling mw.slices (orphaned frames reappear). Mirrors
+                    # remove_image (video-removal bug).
+                    if self.mw.slices is stack_slices:
+                        self.mw.slices = []
 
                     self.mw.slice_list.clear()
 

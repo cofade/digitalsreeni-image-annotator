@@ -421,6 +421,21 @@ class ClassController(QObject):
             self.mw, "Rename Class", "Enter new class name:", text=old_name
         )
         if ok and new_name and new_name != old_name:
+            # Reject a collision before mutating anything. Without this the
+            # rename half-clobbers every name-keyed registry: the old class's
+            # id overwrites the target's in class_mapping, its colour
+            # overwrites the target's, annotation buckets merge, and the DINO
+            # table ends up with two rows of the same name (duplicate
+            # detection passes + one row's thresholds silently dropped).
+            if new_name in self.mw.class_mapping:
+                QMessageBox.warning(
+                    self.mw,
+                    "Duplicate Class",
+                    f"A class named '{new_name}' already exists. "
+                    "Please choose a different name.",
+                )
+                return
+
             if old_name in self.mw.class_mapping:
                 old_id = self.mw.class_mapping[old_name]
                 self.mw.class_mapping[new_name] = old_id
@@ -436,6 +451,13 @@ class ClassController(QObject):
             else:
                 logger.warning(f"Class '{old_name}' not found in class_colors")
                 return
+
+            # Visibility is name-keyed too (read via .get(name, True)), so a
+            # rename that skips it silently un-hides a hidden class.
+            if old_name in self.mw.image_label.class_visibility:
+                self.mw.image_label.class_visibility[new_name] = (
+                    self.mw.image_label.class_visibility.pop(old_name)
+                )
 
             # Keypoint schema follows the class name (issue #35).
             if old_name in self.mw.keypoint_schemas:

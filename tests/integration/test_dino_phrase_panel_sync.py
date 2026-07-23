@@ -16,9 +16,28 @@ ui.sidebar.build_sidebar) is exercised end-to-end -- deleting that ``connect``
 must fail these tests, not just bypass them.
 """
 
+import json
+
 import pytest
 from PyQt6.QtCore import Qt
-from PyQt6.QtWidgets import QInputDialog
+from PyQt6.QtWidgets import QFileDialog, QInputDialog, QMessageBox
+
+
+@pytest.fixture(autouse=True)
+def _no_native_dialogs(monkeypatch):
+    """No modal may ever open in an offscreen run -- it hangs the test.
+    Same hard safety net as tests/integration/test_project_roundtrip.py.
+    """
+    monkeypatch.setattr(
+        QMessageBox, "question",
+        staticmethod(lambda *a, **k: QMessageBox.StandardButton.Yes),
+    )
+    monkeypatch.setattr(QMessageBox, "information", staticmethod(lambda *a, **k: None))
+    monkeypatch.setattr(QMessageBox, "warning", staticmethod(lambda *a, **k: None))
+    monkeypatch.setattr(QMessageBox, "critical", staticmethod(lambda *a, **k: None))
+    monkeypatch.setattr(
+        QFileDialog, "getOpenFileNames", staticmethod(lambda *a, **k: ([], ""))
+    )
 
 
 @pytest.fixture
@@ -127,6 +146,88 @@ def test_rename_class_carries_dino_threshold_row_and_phrases(window, monkeypatch
     assert phrases[0] == "UAV"
     assert "rotor blade" in phrases
     assert window.dino_phrase_panel._active_class == "UAV"
+
+    # Consequence 1: detection no longer runs under the dead class name, and
+    # the renamed class appears exactly once (not duplicated).
+    config_names = [c["name"] for c in window.dino_controller._build_dino_class_configs()]
+    assert "Drone" not in config_names
+    assert config_names.count("UAV") == 1
+
+
+def test_rename_class_phrases_survive_project_roundtrip(window, monkeypatch, tmp_path):
+    """Consequence 2: a renamed class's phrases and thresholds survive save +
+    reopen. Both are filtered against the live class list on load, so before
+    the rename sync they were silently discarded on the next open.
+    """
+    proj = tmp_path / "p.iap"
+    window.current_project_file = str(proj)
+    window.current_project_dir = str(tmp_path)
+    (tmp_path / "images").mkdir()
+
+    window.add_class("Drone")
+    _select_in_top_list(window, "Drone")
+    monkeypatch.setattr(QInputDialog, "getText", lambda *a, **k: ("rotor blade", True))
+    window.dino_phrase_panel._add_phrase()
+    window.dino_class_table.set_thresholds("Drone", 0.4, 0.35, 0.6)
+
+    monkeypatch.setattr(QInputDialog, "getText", lambda *a, **k: ("UAV", True))
+    item = window.class_list.findItems("Drone", Qt.MatchFlag.MatchExactly)[0]
+    window.class_controller.rename_class(item)
+
+    window.project_controller.save_project(show_message=False)
+    saved = json.loads(proj.read_text(encoding="utf-8"))
+    assert "UAV" in saved["dino_config"]["phrases"]
+    assert "Drone" not in saved["dino_config"]["phrases"]
+
+    window.project_controller.open_specific_project(str(proj))
+    assert "rotor blade" in window.dino_phrase_panel.get_phrases_for("UAV")
+    assert window.dino_class_table.get_thresholds_dict()["UAV"]["box"] == pytest.approx(0.4)
+
+
+def test_rename_to_existing_class_is_rejected_intact(window, monkeypatch):
+    """Renaming onto an existing class name must abort cleanly, leaving every
+    name-keyed registry untouched.
+
+    Before the guard this half-clobbered everything: the old class's id and
+    colour overwrote the target's in class_mapping/class_colors, and the DINO
+    table ended up with two rows named the same -- so get_thresholds_dict()
+    dropped one row and _build_dino_class_configs() emitted the class twice.
+    """
+    window.add_class("Drone")
+    window.add_class("camera")
+    drone_id = window.class_mapping["Drone"]
+    camera_id = window.class_mapping["camera"]
+
+    monkeypatch.setattr(QInputDialog, "getText", lambda *a, **k: ("camera", True))
+    item = window.class_list.findItems("Drone", Qt.MatchFlag.MatchExactly)[0]
+    window.class_controller.rename_class(item)
+
+    assert window.class_mapping == {"Drone": drone_id, "camera": camera_id}
+    assert window.dino_class_table.get_class_names() == ["Drone", "camera"]
+    assert sorted(window.dino_class_table.get_thresholds_dict()) == ["Drone", "camera"]
+    names = [c["name"] for c in window.dino_controller._build_dino_class_configs()]
+    assert names.count("camera") == 1
+    # The top list item keeps its original text -- no half-applied rename.
+    assert item.text() == "Drone"
+
+
+def test_rename_class_carries_visibility(window, monkeypatch):
+    """Visibility is name-keyed and read via .get(name, True), so a rename that
+    skips it silently un-hides a hidden class."""
+    window.add_class("Drone")
+    item = window.class_list.findItems("Drone", Qt.MatchFlag.MatchExactly)[0]
+    # Hide it the way the user does -- unchecking the list checkbox, which
+    # fires itemChanged -> toggle_class_visibility. Poking class_visibility
+    # directly would leave the checkbox checked and misrepresent the state.
+    item.setCheckState(Qt.CheckState.Unchecked)
+    assert window.image_label.class_visibility["Drone"] is False
+
+    monkeypatch.setattr(QInputDialog, "getText", lambda *a, **k: ("UAV", True))
+    window.class_controller.rename_class(item)
+
+    assert window.image_label.class_visibility.get("UAV") is False
+    # No stale key left behind under the old name.
+    assert "Drone" not in window.image_label.class_visibility
 
 
 def test_rename_class_keeps_user_customised_first_phrase(window, monkeypatch):

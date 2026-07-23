@@ -630,6 +630,41 @@ messaging still goes through `QMessageBox` / dialogs — logging is the
 diagnostic channel, dialogs are the user channel; the two are independent
 (see the Error-Handling Convention above).
 
+## Class Name Is a Primary Key — Sync Every Registry on Rename (#63)
+
+There is no class-id object. A class is identified by its **name string**, and
+that name is the key into several independent registries:
+
+| Registry | Owner | Notes |
+|----------|-------|-------|
+| `class_mapping` | main window | name → numeric id (export) |
+| `image_label.class_colors` | canvas | name → `QColor` |
+| `image_label.class_visibility` | canvas | read via `.get(name, True)` |
+| `keypoint_schemas` | main window | pose classes only (ADR-029) |
+| `all_annotations[img]` / `image_label.annotations` | per-image buckets | plus each annotation's `category_name` |
+| `dino_class_table` rows | DINO widget | keyed by row text |
+| `dino_phrase_panel._phrases` | DINO widget | name → phrase list |
+
+**Every roster mutation must touch all of them.** `add_class` and
+`delete_class` do; `rename_class` silently skipped the DINO pair and
+`class_visibility` until #63 — so a renamed class kept detecting under its dead
+name, lost its phrases *and* thresholds on the next project load (both are
+filtered against the live class list), and quietly became visible again.
+
+**Renaming onto an existing name is rejected, not merged.** `rename_class`
+checks `new_name in class_mapping` and aborts *before* mutating anything.
+Without that guard the rename half-clobbered every registry — the old class's
+id and colour overwrote the target's, annotation buckets merged, and the DINO
+table ended up with two identically-named rows, which makes
+`get_thresholds_dict()` (a name-keyed dict comprehension) drop one row's
+thresholds and `_build_dino_class_configs()` emit the class twice.
+`ClassThresholdTable.rename_class` carries the same uniqueness guard as a
+backstop, mirroring `add_class`.
+
+When adding a new name-keyed registry, add it to the table above **and** to all
+three mutation sites. The registries are hand-synced at each call site rather
+than projected from one roster — that coupling is known debt.
+
 ## DINO Temp Annotations — Single Field, Many Images
 
 > **Three producers (ADR-039/040):** the temp-annotation / `dino_batch_results`

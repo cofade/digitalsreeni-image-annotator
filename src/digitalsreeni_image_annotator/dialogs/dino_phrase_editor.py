@@ -184,13 +184,29 @@ class ClassThresholdTable(QTableWidget):
 
     def rename_class(self, old_name: str, new_name: str) -> bool:
         """Retarget the row for ``old_name`` to ``new_name``, keeping its
-        thresholds. Returns False when no such row exists."""
+        thresholds. Returns False when no such row exists, or when another row
+        already holds ``new_name``.
+
+        The collision guard mirrors ``add_class``: row names must stay unique,
+        because ``get_thresholds_dict`` keys by name (a duplicate silently
+        drops one row's thresholds) and ``_build_dino_class_configs`` iterates
+        rows (a duplicate makes DINO run the same class twice). Callers should
+        reject the rename outright -- see ``ClassController.rename_class`` --
+        so this is the backstop, not the error message.
+        """
+        target = None
         for r in range(self.rowCount()):
             item = self.item(r, _COL_NAME)
-            if item and item.text() == old_name:
-                item.setText(new_name)
-                return True
-        return False
+            if item is None:
+                continue
+            if item.text() == new_name and item.text() != old_name:
+                return False
+            if item.text() == old_name:
+                target = item
+        if target is None:
+            return False
+        target.setText(new_name)
+        return True
 
 
 class PhraseEditorPanel(QWidget):
@@ -381,12 +397,16 @@ class PhraseEditorPanel(QWidget):
         row 0 is independently renameable -- so it is retargeted only when it
         still holds the old class name, leaving a user-customised prompt alone.
         """
-        if old_name == new_name or old_name not in self._phrases:
+        if old_name == new_name:
             return
-        phrases = self._phrases.pop(old_name)
-        if phrases and phrases[0] == old_name:
-            phrases[0] = new_name
-        self._phrases[new_name] = phrases
+        phrases = self._phrases.pop(old_name, None)
+        if phrases is not None:
+            if phrases and phrases[0] == old_name:
+                phrases[0] = new_name
+            self._phrases[new_name] = phrases
+        # Retarget the active class even when no phrase entry existed (a
+        # set_phrases() wholesale replace can strand _active_class), so the
+        # panel can't keep showing the old name after the table row renamed.
         if self._active_class == old_name:
             self.set_active_class(new_name)
 

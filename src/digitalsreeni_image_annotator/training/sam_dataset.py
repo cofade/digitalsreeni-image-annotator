@@ -18,6 +18,10 @@ from PyQt6.QtGui import QImage
 from .sam_trainer import SampleGroup
 from ..inference.sam_utils import _qimage_to_numpy
 
+from ..core.logging_config import get_logger
+
+logger = get_logger(__name__)
+
 
 def _specs_for(annotations) -> list:
     """Flatten ``{class: [ann, ...]}`` into raw instance specs the
@@ -54,7 +58,7 @@ def build_groups_from_project(all_annotations, image_paths, slices, image_slices
                     if qimage is not None:
                         break
             if qimage is None:
-                print(f"[SAM dataset] skip slice {image_name!r}: no image data")
+                logger.warning(f"skip slice {image_name!r}: no image data")
                 continue
             # Convert the in-memory slice QImage to numpy HERE, on the GUI
             # thread. The array is later consumed by the training worker
@@ -63,7 +67,7 @@ def build_groups_from_project(all_annotations, image_paths, slices, image_slices
             # so we hand the worker a thread-owned copy instead of a lambda
             # that defers the buffer read onto the worker.
             arr = _qimage_to_numpy(qimage)
-            groups.append(SampleGroup(lambda a=arr: a, specs))
+            groups.append(SampleGroup(lambda a=arr: a, specs, name=image_name))
             continue
 
         image_path = image_paths.get(image_name)
@@ -72,12 +76,12 @@ def build_groups_from_project(all_annotations, image_paths, slices, image_slices
                 (p for name, p in image_paths.items() if image_name in name), None
             )
         if not image_path:
-            print(f"[SAM dataset] skip {image_name!r}: no image_paths entry")
+            logger.warning(f"skip {image_name!r}: no image_paths entry")
             continue
         if image_path.lower().endswith((".tif", ".tiff", ".czi")):
-            print(f"[SAM dataset] skip TIFF/CZI source {image_name!r} (use slices)")
+            logger.debug(f"skip TIFF/CZI source {image_name!r} (use slices)")
             continue
-        groups.append(SampleGroup(lambda p=image_path: _qimage_to_numpy(QImage(p)), specs))
+        groups.append(SampleGroup(lambda p=image_path: _qimage_to_numpy(QImage(p)), specs, name=image_name))
 
     return groups
 
@@ -103,5 +107,32 @@ def build_groups_from_folder(folder: str):
         specs = entry.get("instances", [])
         if not specs or not os.path.exists(img_path):
             continue
-        groups.append(SampleGroup(lambda p=img_path: _qimage_to_numpy(QImage(p)), specs))
+        groups.append(SampleGroup(lambda p=img_path: _qimage_to_numpy(QImage(p)), specs, name=img_rel))
     return groups
+
+
+# ── train/val split ──────────────────────────────────────────────────────────
+
+def split_groups(groups, train_pct):
+    """Partition ``groups`` into ``(train, val)`` deterministically by image.
+
+    ``train_pct`` in ``[0, 100]``; ``>= 100`` (or fewer than 2 groups) keeps
+    everything in train with an empty val set — the caller then skips the
+    validation pass / early stopping. Reuses ``io.export_formats.assign_train_val``
+    (stable MD5 ordering) so the SAM split matches the YOLO export's behaviour
+    and is reproducible across runs and machines.
+
+    Each group is keyed by ``"{index}:{name}"`` so duplicate or empty
+    ``SampleGroup.name`` values can't collapse two images into one split bucket.
+    """
+    from ..io.export_formats import assign_train_val
+
+    groups = list(groups)
+    if train_pct >= 100 or len(groups) < 2:
+        return groups, []
+
+    keyed = {f"{i}:{g.name}": g for i, g in enumerate(groups)}
+    _train_keys, val_keys = assign_train_val(keyed.keys(), 100 - train_pct)
+    train = [g for k, g in keyed.items() if k not in val_keys]
+    val = [g for k, g in keyed.items() if k in val_keys]
+    return train, val

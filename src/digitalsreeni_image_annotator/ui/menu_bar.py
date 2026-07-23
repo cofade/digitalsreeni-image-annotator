@@ -96,6 +96,17 @@ def build_menu_bar(window):
     toggle_dark_mode_action.triggered.connect(window.toggle_dark_mode)
     settings_menu.addAction(toggle_dark_mode_action)
 
+    # Experiment tracking (issue #74) — configure MLflow + open its UI.
+    tracking_menu = settings_menu.addMenu("&Experiment Tracking")
+
+    mlflow_settings_action = QAction("MLflow Settings…", window)
+    mlflow_settings_action.triggered.connect(window.show_mlflow_settings)
+    tracking_menu.addAction(mlflow_settings_action)
+
+    open_mlflow_ui_action = QAction("Open MLflow UI", window)
+    open_mlflow_ui_action.triggered.connect(window.open_mlflow_ui)
+    tracking_menu.addAction(open_mlflow_ui_action)
+
     # Tools Menu
     tools_menu = menu_bar.addMenu("&Tools")
 
@@ -139,6 +150,27 @@ def build_menu_bar(window):
     dicom_converter_action = QAction("DICOM Converter", window)
     dicom_converter_action.triggered.connect(window.show_dicom_converter)
     tools_menu.addAction(dicom_converter_action)
+
+    export_frames_action = QAction("Export Annotated Video Frames…", window)
+    export_frames_action.triggered.connect(window.export_annotated_frames)
+    tools_menu.addAction(export_frames_action)
+
+    tools_menu.addSeparator()
+
+    # SAM 3 video object tracking (issue #51). "Track Selected Object" is only
+    # meaningful with a video + SAM 3 loaded + one segmentation selected, so its
+    # enabled state is refreshed from can_track() each time the menu opens.
+    track_object_action = QAction("Track Selected Object…", window)
+    track_object_action.triggered.connect(window.track_selected_object)
+    tools_menu.addAction(track_object_action)
+
+    undo_track_action = QAction("Undo Last Track", window)
+    undo_track_action.triggered.connect(window.undo_last_track)
+    tools_menu.addAction(undo_track_action)
+
+    tools_menu.aboutToShow.connect(
+        lambda: track_object_action.setEnabled(window.can_track())
+    )
 
     tools_menu.addSeparator()
 

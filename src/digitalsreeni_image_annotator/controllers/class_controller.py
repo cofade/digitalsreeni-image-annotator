@@ -15,8 +15,6 @@ State stays on the main window (consistent with prior phases):
 - DINO widgets (`dino_class_table`, `dino_phrase_panel`)
 """
 
-import traceback
-
 from PyQt6.QtCore import Qt, QObject
 from PyQt6.QtGui import QColor, QIcon, QPixmap
 from PyQt6.QtWidgets import (
@@ -29,6 +27,10 @@ from PyQt6.QtWidgets import (
 
 from ..core.constants import default_class_color
 
+from ..core.logging_config import get_logger
+
+logger = get_logger(__name__)
+
 
 class ClassController(QObject):
     def __init__(self, main_window):
@@ -40,9 +42,9 @@ class ClassController(QObject):
             item = self.mw.class_list.item(index)
             self.mw.class_list.setCurrentItem(item)
             self.mw.current_class = item.text()
-            print(f"Selected class: {self.mw.current_class}")
+            logger.debug(f"Selected class: {self.mw.current_class}")
         else:
-            print("Invalid class index")
+            logger.warning("Invalid class index")
 
     def delete_selected_class(self):
         selected_items = self.mw.class_list.selectedItems()
@@ -105,6 +107,13 @@ class ClassController(QObject):
         # keep one of those two routes.
         self.mw.image_controller.apply_image_filter()
 
+        # Repaint the video timeline's annotated-frame marks (issue #48). This
+        # is THE mark-refresh choke point (runs on every annotation mutation AND
+        # at the end of switch_image / switch_slice), so hooking here keeps the
+        # timeline in sync with a single call rather than duplicating it in each
+        # frame-switch path. No-op unless the active image is a video.
+        self.mw.image_controller.update_video_timeline()
+
     def add_class(self, class_name=None, color=None):
         if not self.mw.image_label.check_unsaved_changes():
             return
@@ -115,7 +124,7 @@ class ClassController(QObject):
                     self.mw, "Add Class", "Enter class name:"
                 )
                 if not ok:
-                    print("Class addition cancelled")
+                    logger.debug("Class addition cancelled")
                     return
                 if not class_name.strip():
                     QMessageBox.warning(
@@ -134,12 +143,12 @@ class ClassController(QObject):
                 break
         else:
             if class_name in self.mw.class_mapping:
-                print(f"Class '{class_name}' already exists. Skipping addition.")
+                logger.warning(f"Class '{class_name}' already exists. Skipping addition.")
                 return
 
         if not isinstance(class_name, str):
-            print(
-                f"Warning: class_name is not a string. Converting {class_name} to string."
+            logger.warning(
+                f"class_name is not a string. Converting {class_name} to string."
             )
             class_name = str(class_name)
 
@@ -150,7 +159,7 @@ class ClassController(QObject):
         elif isinstance(color, str):
             color = QColor(color)
 
-        print(f"Adding class: {class_name}, color: {color.name()}")
+        logger.debug(f"Adding class: {class_name}, color: {color.name()}")
 
         self.mw.image_label.class_colors[class_name] = color
         self.mw.class_mapping[class_name] = len(self.mw.class_mapping) + 1
@@ -171,7 +180,7 @@ class ClassController(QObject):
 
             self.mw.class_list.setCurrentItem(item)
             self.mw.current_class = class_name
-            print(f"Class added successfully: {class_name}")
+            logger.info(f"Class added successfully: {class_name}")
 
             # DINO phrase/threshold sync. Skip the row-select during
             # project load (classes are added in a loop and we don't
@@ -185,9 +194,8 @@ class ClassController(QObject):
 
             if not self.mw.is_loading_project:
                 self.mw.auto_save()
-        except Exception as e:
-            print(f"Error adding class: {e}")
-            traceback.print_exc()
+        except Exception:
+            logger.exception("Error adding class")
 
     def update_class_item_color(self, item, color):
         pixmap = QPixmap(16, 16)
@@ -226,7 +234,7 @@ class ClassController(QObject):
         elif self.mw.class_list.count() > 0:
             self.mw.class_list.setCurrentItem(self.mw.class_list.item(0))
 
-        print(f"Updated class list with {self.mw.class_list.count()} items")
+        logger.debug(f"Updated class list with {self.mw.class_list.count()} items")
 
     def update_class_selection(self):
         for i in range(self.mw.class_list.count()):
@@ -252,12 +260,32 @@ class ClassController(QObject):
 
         if current:
             self.mw.current_class = current.text()
-            print(f"Class selected: {self.mw.current_class}")
+            logger.debug(f"Class selected: {self.mw.current_class}")
 
             if self.mw.current_class.startswith("Temp-"):
                 self.mw.disable_annotation_tools()
             else:
                 self.mw.enable_annotation_tools()
+
+            # The keypoint tool needs a pose schema on the current class; if
+            # the newly-selected class has none, deactivate rather than
+            # leaving the tool active-but-silently-inert (clicks would no-op
+            # with no feedback). check_unsaved_changes() above already
+            # committed/discarded any in-progress placement. (#35)
+            if (
+                self.mw.image_label.current_tool == "keypoint"
+                and self.mw.current_class not in self.mw.keypoint_schemas
+            ):
+                self.mw.activate_tool(None)
+            # Conversely, a pose class admits only the keypoint tool: if a
+            # shape/SAM tool is active when a pose class is selected, deactivate
+            # it so a tool can't stay active-but-invalid on a pose class. (#44)
+            elif (
+                self.mw.current_class in self.mw.keypoint_schemas
+                and self.mw.image_label.current_tool is not None
+                and self.mw.image_label.current_tool != "keypoint"
+            ):
+                self.mw.activate_tool(None)
         else:
             self.mw.current_class = None
             self.mw.disable_annotation_tools()
@@ -266,6 +294,7 @@ class ClassController(QObject):
         menu = QMenu()
         rename_action = menu.addAction("Rename Class")
         change_color_action = menu.addAction("Change Color")
+        keypoint_action = menu.addAction("Define Keypoint Schema...")
         delete_action = menu.addAction("Delete Class")
 
         item = self.mw.class_list.itemAt(position)
@@ -276,6 +305,8 @@ class ClassController(QObject):
                 self.rename_class(item)
             elif action == change_color_action:
                 self.change_class_color(item)
+            elif action == keypoint_action:
+                self.define_keypoint_schema(item)
             elif action == delete_action:
                 self.delete_class(item)
         else:
@@ -305,6 +336,72 @@ class ClassController(QObject):
             self.mw.image_label.update()
             self.mw.auto_save()
 
+    def define_keypoint_schema(self, item):
+        """Open the keypoint-schema editor for a class, making it a pose class
+        (issue #35). The keypoint count is locked once instances exist."""
+        from ..dialogs.keypoint_schema_dialog import KeypointSchemaDialog
+
+        class_name = item.text()
+        # A class is pose OR regular, not both (ADR-029). Refuse to turn a class
+        # that already holds plain annotations into a pose class; editing the
+        # schema of an existing pose class (even a legacy-mixed one) stays
+        # allowed so names/skeleton can still be fixed. (#44)
+        is_new_pose_class = class_name not in self.mw.keypoint_schemas
+        if is_new_pose_class and self._class_has_plain_annotations(class_name):
+            QMessageBox.warning(
+                self.mw,
+                "Cannot Define Keypoint Schema",
+                f"'{class_name}' already has regular (polygon/box/paint) "
+                "annotations. A class can be a pose class or a regular class, "
+                "not both. Move or delete those annotations first, or create a "
+                "new class for poses.",
+            )
+            return
+        has_instances = self._class_has_keypoint_instances(class_name)
+        dialog = KeypointSchemaDialog(
+            self.mw,
+            class_name=class_name,
+            schema=self.mw.keypoint_schemas.get(class_name),
+            lock_k=has_instances,
+        )
+        if dialog.exec() != dialog.DialogCode.Accepted:
+            return
+        schema = dialog.get_schema()
+        if schema is None:
+            return
+        # Defensive: the dialog locks add/remove when instances exist, but make
+        # the K-stability invariant explicit so a future dialog change can't
+        # silently corrupt existing instances.
+        if has_instances:
+            old_k = len((self.mw.keypoint_schemas.get(class_name) or {}).get("names", []))
+            if old_k and len(schema["names"]) != old_k:
+                QMessageBox.warning(
+                    self.mw,
+                    "Keypoint Schema",
+                    "Cannot change the number of keypoints while instances exist.",
+                )
+                return
+        self.mw.keypoint_schemas[class_name] = schema
+        self.mw.image_label.update()
+        if not self.mw.is_loading_project:
+            self.mw.auto_save()
+
+    def _class_has_plain_annotations(self, class_name):
+        """True if the class holds any non-keypoint (polygon/box/paint)
+        annotation. A class is pose OR regular, not both (ADR-029 / #44)."""
+        for image_annotations in self.mw.all_annotations.values():
+            for ann in image_annotations.get(class_name, []):
+                if "keypoints" not in ann:
+                    return True
+        return False
+
+    def _class_has_keypoint_instances(self, class_name):
+        for image_annotations in self.mw.all_annotations.values():
+            for ann in image_annotations.get(class_name, []):
+                if "keypoints" in ann:
+                    return True
+        return False
+
     def rename_class(self, item):
         old_name = item.text()
         new_name, ok = QInputDialog.getText(
@@ -316,7 +413,7 @@ class ClassController(QObject):
                 self.mw.class_mapping[new_name] = old_id
                 del self.mw.class_mapping[old_name]
             else:
-                print(f"Warning: Class '{old_name}' not found in class_mapping")
+                logger.warning(f"Class '{old_name}' not found in class_mapping")
                 return
 
             if old_name in self.mw.image_label.class_colors:
@@ -324,8 +421,14 @@ class ClassController(QObject):
                     self.mw.image_label.class_colors.pop(old_name)
                 )
             else:
-                print(f"Warning: Class '{old_name}' not found in class_colors")
+                logger.warning(f"Class '{old_name}' not found in class_colors")
                 return
+
+            # Keypoint schema follows the class name (issue #35).
+            if old_name in self.mw.keypoint_schemas:
+                self.mw.keypoint_schemas[new_name] = (
+                    self.mw.keypoint_schemas.pop(old_name)
+                )
 
             for image_name, image_annotations in self.mw.all_annotations.items():
                 if old_name in image_annotations:
@@ -350,7 +453,7 @@ class ClassController(QObject):
             self.mw.image_label.update()
             self.mw.auto_save()
 
-            print(f"Class renamed from '{old_name}' to '{new_name}'")
+            logger.info(f"Class renamed from '{old_name}' to '{new_name}'")
 
     def delete_class(self, item=None):
         if item is None:
@@ -386,6 +489,7 @@ class ClassController(QObject):
         if reply == QMessageBox.StandardButton.Yes:
             self.mw.image_label.class_colors.pop(class_name, None)
             self.mw.class_mapping.pop(class_name, None)
+            self.mw.keypoint_schemas.pop(class_name, None)  # issue #35
 
             for image_annotations in self.mw.all_annotations.values():
                 image_annotations.pop(class_name, None)

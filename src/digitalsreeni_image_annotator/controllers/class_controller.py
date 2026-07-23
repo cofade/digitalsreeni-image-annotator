@@ -420,12 +420,33 @@ class ClassController(QObject):
         new_name, ok = QInputDialog.getText(
             self.mw, "Rename Class", "Enter new class name:", text=old_name
         )
+        # Strip before every guard: "Drone " would otherwise clear both the
+        # collision check and the Temp- prefix check, creating a class
+        # distinguishable from "Drone" only by trailing whitespace -- which
+        # then keys all seven registries. The phrase editor already sanitises
+        # its input the same way (_add_phrase / _rename_phrase).
+        if new_name:
+            new_name = new_name.strip()
         if ok and new_name and new_name != old_name:
             # --- Pre-flight ------------------------------------------------
             # Validate every precondition BEFORE mutating anything. A rename
             # touches seven name-keyed registries (docs/08 "Class Name Is a
             # Primary Key"); bailing out partway leaves the class renamed in
             # some and not others. Check first, then commit.
+
+            # A pending Temp-* review class isn't in class_mapping, so it would
+            # otherwise fall into the bailout below and fail *silently* -- the
+            # one rejection a user is most likely to hit by accident. Every
+            # other path in this block tells them why.
+            if old_name.startswith("Temp-"):
+                QMessageBox.warning(
+                    self.mw,
+                    "Pending Review Class",
+                    "Pending detection-review classes can't be renamed. "
+                    "Accept or reject them first.",
+                )
+                return
+
             if old_name not in self.mw.class_mapping:
                 logger.warning(f"Class '{old_name}' not found in class_mapping")
                 return

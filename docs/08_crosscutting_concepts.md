@@ -668,14 +668,20 @@ thresholds and `_build_dino_class_configs()` emit the class twice.
 backstop, mirroring `add_class`.
 
 **`Temp-` is a reserved prefix, not just a naming convention.** It is a
-stringly-typed discriminator with *destructive* semantics: `accept_visible_
-temp_classes` / `reject_visible_temp_classes` sweep `Temp-*` wholesale, and
-reject **deletes** the matching annotations. `rename_class` therefore refuses
-to rename *into* the namespace. Known debt: the prefix is spelled as an inline
-`startswith("Temp-")` / `"Temp-*"` literal in ~18 places across five modules
-rather than one `is_temp_class()` helper, and `add_class` still does not guard
-it — a user can create `Temp-foo` by hand and have it consumed by the next
-review.
+stringly-typed discriminator with *destructive* semantics:
+`accept_visible_temp_classes` / `reject_visible_temp_classes` sweep `Temp-*`
+wholesale, and reject **deletes** the matching annotations. `rename_class`
+therefore refuses to rename *into* the namespace, and refuses to rename a
+pending `Temp-*` class *out* of it (accept or reject it first).
+
+Known debt: the prefix is spelled as an inline `startswith("Temp-")` /
+`"Temp-*"` literal in ~18 places across five modules rather than one
+`is_temp_class()` helper. Note **why the guard lives on the rename path and
+not on creation**: `load_project_data` calls `add_class` for every saved
+class, so a naive rejection in `add_class` would make any legacy project
+containing a hand-made `Temp-foo` class fail to load. A follow-up needs to
+handle that case (migrate on load, or gate the guard on
+`not is_loading_project`) before guarding creation.
 
 **Rename must not re-derive visibility.** `item.setText()` on a `class_list`
 row emits `itemChanged`, which is wired to `toggle_class_visibility` — that

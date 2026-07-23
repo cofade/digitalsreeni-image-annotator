@@ -261,6 +261,58 @@ def test_rename_into_temp_namespace_is_rejected(window, monkeypatch):
     assert window.dino_class_table.get_class_names() == ["Drone"]
 
 
+def test_renaming_a_pending_temp_class_warns_instead_of_failing_silently(
+    window, monkeypatch
+):
+    """A Temp-* class isn't in class_mapping, so it used to hit the bailout and
+    return with no dialog at all -- the rejection a user is most likely to hit
+    by accident was the one that gave no feedback."""
+    window.dino_controller.add_temp_classes(
+        {"Temp-camera": [{"category_name": "Temp-camera", "number": 1,
+                          "segmentation": [2, 2, 6, 2, 6, 6]}]}
+    )
+    warned = []
+    monkeypatch.setattr(
+        QMessageBox, "warning", staticmethod(lambda *a, **k: warned.append(a))
+    )
+    monkeypatch.setattr(QInputDialog, "getText", lambda *a, **k: ("camera", True))
+
+    item = window.class_list.findItems("Temp-camera", Qt.MatchFlag.MatchExactly)[0]
+    window.class_controller.rename_class(item)
+
+    assert warned, "renaming a pending review class must tell the user why"
+    assert item.text() == "Temp-camera"
+    assert "camera" not in window.class_mapping
+
+
+def test_rename_strips_surrounding_whitespace(window, monkeypatch):
+    """Unstripped input would let "Drone " clear both the collision check and
+    the Temp- prefix check, creating a class distinguishable from "Drone" only
+    by whitespace -- which then keys all seven registries."""
+    window.add_class("Drone")
+    item = window.class_list.findItems("Drone", Qt.MatchFlag.MatchExactly)[0]
+
+    monkeypatch.setattr(QInputDialog, "getText", lambda *a, **k: ("  UAV  ", True))
+    window.class_controller.rename_class(item)
+
+    assert "UAV" in window.class_mapping
+    assert item.text() == "UAV"
+    assert window.dino_class_table.get_class_names() == ["UAV"]
+
+
+def test_rename_to_same_name_with_whitespace_is_a_noop(window, monkeypatch):
+    """"Drone " strips to the current name, so there is nothing to do -- it must
+    not be treated as a collision with itself."""
+    window.add_class("Drone")
+    item = window.class_list.findItems("Drone", Qt.MatchFlag.MatchExactly)[0]
+
+    monkeypatch.setattr(QInputDialog, "getText", lambda *a, **k: ("  Drone ", True))
+    window.class_controller.rename_class(item)
+
+    assert list(window.class_mapping) == ["Drone"]
+    assert item.text() == "Drone"
+
+
 def test_rename_class_carries_visibility(window, monkeypatch):
     """Visibility is name-keyed and read via .get(name, True), so a rename that
     skips it silently un-hides a hidden class."""

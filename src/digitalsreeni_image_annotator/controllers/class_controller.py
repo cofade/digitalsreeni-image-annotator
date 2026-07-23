@@ -421,13 +421,29 @@ class ClassController(QObject):
             self.mw, "Rename Class", "Enter new class name:", text=old_name
         )
         if ok and new_name and new_name != old_name:
-            # Reject a collision before mutating anything. Without this the
-            # rename half-clobbers every name-keyed registry: the old class's
-            # id overwrites the target's in class_mapping, its colour
-            # overwrites the target's, annotation buckets merge, and the DINO
-            # table ends up with two rows of the same name (duplicate
+            # --- Pre-flight ------------------------------------------------
+            # Validate every precondition BEFORE mutating anything. A rename
+            # touches seven name-keyed registries (docs/08 "Class Name Is a
+            # Primary Key"); bailing out partway leaves the class renamed in
+            # some and not others. Check first, then commit.
+            if old_name not in self.mw.class_mapping:
+                logger.warning(f"Class '{old_name}' not found in class_mapping")
+                return
+            if old_name not in self.mw.image_label.class_colors:
+                logger.warning(f"Class '{old_name}' not found in class_colors")
+                return
+
+            # Collision check against class_colors, NOT class_mapping:
+            # Temp-* review classes are registered in class_colors + class_list
+            # only (add_temp_classes never writes class_mapping), so a
+            # class_mapping check lets a rename onto a *pending* temp class
+            # through -- the real class's annotation bucket then merges into
+            # the temp one, and the next Reject sweeps Temp-* and deletes it.
+            # Without any check the rename half-clobbers every registry: the
+            # old class's id and colour overwrite the target's, buckets merge,
+            # and the DINO table ends up with two rows of one name (duplicate
             # detection passes + one row's thresholds silently dropped).
-            if new_name in self.mw.class_mapping:
+            if new_name in self.mw.image_label.class_colors:
                 QMessageBox.warning(
                     self.mw,
                     "Duplicate Class",
@@ -436,21 +452,25 @@ class ClassController(QObject):
                 )
                 return
 
-            if old_name in self.mw.class_mapping:
-                old_id = self.mw.class_mapping[old_name]
-                self.mw.class_mapping[new_name] = old_id
-                del self.mw.class_mapping[old_name]
-            else:
-                logger.warning(f"Class '{old_name}' not found in class_mapping")
+            # "Temp-" is a reserved prefix with destructive semantics -- the
+            # DINO review sweeps Temp-* wholesale on accept/reject -- so a
+            # class renamed into that namespace would be silently consumed by
+            # the next review.
+            if new_name.startswith("Temp-"):
+                QMessageBox.warning(
+                    self.mw,
+                    "Reserved Name",
+                    "Names starting with 'Temp-' are reserved for pending "
+                    "detection-review classes. Please choose a different name.",
+                )
                 return
 
-            if old_name in self.mw.image_label.class_colors:
-                self.mw.image_label.class_colors[new_name] = (
-                    self.mw.image_label.class_colors.pop(old_name)
-                )
-            else:
-                logger.warning(f"Class '{old_name}' not found in class_colors")
-                return
+            # --- Commit ----------------------------------------------------
+            self.mw.class_mapping[new_name] = self.mw.class_mapping.pop(old_name)
+
+            self.mw.image_label.class_colors[new_name] = (
+                self.mw.image_label.class_colors.pop(old_name)
+            )
 
             # Visibility is name-keyed too (read via .get(name, True)), so a
             # rename that skips it silently un-hides a hidden class.
@@ -492,7 +512,15 @@ class ClassController(QObject):
 
             self.mw.update_all_annotation_lists()
 
-            item.setText(new_name)
+            # Block signals: setText emits itemChanged -> toggle_class_visibility,
+            # which re-derives class_visibility from the checkbox and would be a
+            # hidden co-author of the re-key above (masking a broken re-key).
+            # A rename changes the name, never the visibility.
+            self.mw.class_list.blockSignals(True)
+            try:
+                item.setText(new_name)
+            finally:
+                self.mw.class_list.blockSignals(False)
 
             self.mw.image_label.update()
             self.mw.auto_save()

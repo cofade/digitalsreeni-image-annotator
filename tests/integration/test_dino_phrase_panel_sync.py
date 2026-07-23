@@ -211,6 +211,56 @@ def test_rename_to_existing_class_is_rejected_intact(window, monkeypatch):
     assert item.text() == "Drone"
 
 
+def test_rename_onto_pending_temp_class_is_rejected(window, monkeypatch):
+    """Renaming onto a *pending* Temp-* review class must be rejected.
+
+    Temp-* classes are registered in ``class_colors`` + ``class_list`` only --
+    ``add_temp_classes`` never writes ``class_mapping`` -- so a collision check
+    against ``class_mapping`` would let this through. The real class's
+    annotation bucket would then merge into the temp one, and the user's next
+    Reject (which sweeps Temp-* and *deletes*) would destroy it silently.
+    """
+    window.add_class("Drone")
+    window.image_label.annotations["Drone"] = [
+        {"category_name": "Drone", "number": 1, "segmentation": [1, 1, 5, 1, 5, 5]}
+    ]
+    window.dino_controller.add_temp_classes(
+        {"Temp-camera": [{"category_name": "Temp-camera", "number": 1,
+                          "segmentation": [2, 2, 6, 2, 6, 6]}]}
+    )
+
+    monkeypatch.setattr(QInputDialog, "getText", lambda *a, **k: ("Temp-camera", True))
+    item = window.class_list.findItems("Drone", Qt.MatchFlag.MatchExactly)[0]
+    window.class_controller.rename_class(item)
+
+    # Rejected outright -- nothing renamed, no duplicate list entry.
+    assert item.text() == "Drone"
+    assert "Drone" in window.class_mapping
+    assert len(window.class_list.findItems("Temp-camera", Qt.MatchFlag.MatchExactly)) == 1
+    assert len(window.image_label.annotations["Drone"]) == 1
+
+    # The decisive assertion: the real class survives the review sweep.
+    window.dino_controller.reject_visible_temp_classes()
+    assert len(window.image_label.annotations["Drone"]) == 1
+    assert "Temp-camera" not in window.image_label.annotations
+
+
+def test_rename_into_temp_namespace_is_rejected(window, monkeypatch):
+    """'Temp-' is a reserved prefix with destructive semantics (the review
+    sweeps Temp-* wholesale), so renaming *into* it is refused even when the
+    name is otherwise free."""
+    window.add_class("Drone")
+
+    monkeypatch.setattr(QInputDialog, "getText", lambda *a, **k: ("Temp-fresh", True))
+    item = window.class_list.findItems("Drone", Qt.MatchFlag.MatchExactly)[0]
+    window.class_controller.rename_class(item)
+
+    assert item.text() == "Drone"
+    assert "Drone" in window.class_mapping
+    assert "Temp-fresh" not in window.image_label.class_colors
+    assert window.dino_class_table.get_class_names() == ["Drone"]
+
+
 def test_rename_class_carries_visibility(window, monkeypatch):
     """Visibility is name-keyed and read via .get(name, True), so a rename that
     skips it silently un-hides a hidden class."""

@@ -407,6 +407,8 @@ class PhraseEditorPanel(QWidget):
         # Retarget the active class even when no phrase entry existed (a
         # set_phrases() wholesale replace can strand _active_class), so the
         # panel can't keep showing the old name after the table row renamed.
+        # Note set_active_class materialises _phrases[new_name] = [new_name]
+        # in that no-entry branch -- it creates state, it doesn't only display.
         if self._active_class == old_name:
             self.set_active_class(new_name)
 

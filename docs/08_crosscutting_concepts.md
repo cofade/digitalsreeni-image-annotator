@@ -652,7 +652,13 @@ name, lost its phrases *and* thresholds on the next project load (both are
 filtered against the live class list), and quietly became visible again.
 
 **Renaming onto an existing name is rejected, not merged.** `rename_class`
-checks `new_name in class_mapping` and aborts *before* mutating anything.
+runs a **pre-flight** block that validates every precondition *before* the
+first mutation, then commits. The collision check is against
+`image_label.class_colors`, **not** `class_mapping` — `Temp-*` review classes
+live in `class_colors` + `class_list` only (`add_temp_classes` never writes
+`class_mapping`), so a `class_mapping` check would let a rename onto a pending
+temp class through: the real class's annotation bucket merges into the temp
+one, and the next Reject sweeps `Temp-*` and deletes it.
 Without that guard the rename half-clobbered every registry — the old class's
 id and colour overwrote the target's, annotation buckets merged, and the DINO
 table ended up with two identically-named rows, which makes
@@ -660,6 +666,22 @@ table ended up with two identically-named rows, which makes
 thresholds and `_build_dino_class_configs()` emit the class twice.
 `ClassThresholdTable.rename_class` carries the same uniqueness guard as a
 backstop, mirroring `add_class`.
+
+**`Temp-` is a reserved prefix, not just a naming convention.** It is a
+stringly-typed discriminator with *destructive* semantics: `accept_visible_
+temp_classes` / `reject_visible_temp_classes` sweep `Temp-*` wholesale, and
+reject **deletes** the matching annotations. `rename_class` therefore refuses
+to rename *into* the namespace. Known debt: the prefix is spelled as an inline
+`startswith("Temp-")` / `"Temp-*"` literal in ~18 places across five modules
+rather than one `is_temp_class()` helper, and `add_class` still does not guard
+it — a user can create `Temp-foo` by hand and have it consumed by the next
+review.
+
+**Rename must not re-derive visibility.** `item.setText()` on a `class_list`
+row emits `itemChanged`, which is wired to `toggle_class_visibility` — that
+would re-derive `class_visibility` from the checkbox and become a hidden
+co-author of the rename. `rename_class` wraps the `setText` in
+`blockSignals(True/False)` so the explicit re-key is the sole writer.
 
 When adding a new name-keyed registry, add it to the table above **and** to all
 three mutation sites. The registries are hand-synced at each call site rather

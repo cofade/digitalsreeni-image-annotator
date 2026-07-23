@@ -158,6 +158,25 @@ class ClassThresholdTable(QTableWidget):
         item = self.item(row, _COL_NAME)
         return item.text() if item else None
 
+    def select_class_by_name(self, name: str) -> bool:
+        """Select the row whose class name matches ``name``.
+
+        Keeps this table (and, via its ``itemSelectionChanged`` cascade to
+        the phrase panel) in sync when the *top* class list drives the
+        selection -- the top list is the single source of truth (#63).
+        Returns True when a matching row was found; a no-op returning False
+        for names not in the table (e.g. ``Temp-*`` review classes), leaving
+        the current selection intact. Re-selecting the already-current row is
+        skipped so no redundant ``itemSelectionChanged`` fires.
+        """
+        for r in range(self.rowCount()):
+            item = self.item(r, _COL_NAME)
+            if item and item.text() == name:
+                if self.currentRow() != r:
+                    self.selectRow(r)
+                return True
+        return False
+
 
 class PhraseEditorPanel(QWidget):
     """

@@ -262,6 +262,16 @@ class ClassController(QObject):
             self.mw.current_class = current.text()
             logger.debug(f"Class selected: {self.mw.current_class}")
 
+            # Keep the DINO phrase/threshold panel in sync with the top
+            # class list -- the top list is the single source of truth.
+            # Selecting the matching threshold-table row cascades to the
+            # phrase panel via the table's itemSelectionChanged ->
+            # on_dino_class_row_changed. A no-op for Temp-* classes (not in
+            # the table). Skipped during project load to avoid signal churn
+            # while classes are restored in bulk. (#63)
+            if not self.mw.is_loading_project:
+                self.mw.dino_class_table.select_class_by_name(self.mw.current_class)
+
             if self.mw.current_class.startswith("Temp-"):
                 self.mw.disable_annotation_tools()
             else:

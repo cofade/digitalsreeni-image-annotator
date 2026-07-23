@@ -334,6 +334,16 @@ class ProjectController(QObject):
                     self.mw.all_annotations.pop(slice_name, None)
                 release_slices(stack_slices)  # evict cached QImages (issue #45)
                 del self.mw.image_slices[base_name]
+                # Drop live refs if this was the active stack/video, else the
+                # update_ui() below resurrects the orphaned slices (video-removal
+                # bug; mirrors remove_image / delete_selected_image).
+                if self.mw.slices is stack_slices:
+                    self.mw.slices = []
+
+            # Release the video's cv2 capture if this base is a video (#47).
+            if base_name in self.mw.video_handlers:
+                self.mw.video_handlers[base_name].release()
+                del self.mw.video_handlers[base_name]
 
         self.mw.update_ui()
         QMessageBox.information(

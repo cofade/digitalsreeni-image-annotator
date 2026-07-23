@@ -1283,6 +1283,14 @@ class ImageController(QObject):
                 release_slices(stack_slices)  # evict cached QImages (issue #45)
                 del self.mw.image_slices[base_name]
 
+                # If the removed stack/video was the ACTIVE one, drop the live
+                # slice references too -- otherwise update_ui() ->
+                # update_slice_list() rebuilds the slice list from the dangling
+                # mw.slices and the orphaned frames reappear (and a video's
+                # frames can't decode, its handler having just been released).
+                if self.mw.slices is stack_slices:
+                    self.mw.slices = []
+
                 self.mw.slice_list.clear()
 
             # Release the video's cv2 capture, if any (issue #47).
@@ -1341,6 +1349,13 @@ class ImageController(QObject):
                         self.mw.all_annotations.pop(slice_name, None)
                     release_slices(stack_slices)  # evict cached QImages (issue #45)
                     del self.mw.image_slices[base_name]
+
+                    # Drop live slice refs if the removed stack/video was the
+                    # active one, else update_ui() rebuilds the list from the
+                    # dangling mw.slices (orphaned frames reappear). Mirrors
+                    # remove_image (video-removal bug).
+                    if self.mw.slices is stack_slices:
+                        self.mw.slices = []
 
                     self.mw.slice_list.clear()
 

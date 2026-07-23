@@ -946,7 +946,9 @@ class ImageAnnotator(QMainWindow):
         current_item = self.image_list.itemAt(position)
         if current_item:
             file_name = current_item.text()
-            delete_action = menu.addAction("Remove Image")
+            delete_action = menu.addAction(
+                "Remove Video" if is_video(file_name) else "Remove Image"
+            )
 
             # YOLO single-image predict is for plain 2D images only — not
             # multi-dim stacks and NOT videos (predicting a video would run

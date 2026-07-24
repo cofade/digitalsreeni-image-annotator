@@ -630,6 +630,69 @@ messaging still goes through `QMessageBox` / dialogs — logging is the
 diagnostic channel, dialogs are the user channel; the two are independent
 (see the Error-Handling Convention above).
 
+## Class Name Is a Primary Key — Sync Every Registry on Rename (#63)
+
+There is no class-id object. A class is identified by its **name string**, and
+that name is the key into several independent registries:
+
+| Registry | Owner | Notes |
+|----------|-------|-------|
+| `class_mapping` | main window | name → numeric id (export) |
+| `image_label.class_colors` | canvas | name → `QColor` |
+| `image_label.class_visibility` | canvas | read via `.get(name, True)` |
+| `keypoint_schemas` | main window | pose classes only (ADR-029) |
+| `all_annotations[img]` / `image_label.annotations` | per-image buckets | plus each annotation's `category_name` |
+| `dino_class_table` rows | DINO widget | keyed by row text |
+| `dino_phrase_panel._phrases` | DINO widget | name → phrase list |
+
+**Every roster mutation must touch all of them.** `add_class` and
+`delete_class` do; `rename_class` silently skipped the DINO pair and
+`class_visibility` until #63 — so a renamed class kept detecting under its dead
+name, lost its phrases *and* thresholds on the next project load (both are
+filtered against the live class list), and quietly became visible again.
+
+**Renaming onto an existing name is rejected, not merged.** `rename_class`
+runs a **pre-flight** block that validates every precondition *before* the
+first mutation, then commits. The collision check is against
+`image_label.class_colors`, **not** `class_mapping` — `Temp-*` review classes
+live in `class_colors` + `class_list` only (`add_temp_classes` never writes
+`class_mapping`), so a `class_mapping` check would let a rename onto a pending
+temp class through: the real class's annotation bucket merges into the temp
+one, and the next Reject sweeps `Temp-*` and deletes it.
+Without that guard the rename half-clobbered every registry — the old class's
+id and colour overwrote the target's, annotation buckets merged, and the DINO
+table ended up with two identically-named rows, which makes
+`get_thresholds_dict()` (a name-keyed dict comprehension) drop one row's
+thresholds and `_build_dino_class_configs()` emit the class twice.
+`ClassThresholdTable.rename_class` carries the same uniqueness guard as a
+backstop, mirroring `add_class`.
+
+**`Temp-` is a reserved prefix, not just a naming convention.** It is a
+stringly-typed discriminator with *destructive* semantics:
+`accept_visible_temp_classes` / `reject_visible_temp_classes` sweep `Temp-*`
+wholesale, and reject **deletes** the matching annotations. `rename_class`
+therefore refuses to rename *into* the namespace, and refuses to rename a
+pending `Temp-*` class *out* of it (accept or reject it first).
+
+Known debt: the prefix is spelled as an inline `startswith("Temp-")` /
+`"Temp-*"` literal in ~18 places across five modules rather than one
+`is_temp_class()` helper. Note **why the guard lives on the rename path and
+not on creation**: `load_project_data` calls `add_class` for every saved
+class, so a naive rejection in `add_class` would make any legacy project
+containing a hand-made `Temp-foo` class fail to load. A follow-up needs to
+handle that case (migrate on load, or gate the guard on
+`not is_loading_project`) before guarding creation.
+
+**Rename must not re-derive visibility.** `item.setText()` on a `class_list`
+row emits `itemChanged`, which is wired to `toggle_class_visibility` — that
+would re-derive `class_visibility` from the checkbox and become a hidden
+co-author of the rename. `rename_class` wraps the `setText` in
+`blockSignals(True/False)` so the explicit re-key is the sole writer.
+
+When adding a new name-keyed registry, add it to the table above **and** to all
+three mutation sites. The registries are hand-synced at each call site rather
+than projected from one roster — that coupling is known debt.
+
 ## DINO Temp Annotations — Single Field, Many Images
 
 > **Three producers (ADR-039/040):** the temp-annotation / `dino_batch_results`

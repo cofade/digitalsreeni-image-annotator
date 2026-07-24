@@ -262,6 +262,16 @@ class ClassController(QObject):
             self.mw.current_class = current.text()
             logger.debug(f"Class selected: {self.mw.current_class}")
 
+            # Keep the DINO phrase/threshold panel in sync with the top
+            # class list -- the top list is the single source of truth.
+            # Selecting the matching threshold-table row cascades to the
+            # phrase panel via the table's itemSelectionChanged ->
+            # on_dino_class_row_changed. A no-op for Temp-* classes (not in
+            # the table). Skipped during project load to avoid signal churn
+            # while classes are restored in bulk. (#63)
+            if not self.mw.is_loading_project:
+                self.mw.dino_class_table.select_class_by_name(self.mw.current_class)
+
             if self.mw.current_class.startswith("Temp-"):
                 self.mw.disable_annotation_tools()
             else:
@@ -287,6 +297,9 @@ class ClassController(QObject):
             ):
                 self.mw.activate_tool(None)
         else:
+            # Deliberately one-directional: an empty top-list selection leaves
+            # the DINO table/panel showing the last class rather than blanking
+            # the phrase editor. Sync follows *selection*, not deselection.
             self.mw.current_class = None
             self.mw.disable_annotation_tools()
 
@@ -407,28 +420,100 @@ class ClassController(QObject):
         new_name, ok = QInputDialog.getText(
             self.mw, "Rename Class", "Enter new class name:", text=old_name
         )
+        # Strip before every guard: "Drone " would otherwise clear both the
+        # collision check and the Temp- prefix check, creating a class
+        # distinguishable from "Drone" only by trailing whitespace -- which
+        # then keys all seven registries. The phrase editor already sanitises
+        # its input the same way (_add_phrase / _rename_phrase).
+        if new_name:
+            new_name = new_name.strip()
         if ok and new_name and new_name != old_name:
-            if old_name in self.mw.class_mapping:
-                old_id = self.mw.class_mapping[old_name]
-                self.mw.class_mapping[new_name] = old_id
-                del self.mw.class_mapping[old_name]
-            else:
-                logger.warning(f"Class '{old_name}' not found in class_mapping")
+            # --- Pre-flight ------------------------------------------------
+            # Validate every precondition BEFORE mutating anything. A rename
+            # touches seven name-keyed registries (docs/08 "Class Name Is a
+            # Primary Key"); bailing out partway leaves the class renamed in
+            # some and not others. Check first, then commit.
+
+            # A pending Temp-* review class isn't in class_mapping, so it would
+            # otherwise fall into the bailout below and fail *silently* -- the
+            # one rejection a user is most likely to hit by accident. Every
+            # other path in this block tells them why.
+            if old_name.startswith("Temp-"):
+                QMessageBox.warning(
+                    self.mw,
+                    "Pending Review Class",
+                    "Pending detection-review classes can't be renamed. "
+                    "Accept or reject them first.",
+                )
                 return
 
-            if old_name in self.mw.image_label.class_colors:
-                self.mw.image_label.class_colors[new_name] = (
-                    self.mw.image_label.class_colors.pop(old_name)
-                )
-            else:
+            if old_name not in self.mw.class_mapping:
+                logger.warning(f"Class '{old_name}' not found in class_mapping")
+                return
+            if old_name not in self.mw.image_label.class_colors:
                 logger.warning(f"Class '{old_name}' not found in class_colors")
                 return
+
+            # Collision check against class_colors, NOT class_mapping:
+            # Temp-* review classes are registered in class_colors + class_list
+            # only (add_temp_classes never writes class_mapping), so a
+            # class_mapping check lets a rename onto a *pending* temp class
+            # through -- the real class's annotation bucket then merges into
+            # the temp one, and the next Reject sweeps Temp-* and deletes it.
+            # Without any check the rename half-clobbers every registry: the
+            # old class's id and colour overwrite the target's, buckets merge,
+            # and the DINO table ends up with two rows of one name (duplicate
+            # detection passes + one row's thresholds silently dropped).
+            if new_name in self.mw.image_label.class_colors:
+                QMessageBox.warning(
+                    self.mw,
+                    "Duplicate Class",
+                    f"A class named '{new_name}' already exists. "
+                    "Please choose a different name.",
+                )
+                return
+
+            # "Temp-" is a reserved prefix with destructive semantics -- the
+            # DINO review sweeps Temp-* wholesale on accept/reject -- so a
+            # class renamed into that namespace would be silently consumed by
+            # the next review.
+            if new_name.startswith("Temp-"):
+                QMessageBox.warning(
+                    self.mw,
+                    "Reserved Name",
+                    "Names starting with 'Temp-' are reserved for pending "
+                    "detection-review classes. Please choose a different name.",
+                )
+                return
+
+            # --- Commit ----------------------------------------------------
+            self.mw.class_mapping[new_name] = self.mw.class_mapping.pop(old_name)
+
+            self.mw.image_label.class_colors[new_name] = (
+                self.mw.image_label.class_colors.pop(old_name)
+            )
+
+            # Visibility is name-keyed too (read via .get(name, True)), so a
+            # rename that skips it silently un-hides a hidden class.
+            if old_name in self.mw.image_label.class_visibility:
+                self.mw.image_label.class_visibility[new_name] = (
+                    self.mw.image_label.class_visibility.pop(old_name)
+                )
 
             # Keypoint schema follows the class name (issue #35).
             if old_name in self.mw.keypoint_schemas:
                 self.mw.keypoint_schemas[new_name] = (
                     self.mw.keypoint_schemas.pop(old_name)
                 )
+
+            # The DINO threshold row and phrase list are keyed by class name
+            # too. Without this they stay under the dead name: detection runs
+            # against a class that no longer exists, and the next project load
+            # silently discards the renamed class's phrases *and* thresholds
+            # (both are filtered against the live class list). Same
+            # registry-drift family as #63.
+            self.mw.dino_class_table.rename_class(old_name, new_name)
+            self.mw.dino_phrase_panel.on_class_renamed(old_name, new_name)
 
             for image_name, image_annotations in self.mw.all_annotations.items():
                 if old_name in image_annotations:
@@ -448,7 +533,15 @@ class ClassController(QObject):
 
             self.mw.update_all_annotation_lists()
 
-            item.setText(new_name)
+            # Block signals: setText emits itemChanged -> toggle_class_visibility,
+            # which re-derives class_visibility from the checkbox and would be a
+            # hidden co-author of the re-key above (masking a broken re-key).
+            # A rename changes the name, never the visibility.
+            self.mw.class_list.blockSignals(True)
+            try:
+                item.setText(new_name)
+            finally:
+                self.mw.class_list.blockSignals(False)
 
             self.mw.image_label.update()
             self.mw.auto_save()

@@ -62,6 +62,10 @@ Upstream = "https://github.com/bnsreenu/digitalsreeni-image-annotator"
 [project.scripts]
 digitalsreeni-image-annotator = "digitalsreeni_image_annotator.main:main"
 sreeni = "digitalsreeni_image_annotator.main:main"
+# Headless entry point (issue #76). Deliberately a separate script: the GUI
+# entry imports torch eagerly before QApplication to work around a Windows DLL
+# conflict (ADR-017), and the CLI must not inherit that startup path.
+sreeni-cli = "digitalsreeni_image_annotator.cli:main"
 
 [tool.setuptools.packages.find]
 where = ["src"]

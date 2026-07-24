@@ -5,8 +5,6 @@ import os
 import yaml
 from PIL import Image
 
-from PyQt6.QtWidgets import QMessageBox
-
 from ..core.keypoint_schema import sanitize_schema
 from ..utils import clamp_bbox, clamp_segmentation, keypoint_instance_bbox
 
@@ -186,7 +184,19 @@ def import_coco_json(file_path, class_mapping):
         raise ValueError(f"Error importing COCO JSON: {e}")
 
 
-def import_yolo_v4(yaml_file_path, class_mapping):
+def import_yolo_v4(yaml_file_path, class_mapping, confirm=None):
+    """Import a legacy YOLO (v4 and earlier) dataset.
+
+    ``confirm`` is called with a message when images and labels do not line up,
+    and must return True to continue. It exists so this module can stay
+    Qt-free (issue #76): the prompt used to be a ``QMessageBox`` raised from
+    inside the importer, which is a UI concern in a core module (ADR-031) and
+    was enough to make a headless import require a display.
+
+    Default when no callback is given: **proceed**. A non-interactive caller
+    that has already chosen to import a partially-matched dataset should get
+    the data, not a refusal it cannot answer.
+    """
     if not os.path.exists(yaml_file_path):
         raise ValueError("The selected YAML file does not exist.")
     
@@ -305,10 +315,7 @@ def import_yolo_v4(yaml_file_path, class_mapping):
             message += f"Images without corresponding labels: {', '.join(missing_labels)}\n\n"
         message += "Do you want to continue importing the remaining data?"
         
-        reply = QMessageBox.question(None, "Import Issues", message, 
-                                     QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No, QMessageBox.StandardButton.No)
-        
-        if reply == QMessageBox.StandardButton.No:
+        if confirm is not None and not confirm(message):
             raise ValueError("Import cancelled due to missing files.")
 
     # Legacy format stays detection-only (issue #35 PR-2) — no keypoint
@@ -696,11 +703,13 @@ def _polygons_for_class(mask_polygons, class_name, class_mapping):
     return [polygon for polygons in mask_polygons.values() for polygon in polygons]
 
 
-def process_import_format(import_format, file_path, class_mapping):
+def process_import_format(import_format, file_path, class_mapping, confirm=None):
     if import_format == "COCO JSON":
         return import_coco_json(file_path, class_mapping)
     elif import_format == "YOLO (v4 and earlier)":
-        return import_yolo_v4(file_path, class_mapping)  # Still using same function, just updated format name
+        # `confirm` lets the GUI supply a prompt without this module importing
+        # Qt (issue #76).
+        return import_yolo_v4(file_path, class_mapping, confirm)
     elif import_format == "YOLO (v5+)":
         return import_yolo_v5plus(file_path, class_mapping)  # New format handling
     elif import_format == "Pascal VOC":

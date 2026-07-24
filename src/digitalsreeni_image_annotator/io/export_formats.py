@@ -1,5 +1,10 @@
 import json
-from PyQt6.QtGui import QImage
+# Deliberately no Qt import here (issue #76). This module only ever needed
+# QImage to read a file's dimensions, and that single need was enough to make a
+# headless export require a display. `core.image_size` reads the header via
+# Pillow instead. Slice QImages still arrive as arguments and are used as
+# objects, which needs no import.
+from ..core.image_size import image_dimensions
 from ..core.keypoint_schema import schema_k
 from ..utils import calculate_area, calculate_bbox
 import yaml
@@ -117,8 +122,8 @@ def export_coco_json(all_annotations, class_mapping, image_paths, slices, image_
 
         image_info = {
             "file_name": file_name_img,
-            "height": qimage.height() if is_slice else QImage(image_path).height(),
-            "width": qimage.width() if is_slice else QImage(image_path).width(),
+            "height": qimage.height() if is_slice else image_dimensions(image_path)[1],
+            "width": qimage.width() if is_slice else image_dimensions(image_path)[0],
             "id": image_id
         }
         coco_format["images"].append(image_info)
@@ -264,8 +269,7 @@ def export_yolo_v4(all_annotations, class_mapping, image_paths, slices, image_sl
             dst_path = os.path.join(images_dir, file_name_img)
             if not os.path.exists(dst_path):
                 shutil.copy2(image_path, dst_path)
-            img = QImage(image_path)
-            img_width, img_height = img.width(), img.height()
+            img_width, img_height = image_dimensions(image_path)
 
         # Write YOLO format annotation
         label_file = os.path.splitext(file_name_img)[0] + '.txt'
@@ -467,8 +471,7 @@ def export_yolo_v5plus(all_annotations, class_mapping, image_paths, slices, imag
             if not os.path.exists(dst_path):
                 shutil.copy2(image_path, dst_path)
                 logger.debug(f"copied image -> {dst_path}")
-            img = QImage(image_path)
-            img_width, img_height = img.width(), img.height()
+            img_width, img_height = image_dimensions(image_path)
 
         # Write YOLO format annotation
         label_file = os.path.splitext(file_name_img)[0] + '.txt'
@@ -879,8 +882,7 @@ def export_pascal_voc_bbox(all_annotations, class_mapping, image_paths, slices, 
             else:
                 logger.debug(f"Image {file_name_img} already exists in the target directory. Skipping copy.")
 
-            img = QImage(image_path)
-            img_width, img_height = img.width(), img.height()
+            img_width, img_height = image_dimensions(image_path)
 
         # Create the XML structure
         root = ET.Element('annotation')
@@ -982,8 +984,7 @@ def export_pascal_voc_both(all_annotations, class_mapping, image_paths, slices, 
             else:
                 logger.debug(f"Image {file_name_img} already exists in the target directory. Skipping copy.")
 
-            img = QImage(image_path)
-            img_width, img_height = img.width(), img.height()
+            img_width, img_height = image_dimensions(image_path)
 
         # Create the XML structure
         root = ET.Element('annotation')

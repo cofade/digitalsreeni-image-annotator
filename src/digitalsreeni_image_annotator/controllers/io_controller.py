@@ -116,7 +116,14 @@ def import_annotations(mw):
         logger.debug(f"Selected YAML file: {yaml_file}")
         try:
             imported_annotations, image_info, recovered_schemas = process_import_format(
-                import_format, yaml_file, mw.class_mapping
+                import_format, yaml_file, mw.class_mapping,
+                # The importer stays Qt-free (issue #76); the GUI supplies the
+                # prompt it used to raise itself.
+                confirm=lambda message: QMessageBox.question(
+                    mw, "Import Issues", message,
+                    QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
+                    QMessageBox.StandardButton.No,
+                ) == QMessageBox.StandardButton.Yes,
             )
             yaml_dir = os.path.dirname(yaml_file)
             if import_format == "YOLO (v4 and earlier)":

@@ -678,7 +678,7 @@ class TestYOLOPoseExport:
         label_files = [f for f in os.listdir(labels_dir) if f.endswith('.txt')]
         assert len(label_files) == 1
         with open(os.path.join(labels_dir, label_files[0])) as f:
-            lines = [l.strip() for l in f if l.strip()]
+            lines = [line.strip() for line in f if line.strip()]
         assert len(lines) == 1
         return lines[0]
 

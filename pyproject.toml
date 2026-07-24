@@ -53,6 +53,8 @@ dev = [
     "pytest-cov>=4.1.0",
     "pytest-mock>=3.12.0",
     "pytest-xvfb>=3.0.0; sys_platform == 'linux'",
+    "ruff>=0.6",                                    # lint (issue #78)
+    "mypy>=1.11",                                   # type check (issue #78)
 ]
 
 [project.urls]
@@ -66,6 +68,73 @@ sreeni = "digitalsreeni_image_annotator.main:main"
 # entry imports torch eagerly before QApplication to work around a Windows DLL
 # conflict (ADR-017), and the CLI must not inherit that startup path.
 sreeni-cli = "digitalsreeni_image_annotator.cli:main"
+
+# --- lint (issue #78) ------------------------------------------------------
+[tool.ruff]
+src = ["src"]
+line-length = 100
+extend-exclude = ["build", "dist", ".venv"]
+
+[tool.ruff.lint]
+# Deliberately narrow. The codebase predates any linter, so a broad rule set
+# would produce hundreds of findings nobody reads and the gate would be turned
+# off within a week. These four catch real defects (unused names, shadowed
+# builtins, ambiguous identifiers) rather than style preferences.
+select = ["E4", "E7", "E9", "F"]
+
+[tool.ruff.lint.per-file-ignores]
+# Public API re-exports: names are imported to be re-exported, not used here.
+"src/digitalsreeni_image_annotator/__init__.py" = ["F401"]
+
+# --- type check (issue #78) ------------------------------------------------
+[tool.mypy]
+python_version = "3.10"
+files = ["src/digitalsreeni_image_annotator"]
+# Global settings stay permissive so the gate is green from the first commit;
+# checking is enabled per-module below, and tightens module by module. A gate
+# that fails on day one is a gate that gets disabled on day two.
+ignore_errors = true
+follow_imports = "silent"
+ignore_missing_imports = false
+warn_unused_configs = true
+
+# Untyped third-party packages. Listed individually rather than switching on a
+# global ignore_missing_imports, so the ignore list stays visible and shrinks
+# as upstreams ship stubs.
+#
+# follow_imports = "skip" matters as much as the ignore: several of these ship
+# source written for a newer Python than our floor, and mypy parsing them under
+# python_version = "3.10" fails on syntax we neither own nor call. Skipping
+# means we type-check against `Any` at those boundaries, which is the honest
+# description of an untyped dependency anyway.
+[[tool.mypy.overrides]]
+module = [
+    "cv2.*", "czifile.*", "mlflow.*", "plotly.*", "pystackreg.*",
+    "pydicom.*", "shapely.*", "skimage.*", "tifffile.*",
+    "transformers.*", "ultralytics.*", "yaml.*", "PIL.*",
+]
+ignore_missing_imports = true
+follow_imports = "skip"
+
+# Modules that ARE annotated and ARE checked. Everything else is excluded
+# above -- explicitly, so the boundary is visible rather than a silent gap.
+# Widget internals and dialogs stay out of scope on purpose: the PyQt6 stubs
+# are incomplete, so annotating them produces noise, not safety.
+[[tool.mypy.overrides]]
+module = [
+    "digitalsreeni_image_annotator.core.annotation_types",
+    "digitalsreeni_image_annotator.core.annotation_qc",
+    "digitalsreeni_image_annotator.core.constants",
+    "digitalsreeni_image_annotator.core.disagreement",
+    "digitalsreeni_image_annotator.core.image_size",
+    "digitalsreeni_image_annotator.core.mask_filters",
+    "digitalsreeni_image_annotator.core.model_sidecar",
+    "digitalsreeni_image_annotator.core.onion",
+    "digitalsreeni_image_annotator.core.project_io",
+    "digitalsreeni_image_annotator.core.similarity",
+    "digitalsreeni_image_annotator.core.task_inference",
+]
+ignore_errors = false
 
 [tool.setuptools.packages.find]
 where = ["src"]

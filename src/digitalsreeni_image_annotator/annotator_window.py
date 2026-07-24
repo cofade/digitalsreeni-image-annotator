@@ -1,4 +1,3 @@
-import os
 import warnings
 
 from PyQt6.QtCore import Qt, QTimer
@@ -42,8 +41,7 @@ from .ui.shortcuts import install_event_filters, install_shortcuts
 from .ui.sidebar import build_image_area, build_image_list, build_sidebar
 from .dialogs.annotation_statistics import show_annotation_statistics
 from .dialogs.coco_json_combiner import show_coco_json_combiner
-from .dialogs.dino_phrase_editor import ClassThresholdTable, PhraseEditorPanel
-from .inference.dino_utils import DINOUtils, GDINO_MODEL_PATHS
+from .inference.dino_utils import DINOUtils
 from .dialogs.dataset_splitter import DatasetSplitterTool
 from .dialogs.dicom_converter import DicomConverter
 from .dialogs.dino_merge_dialog import show_dino_merge_dialog

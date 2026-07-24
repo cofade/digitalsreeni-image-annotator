@@ -16,6 +16,14 @@ arithmetic that silently wraps at the ends of a stack is a bug that should be
 caught by a unit test, not by a user noticing the last frame ghosting the first.
 """
 
+from collections.abc import Iterable
+from typing import Any
+
+# `Any` rather than a narrower type on the clamps below is deliberate: their
+# input is whatever QSettings returned, which is genuinely untyped (it
+# round-trips values as strings on some backends and can hold anything a
+# hand-edited registry or INI contains). That is exactly why they clamp.
+
 # Which neighbours to show. "previous" is the default because the common
 # workflow is stepping forward through a stack while checking against what you
 # just annotated.
@@ -33,7 +41,7 @@ DEFAULT_OPACITY = 0.35
 MAX_OFFSET = 5
 
 
-def clamp_opacity(value) -> float:
+def clamp_opacity(value: Any) -> float:
     """Coerce a stored/passed opacity into 0.05..0.95.
 
     Never 0 (indistinguishable from "off", but with the decode cost still paid)
@@ -46,7 +54,7 @@ def clamp_opacity(value) -> float:
     return max(0.05, min(0.95, value))
 
 
-def clamp_offset(value) -> int:
+def clamp_offset(value: Any) -> int:
     try:
         value = int(value)
     except (TypeError, ValueError):
@@ -54,11 +62,16 @@ def clamp_offset(value) -> int:
     return max(1, min(MAX_OFFSET, value))
 
 
-def normalise_mode(value) -> str:
+def normalise_mode(value: Any) -> str:
     return value if value in MODES else DEFAULT_MODE
 
 
-def neighbour_names(names, current, offset=DEFAULT_OFFSET, mode=DEFAULT_MODE):
+def neighbour_names(
+    names: Iterable[str] | None,
+    current: str | None,
+    offset: int = DEFAULT_OFFSET,
+    mode: str = DEFAULT_MODE,
+) -> list[str]:
     """Names of the onion-skin neighbours of ``current`` within ``names``.
 
     Returns them in draw order (earlier first). Out-of-range neighbours are
@@ -84,7 +97,7 @@ def neighbour_names(names, current, offset=DEFAULT_OFFSET, mode=DEFAULT_MODE):
     return [names[i] for i in wanted if 0 <= i < len(names)]
 
 
-def is_available(names) -> bool:
+def is_available(names: Iterable[str] | None) -> bool:
     """True when a collection has enough slices for onion-skinning to mean
     anything. Drives whether the controls are enabled at all."""
     return len(list(names or [])) > 1

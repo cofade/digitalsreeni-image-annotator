@@ -7,7 +7,6 @@ window instead of a real ImageAnnotator/QApplication window — the function
 under test only touches a handful of ``mw`` attributes.
 """
 
-import copy
 from types import SimpleNamespace
 
 import numpy as np

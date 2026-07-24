@@ -264,20 +264,84 @@ the orchestrator wires each to the matching controller slot.
 
 ### No Type Hints
 
-**Debt Level**: Medium
+**Status**: Partially resolved — the Qt-free core is typed and checked (#78)
 
-**Description**: Python code lacks type hints
+**Debt Level**: Low for `core/`, unchanged elsewhere
 
-**Impact**:
-- No static type checking
-- Harder to understand function contracts
-- More runtime errors
+**Description (historical)**: The codebase was essentially untyped, with no
+configuration and no checking step. The cost showed up most in the structures
+carrying the most meaning: an annotation is a dict whose valid shapes were
+documented in prose, and a pose instance is distinguished from a polygon by the
+**absence** of a key (ADR-029) — a rule only a comment protected.
 
-**Effort to Resolve**: High (add gradually)
+**What is now covered**
 
-**Priority**: Low
+`core/annotation_types.py` defines the annotation shapes as `TypedDict`s:
+`PolygonAnnotation`, `BBoxAnnotation`, `PoseAnnotation`, plus `KeypointSchema`
+and aliases for the recurring shapes (`Polygon`, `BBox`, `Keypoints`,
+`AnnotationsByImage`). **`PoseAnnotation` declares no `segmentation` key at
+all** — the type definition expresses the discriminator, because declaring one
+even as optional would legitimise writing it, and writing it breaks every
+existence-only `"segmentation" in ann` check. `is_pose` / `is_polygon` /
+`is_bbox_only` express the test once.
 
-**Plan**: Add type hints to new code, gradually backfill
+Every `TypedDict` is `total=False`, deliberately: the annotation dict
+legitimately gains keys at runtime (`segmentation_raw` lazily, ADR-025;
+`source` and `track_run` on tracked results, ADR-040; `assigned_class` on
+unprompted proposals, #69). Forcing a rigid schema onto genuinely open data
+would produce false errors and teach people to ignore the checker.
+
+mypy is configured in `pyproject.toml` with **global `ignore_errors = true` and
+a per-module opt-in**. That direction matters: the boundary of what is actually
+checked stays visible, whereas checking everything and suppressing failures
+would hide it. Currently opted in: `annotation_types`, `annotation_qc`,
+`constants`, `disagreement`, `image_size`, `mask_filters`, `model_sidecar`,
+`onion`, `project_io`, `similarity`, `task_inference`.
+
+Untyped third-party packages are listed **individually** rather than behind a
+global `ignore_missing_imports`, so the list stays visible and shrinks as
+upstreams ship stubs. Several of them ship source written for a newer Python
+than the project's 3.10 floor, so the override also sets
+`follow_imports = "skip"`.
+
+**Deliberately out of scope**: widget internals and dialogs. The PyQt6 stubs are
+incomplete, so annotating them produces noise rather than safety — which is
+exactly why an `mypy --strict` sweep over the whole tree is a different project.
+
+**The gate is verified to be non-vacuous.**
+`tests/unit/test_annotation_types.py` copies the tree, injects a deliberately
+wrong return type into an in-scope module, and asserts the real gate fails. A
+type-check step that checks nothing is worse than none: it reports success
+forever while teaching everyone to trust it.
+
+**Remaining**: `io/`, `utils.py` and the controller signatures are annotated
+only where they already were. Extending the opt-in list module by module is the
+intended path.
+
+---
+
+### No Linting
+
+**Status**: Resolved (issue #78)
+
+**Description**: The project had no linter at all.
+
+**Resolution**: `ruff` is configured in `pyproject.toml` with a **deliberately
+narrow** rule set — `E4`, `E7`, `E9`, `F`. The codebase predates any linter, so a
+broad selection would produce hundreds of findings nobody reads and the gate
+would be switched off within a week. These rules catch real defects (unused
+names, shadowed builtins, ambiguous identifiers, syntax-level errors) rather
+than style preferences. It found and fixed 17 pre-existing issues on first run;
+the tree is clean.
+
+Run both gates separately from the tests, so a type error is distinguishable
+from a test failure:
+
+```bash
+python -m ruff check src tests
+python -m mypy
+pytest
+```
 
 ---
 

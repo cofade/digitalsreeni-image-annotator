@@ -50,7 +50,6 @@ from ..io.export_formats import create_coco_annotation as _export_create_coco_an
 from ..utils import (
     calculate_area,
     calculate_bbox,
-    clamp_bbox,
     clamp_keypoints,
     keypoint_instance_bbox,
     simplify_polygon,

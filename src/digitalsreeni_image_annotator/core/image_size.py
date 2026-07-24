@@ -14,7 +14,7 @@ from .logging_config import get_logger
 logger = get_logger(__name__)
 
 
-def image_dimensions(path):
+def image_dimensions(path: str) -> tuple[int, int]:
     """``(width, height)`` of the image at ``path``, or ``(0, 0)``.
 
     ``(0, 0)`` rather than an exception on an unreadable file: this mirrors

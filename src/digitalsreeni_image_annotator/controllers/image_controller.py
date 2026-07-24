@@ -170,6 +170,59 @@ class ImageController(QObject):
                 if do_switch:
                     self.switch_image(items[0])
 
+    def refresh_image_list_scores(self):
+        """Repaint the list so review-score badges appear or disappear (#71).
+
+        Only a repaint: the scores are read live by the delegate, so there is
+        nothing to copy into the items — which is what keeps the item text a
+        pure file name.
+        """
+        self.mw.image_list.viewport().update()
+
+    def sort_image_list_by_score(self, descending=True):
+        """Reorder the list by review score, highest first (issue #71).
+
+        Sorts ``all_images`` and rebuilds, exactly like
+        :meth:`sort_image_list`, so the ``all_images[i]`` ↔ ``item(i)``
+        positional invariant other code relies on is preserved. Unscored
+        images sink to the bottom rather than being hidden — the point of the
+        ranking is where to start, not what to ignore.
+        """
+        review = getattr(self.mw, "review_controller", None)
+        if review is None or not review.has_scores():
+            return False
+
+        def key(info):
+            score = review.score_for(info.get("file_name"))
+            if score is None:
+                return (1, 0.0, info.get("file_name", "").casefold())
+            return (0, -score if descending else score,
+                    info.get("file_name", "").casefold())
+
+        current = None
+        if self.mw.image_list.currentItem() is not None:
+            current = self.mw.image_list.currentItem().text()
+
+        self.mw.all_images.sort(key=key)
+        self.mw.image_list.blockSignals(True)
+        self.mw.image_list.clear()
+        for info in self.mw.all_images:
+            item = QListWidgetItem(info["file_name"])
+            group = info.get("group")
+            if group:
+                item.setToolTip(f"{info['file_name']}  [{group}]")
+            self.mw.image_list.addItem(item)
+        self.mw.image_list.blockSignals(False)
+        self.apply_image_filter()
+
+        if current is not None:
+            items = self.mw.image_list.findItems(current, Qt.MatchFlag.MatchExactly)
+            if items:
+                self.mw.image_list.blockSignals(True)
+                self.mw.image_list.setCurrentItem(items[0])
+                self.mw.image_list.blockSignals(False)
+        return True
+
     def image_has_annotations(self, image_info):
         """True if the image (or, for multi-dim images, any of its slices)
         has at least one annotation."""

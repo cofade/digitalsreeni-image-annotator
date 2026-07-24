@@ -39,6 +39,7 @@ from ..dialogs.dino_phrase_editor import ClassThresholdTable, PhraseEditorPanel
 from ..inference.sam3_utils import SAM3_MODEL_LABEL
 from ..widgets.video_timeline import VideoTimeline
 from .class_list_delegate import ClassShortcutDelegate
+from .image_list_delegate import ImageScoreDelegate
 
 
 def _section_header(text):
@@ -517,6 +518,13 @@ def build_image_list(window):
     window.image_list_layout.addWidget(window.image_group_combo)
 
     window.image_list = QListWidget()
+    # Paints the review score (issue #71). Reads the controller live rather
+    # than a snapshot, and stays out of the item text -- see the delegate's
+    # docstring for why that matters here in particular.
+    window.image_score_delegate = ImageScoreDelegate(
+        window.image_list, lambda name: window.review_controller.score_for(name)
+    )
+    window.image_list.setItemDelegate(window.image_score_delegate)
     window.image_list.itemClicked.connect(window.switch_image)
     window.image_list.currentRowChanged.connect(
         lambda row: window.switch_image(window.image_list.currentItem())
@@ -524,6 +532,28 @@ def build_image_list(window):
     window.image_list.setContextMenuPolicy(Qt.ContextMenuPolicy.CustomContextMenu)
     window.image_list.customContextMenuRequested.connect(window.show_image_context_menu)
     window.image_list_layout.addWidget(window.image_list)
+
+    # Review-with-model row (issue #71). Kept next to the image list because
+    # the ranking IS the list order -- putting it in a menu would separate the
+    # action from the thing it reorders.
+    review_row = QHBoxLayout()
+    window.review_button = QPushButton("Review with model")
+    window.review_button.setToolTip(
+        "Run the loaded prediction model over the project and score every "
+        "image: annotated images by how much the model disagrees with the "
+        "labels, unannotated ones by how unsure the model is."
+    )
+    window.review_button.clicked.connect(window.run_model_review)
+    review_row.addWidget(window.review_button)
+
+    window.sort_by_score_button = QPushButton("Sort by score")
+    window.sort_by_score_button.setToolTip(
+        "Order the list by review score, highest first. Unscored images sink "
+        "to the bottom."
+    )
+    window.sort_by_score_button.clicked.connect(window.sort_images_by_score)
+    review_row.addWidget(window.sort_by_score_button)
+    window.image_list_layout.addLayout(review_row)
 
     window.clear_all_button = QPushButton("Clear All Images and Annotations")
     window.clear_all_button.clicked.connect(window.clear_all)

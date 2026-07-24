@@ -26,6 +26,7 @@ from .controllers.dino_controller import DINOController
 from .controllers.image_controller import ImageController
 from .controllers.project_controller import ProjectController
 from .controllers.qc_controller import QCController
+from .controllers.review_controller import ReviewController
 from .controllers.sam_controller import SAMController
 from .controllers.segment_everything_controller import SegmentEverythingController
 from .controllers.sam_train_controller import SAMTrainController
@@ -160,6 +161,9 @@ class ImageAnnotator(QMainWindow):
         # Rule-based annotation audit (issue #70). The rules themselves are
         # Qt-free in core/annotation_qc.py so the headless CLI can reuse them.
         self.qc_controller = QCController(self)
+        # Model-vs-ground-truth review scoring (issue #71). Closes the active-
+        # learning loop: train, score, fix the worst, retrain.
+        self.review_controller = ReviewController(self)
 
         # CanvasContext gives ImageLabel a narrow read view of main-window
         # state. All write paths from the canvas leave as Qt signals
@@ -768,6 +772,16 @@ class ImageAnnotator(QMainWindow):
 
     def check_annotations(self):
         return self.qc_controller.run_audit()
+
+    def run_model_review(self):
+        return self.review_controller.run()
+
+    def sort_images_by_score(self):
+        if not self.image_controller.sort_image_list_by_score():
+            self.show_info(
+                "Sort by score",
+                "No review scores yet. Run “Review with model” first.",
+            )
 
     def show_annotation_statistics(self):
         if not self.all_annotations:

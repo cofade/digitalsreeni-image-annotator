@@ -706,6 +706,27 @@ class AnnotationController(QObject):
         self.mw.update_slice_list_colors()
         self.mw.auto_save()
 
+    def sync_polygon_geometry(self):
+        """Push a mid-edit vertex insert/remove through to storage and the table
+        (issue #68) **without** ending the edit gesture.
+
+        The distinction from :meth:`commit_polygon_edit` is deliberate and is
+        the whole reason this is a separate slot: it saves and refreshes, but
+        does *not* push the undo baseline. The baseline stays pending until
+        Enter, so a vertex-edit session remains one undo step and Esc still
+        reverts the entire session including its insertions (ADR-026).
+
+        Saving eagerly matters because ``update_annotation_list`` rebuilds the
+        table from ``all_annotations``; without the sync the Area column would
+        show the pre-edit value right after loading an image, where the two
+        dicts are not yet sharing objects.
+        """
+        selected = list(self.mw.image_label.highlighted_annotations)
+        self.save_current_annotations()
+        self.update_annotation_list()
+        if selected:
+            self.apply_canvas_selection(selected, "replace")
+
     def commit_keypoint_edit(self):
         """Persist a single-keypoint drag or visibility toggle on a committed
         pose instance (#35). ImageLabel mutated the keypoints in place; recompute

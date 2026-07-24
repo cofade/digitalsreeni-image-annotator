@@ -222,6 +222,7 @@ class ImageAnnotator(QMainWindow):
         il.canvasSelectionChanged.connect(ac.apply_canvas_selection)
         il.bboxEditCommitted.connect(ac.commit_bbox_edit)
         il.polygonEditCommitted.connect(ac.commit_polygon_edit)
+        il.polygonGeometryChanged.connect(ac.sync_polygon_geometry)
         il.editBaselineRequested.connect(ac.capture_edit_baseline)
         il.deleteSelectionRequested.connect(ac.delete_selected_annotations)
         il.finishPolygonRequested.connect(ac.finish_polygon)

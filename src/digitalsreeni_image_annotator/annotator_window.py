@@ -26,6 +26,7 @@ from .controllers.dino_controller import DINOController
 from .controllers.image_controller import ImageController
 from .controllers.project_controller import ProjectController
 from .controllers.sam_controller import SAMController
+from .controllers.segment_everything_controller import SegmentEverythingController
 from .controllers.sam_train_controller import SAMTrainController
 from .controllers.tracking_controller import TrackingController
 from .controllers.yolo_controller import YOLOController
@@ -138,6 +139,10 @@ class ImageAnnotator(QMainWindow):
         self._sam_inference_in_flight = False
 
         self.sam_controller = SAMController(self)
+        # Unprompted SAM proposals into the existing review overlay (issue
+        # #69). A third producer into the same pipeline as DINO and SAM 3 --
+        # deliberately not a second review mechanic (ADR-015).
+        self.segment_everything_controller = SegmentEverythingController(self)
         self.sam_train_controller = SAMTrainController(self)
         self.dino_controller = DINOController(self)
         # SAM 3 video object tracking (issue #51). Reuses the DINO review

@@ -508,6 +508,49 @@ class SAMUtils(QObject):
             [list(b) for b in bboxes],
         )
 
+    def apply_sam_everything(self, image: QImage):
+        """Segment everything in ``image`` with no prompt at all (issue #69).
+
+        Ultralytics' SAM returns the automatic "everything" segmentation when
+        called without any prompt argument — the app had simply never asked.
+        Every other SAM entry point here passes ``bboxes=`` or ``points=``.
+
+        Returns ``[{"segmentation": [...], "score": float}, ...]``, or ``None``
+        when no model is loaded. Runs through the shared :func:`_run_sync`
+        worker, so it inherits the in-flight guard (ADR-013) and serialises
+        against SAM 2 / SAM 3 / DINO on the GPU — which matters more here than
+        for a box prompt, since an unprompted pass is markedly heavier.
+        """
+        if not self.current_sam_model or self._model is None:
+            logger.warning("apply_sam_everything: no SAM model selected")
+            return None
+        logger.debug("apply_sam_everything: running unprompted segmentation")
+        return _run_sync(self._sam_everything_blocking, _qimage_to_numpy(image))
+
+    def _sam_everything_blocking(self, image_np):
+        results = self._model(image_np, device=self._device)
+        res = results[0]
+        if not (hasattr(res, "masks") and res.masks is not None):
+            return []
+
+        masks = res.masks.data.cpu().numpy()
+        confidences = (
+            res.boxes.conf.cpu().numpy()
+            if getattr(res, "boxes", None) is not None
+            and hasattr(res.boxes, "conf")
+            else np.zeros(len(masks))
+        )
+
+        output = []
+        for i, mask in enumerate(masks):
+            contour = _mask_to_polygon(mask)
+            if contour is None:
+                continue  # unlike the prompted paths there is no per-request
+                # slot to report against, so an unusable mask is simply dropped
+            score = float(confidences[i]) if i < len(confidences) else 0.0
+            output.append({"segmentation": contour, "score": score})
+        return output
+
     def _sam_batch_blocking(self, image_np, bboxes):
         results = self._model(image_np, bboxes=bboxes, device=self._device)
         res = results[0]

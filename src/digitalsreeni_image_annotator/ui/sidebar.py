@@ -177,6 +177,20 @@ def build_sidebar(window):
     sam_buttons_layout.addWidget(window.sam_points_button)
     sam_layout.addLayout(sam_buttons_layout)
 
+    # Segment Everything (issue #69). Not checkable and not part of
+    # tool_group: it is a one-shot action, not a canvas mode -- the review
+    # that follows happens in the existing temp-annotation overlay.
+    window.segment_everything_button = QPushButton("Segment Everything")
+    window.segment_everything_button.setToolTip(
+        "Run SAM with no prompt and review every mask it finds. Click a "
+        "proposal to assign the active class (digits 1-9 switch class), then "
+        "Enter to commit or Escape to discard."
+    )
+    window.segment_everything_button.clicked.connect(
+        window.segment_everything_controller.run
+    )
+    sam_layout.addWidget(window.segment_everything_button)
+
     # SAM model selector
     window.sam_model_selector = QComboBox()
     window.sam_model_selector.addItem("Pick a SAM Model")

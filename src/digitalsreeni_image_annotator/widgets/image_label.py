@@ -37,6 +37,7 @@ from .canvas_renderer import CanvasRenderer
 from . import edit_gestures
 from ..core import onion
 from ..core.constants import DEFAULT_FILL_OPACITY
+from ..core.mask_filters import SAM_EVERYTHING_SOURCE
 from ..utils import (
     calculate_area,
     clamp_segmentation,
@@ -406,6 +407,61 @@ class ImageLabel(QLabel):
         self.temp_annotations.clear()
         self.update()
 
+    # --- Segment Everything candidate assignment (issue #69) ---
+
+    def has_assignable_temp(self):
+        """True when the review overlay holds unprompted proposals.
+
+        DINO and SAM 3 proposals already know their class (they were prompted
+        with one); an unprompted pass does not, so only those need the
+        click-to-assign step.
+        """
+        return any(
+            annotation.get("source") == SAM_EVERYTHING_SOURCE
+            for annotation in self.temp_annotations
+        )
+
+    def temp_annotation_at(self, pos):
+        """Smallest assignable proposal containing ``pos``, or None.
+
+        Smallest-wins mirrors :meth:`annotation_at`: an unprompted pass
+        routinely nests a small mask inside a larger one, and the small one
+        would otherwise be unreachable.
+        """
+        best = None
+        best_area = None
+        for annotation in self.temp_annotations:
+            if annotation.get("source") != SAM_EVERYTHING_SOURCE:
+                continue
+            if not self._annotation_contains(annotation, pos):
+                continue
+            area = calculate_area(annotation)
+            if best is None or area < best_area:
+                best, best_area = annotation, area
+        return best
+
+    def assign_class_to_temp_at(self, pos, additive=False):
+        """Assign the active class to the proposal under ``pos``.
+
+        A plain click toggles: clicking a proposal already carrying the active
+        class clears it, so a mis-click is undone by repeating it rather than
+        by discarding the whole batch. Shift+click only ever assigns, which is
+        what makes dragging through a row of candidates additive.
+
+        Returns True when a proposal was hit (and the event consumed).
+        """
+        annotation = self.temp_annotation_at(pos)
+        if annotation is None:
+            return False
+        class_name = self._ctx.current_class() if self._ctx else None
+        if not class_name:
+            return False
+        if not additive and annotation.get("assigned_class") == class_name:
+            annotation["assigned_class"] = None
+        else:
+            annotation["assigned_class"] = class_name
+        return True
+
     def draw_tool_size_indicator(self, painter):
         return self.renderer.draw_tool_size_indicator(painter)
 
@@ -579,6 +635,15 @@ class ImageLabel(QLabel):
                 handler.on_mouse_press(event, pos)
             self.update()
             return
+
+        # Click a Segment Everything proposal to assign the active class to it
+        # (issue #69). Sits before the tool dispatch because temp_annotations
+        # suppresses select mode, so nothing else would claim the click.
+        if event.button() == Qt.MouseButton.LeftButton and self.has_assignable_temp():
+            additive = bool(event.modifiers() & Qt.KeyboardModifier.ShiftModifier)
+            if self.assign_class_to_temp_at(pos, additive):
+                self.update()
+                return
 
         # Right-click a committed keypoint of the single selected pose instance
         # toggles its visibility (visible <-> occluded) (#35).

@@ -81,8 +81,20 @@ class CanvasRenderer:
         painter.scale(self.label.zoom_factor, self.label.zoom_factor)
 
         for annotation in self.label.temp_annotations:
-            color = QColor(255, 165, 0, 128)  # Semi-transparent orange
-            painter.setPen(QPen(color, self._pen_w(2), Qt.PenStyle.DashLine))
+            # An unprompted proposal that has been given a class (issue #69)
+            # draws in that class's colour with a solid outline, so "assigned"
+            # and "still undecided" are distinguishable at a glance -- without
+            # which a partially-reviewed batch is impossible to work through.
+            assigned = annotation.get("assigned_class")
+            if assigned:
+                color = QColor(
+                    self.label.class_colors.get(assigned, QColor(Qt.GlobalColor.white))
+                )
+                color.setAlpha(140)
+                painter.setPen(QPen(color, self._pen_w(2), Qt.PenStyle.SolidLine))
+            else:
+                color = QColor(255, 165, 0, 128)  # Semi-transparent orange
+                painter.setPen(QPen(color, self._pen_w(2), Qt.PenStyle.DashLine))
             painter.setBrush(QBrush(color))
 
             # Prefer segmentation polygon over bbox when both are present
@@ -103,7 +115,8 @@ class CanvasRenderer:
 
             # Draw label and score
             painter.setFont(self._overlay_font())
-            label = f"{annotation['category_name']} {annotation['score']:.2f}"
+            name = assigned or annotation["category_name"]
+            label = f"{name} {annotation['score']:.2f}"
             if points is not None:
                 centroid = self.calculate_centroid(points)
                 if centroid:

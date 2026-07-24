@@ -37,6 +37,7 @@ from PyQt6.QtWidgets import (
 
 from ..core.constants import default_class_color
 from ..core.keypoint_schema import schema_k
+from ..core.mask_filters import SAM_EVERYTHING_SOURCE
 from ..core.slice_cache import slice_names
 from ..inference.sam3_utils import SAM3_MODEL_LABEL
 from ..inference.sam_utils import InferenceBusyError
@@ -45,6 +46,11 @@ from ..ui.input_gates import focus_is_text_entry, no_modal_open
 from ..core.logging_config import get_logger
 
 logger = get_logger(__name__)
+
+
+# Producers whose temp annotations this filter's Enter/Escape applies to.
+# Adding a producer means adding it here, not installing a second filter.
+REVIEW_SOURCES = ("dino", "sam3", SAM_EVERYTHING_SOURCE)
 
 
 class DINOReviewEventFilter(QObject):
@@ -75,11 +81,13 @@ class DINOReviewEventFilter(QObject):
         if not no_modal_open() or focus_is_text_entry():
             return False
         temp = self.main_window.image_label.temp_annotations
-        # SAM 3 (issue #50) produces temp annotations tagged "sam3"; DINO
-        # tags "dino". Both reuse this Enter/Escape review gate — widen the
-        # membership so SAM 3 review isn't dead. See ADR-038.
+        # Three producers now feed this one review gate: DINO tags "dino",
+        # SAM 3 tags "sam3" (issue #50 / ADR-038), and Segment Everything tags
+        # "sam-everything" (issue #69). Widening the accepted set is
+        # deliberately how a new producer joins -- ADR-015 warns against
+        # installing a parallel filter instead.
         if not temp or not any(
-            a.get("source") in ("dino", "sam3") for a in temp
+            a.get("source") in REVIEW_SOURCES for a in temp
         ):
             return False
         if key in (Qt.Key.Key_Return, Qt.Key.Key_Enter):
@@ -778,7 +786,16 @@ class DINOController(QObject):
         self.mw.annotation_controller.record_history(image_name)
 
         for ann in self.mw.image_label.temp_annotations:
-            class_name = ann["category_name"]
+            # An unprompted Segment Everything proposal (issue #69) commits
+            # under the class the user assigned by clicking it. One that was
+            # never assigned is discarded rather than guessed at -- committing
+            # it under Temp-Auto would leave exactly the orphan class the #63
+            # rename guard had to work around.
+            class_name = ann.get("assigned_class") or ann["category_name"]
+            if ann.get("source") == SAM_EVERYTHING_SOURCE and not ann.get(
+                "assigned_class"
+            ):
+                continue
             if class_name not in self.mw.class_mapping:
                 logger.warning(f"Skipping DINO result for unknown class '{class_name}'")
                 continue
@@ -793,6 +810,7 @@ class DINOController(QObject):
             self.mw.add_annotation_to_list(new_ann)
 
         self.mw.image_label.temp_annotations = []
+        self._drop_auto_temp_class()
         self.mw.dino_batch_results.pop(image_name, None)
         if self.mw.dino_batch_results:
             self._show_dino_batch_review()
@@ -802,9 +820,22 @@ class DINOController(QObject):
         self.mw.lbl_dino_status.setText("Results accepted.")
         logger.info("DINO results accepted.")
 
+    def _drop_auto_temp_class(self):
+        """Remove the placeholder colour entry Segment Everything registered.
+
+        Both accept and reject call this. A surviving ``Temp-*`` class is not
+        cosmetic: it shows up in the class list, in exports, and in the rename
+        guard added for #63.
+        """
+        from .segment_everything_controller import TEMP_AUTO_CLASS
+
+        self.mw.image_label.class_colors.pop(TEMP_AUTO_CLASS, None)
+        self.mw.image_label.annotations.pop(TEMP_AUTO_CLASS, None)
+
     def reject_dino_results(self):
         """Discard current temp_annotations."""
         self.mw.image_label.temp_annotations = []
+        self._drop_auto_temp_class()
         image_name = self.mw.current_slice or self.mw.image_file_name
         self.mw.dino_batch_results.pop(image_name, None)
         if self.mw.dino_batch_results:

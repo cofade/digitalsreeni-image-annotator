@@ -97,39 +97,71 @@ class YOLOController(QObject):
         self._mlflow_ui_started = False
 
     def setup_yolo_menu(self):
-        yolo_menu = self.mw.menuBar().addMenu("&YOLO (beta)")
+        """Build the **Model** menu (issue #73).
 
-        training_submenu = yolo_menu.addMenu("Training")
+        This replaces the old two-submenu, seven-action "YOLO (beta)" menu and
+        the four-action "SAM Fine-Tune" menu with one primary action plus an
+        Advanced submenu. Eleven menu actions for what is conceptually one
+        operation was the problem; collapsing them is the fix.
 
-        load_pretrained_action = QAction("Load Pre-trained Model", self.mw)
+        The advanced entries are **demoted, not deleted**: preparing a dataset
+        for external use and training from an externally-prepared folder are
+        real workflows for someone who already has one, and loading a
+        prediction model matters for the review scoring in issue #71.
+        """
+        model_menu = self.mw.menuBar().addMenu("&Model")
+        self._menu = model_menu
+
+        train_action = QAction("Train Model…", self.mw)
+        train_action.setToolTip(
+            "Train a YOLO model or fine-tune SAM 2. Dataset preparation, YAML "
+            "handling and saving happen automatically."
+        )
+        train_action.triggered.connect(self.mw.open_train_dialog)
+        model_menu.addAction(train_action)
+
+        model_menu.addSeparator()
+        advanced = model_menu.addMenu("Advanced")
+        # Exposed so SAMTrainController can add its own advanced entries to the
+        # same submenu rather than opening a second top-level menu.
+        self.advanced_menu = advanced
+
+        load_pretrained_action = QAction("Load Pre-trained YOLO Model", self.mw)
         load_pretrained_action.triggered.connect(self.load_yolo_model)
-        training_submenu.addAction(load_pretrained_action)
+        advanced.addAction(load_pretrained_action)
 
         prepare_data_action = QAction("Prepare YOLO Dataset", self.mw)
+        prepare_data_action.setToolTip(
+            "Write a YOLO dataset for use outside this app. The Train Model "
+            "dialog does this for you."
+        )
         prepare_data_action.triggered.connect(self.prepare_yolo_dataset)
-        training_submenu.addAction(prepare_data_action)
+        advanced.addAction(prepare_data_action)
 
         load_yaml_action = QAction("Load Dataset YAML", self.mw)
         load_yaml_action.triggered.connect(self.load_yolo_yaml)
-        training_submenu.addAction(load_yaml_action)
+        advanced.addAction(load_yaml_action)
 
-        train_action = QAction("Train Model", self.mw)
-        train_action.triggered.connect(self.show_train_dialog)
-        training_submenu.addAction(train_action)
+        train_action_legacy = QAction("Train on a Loaded YAML…", self.mw)
+        train_action_legacy.setToolTip(
+            "Train against an externally prepared dataset YAML."
+        )
+        train_action_legacy.triggered.connect(self.show_train_dialog)
+        advanced.addAction(train_action_legacy)
 
-        save_model_action = QAction("Save Model", self.mw)
+        save_model_action = QAction("Save Model As…", self.mw)
         save_model_action.triggered.connect(self.save_yolo_model)
-        training_submenu.addAction(save_model_action)
+        advanced.addAction(save_model_action)
 
-        prediction_submenu = yolo_menu.addMenu("Prediction Settings")
+        advanced.addSeparator()
 
-        load_model_action = QAction("Load Model", self.mw)
+        load_model_action = QAction("Load Prediction Model", self.mw)
         load_model_action.triggered.connect(self.load_prediction_model)
-        prediction_submenu.addAction(load_model_action)
+        advanced.addAction(load_model_action)
 
         set_threshold_action = QAction("Set Confidence Threshold", self.mw)
         set_threshold_action.triggered.connect(self.set_confidence_threshold)
-        prediction_submenu.addAction(set_threshold_action)
+        advanced.addAction(set_threshold_action)
 
     def initialize_yolo_trainer(self):
         if hasattr(self.mw, "current_project_dir"):

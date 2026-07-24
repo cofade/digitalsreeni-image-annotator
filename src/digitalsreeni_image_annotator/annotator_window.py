@@ -32,6 +32,7 @@ from .controllers.sam_controller import SAMController
 from .controllers.segment_everything_controller import SegmentEverythingController
 from .controllers.sam_train_controller import SAMTrainController
 from .controllers.tracking_controller import TrackingController
+from .controllers.training_controller import TrainingController
 from .controllers.yolo_controller import YOLOController
 from .core import image_utils
 from .ui import theme
@@ -165,6 +166,9 @@ class ImageAnnotator(QMainWindow):
         # Model-vs-ground-truth review scoring (issue #71). Closes the active-
         # learning loop: train, score, fix the worst, retrain.
         self.review_controller = ReviewController(self)
+        # One entry point for all training (issue #73). Orchestrates the
+        # existing trainers; it does not replace them.
+        self.training_controller = TrainingController(self)
         # Embedding-based near-duplicate detection (issue #72). Recommends
         # only — it has no delete path at all, by design.
         self.curation_controller = CurationController(self)
@@ -217,11 +221,16 @@ class ImageAnnotator(QMainWindow):
 
         # YOLO Trainer
         self.yolo_trainer = None
+        # One Model menu (issue #73): YOLO builds it, SAM fine-tuning adds its
+        # advanced entries to the same Advanced submenu. Two top-level training
+        # menus with eleven actions between them was the problem this replaces.
         self.setup_yolo_menu()
-
-        # SAM fine-tuning menu + register any previously fine-tuned models so
-        # they appear in the SAM model selector (built during setup_ui above).
-        self.sam_train_controller.setup_sam_train_menu()
+        self.sam_train_controller.setup_sam_train_menu(
+            self.yolo_controller.advanced_menu
+        )
+        # Register any previously fine-tuned models so they appear in the SAM
+        # model selector (built during setup_ui above). No longer reachable as
+        # a manual menu action -- registration is automatic (issue #74).
         self.sam_train_controller.refresh_model_selector()
 
         install_shortcuts(self)
@@ -780,6 +789,9 @@ class ImageAnnotator(QMainWindow):
 
     def check_annotations(self):
         return self.qc_controller.run_audit()
+
+    def open_train_dialog(self):
+        return self.training_controller.open_dialog()
 
     def run_model_review(self):
         return self.review_controller.run()

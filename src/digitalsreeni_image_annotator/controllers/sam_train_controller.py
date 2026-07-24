@@ -67,26 +67,37 @@ class SAMTrainController(QObject):
 
     # -- menu ----------------------------------------------------------------
 
-    def setup_sam_train_menu(self):
-        menu = self.mw.menuBar().addMenu("SAM &Fine-Tune (beta)")
+    def setup_sam_train_menu(self, parent_menu=None):
+        """Add the SAM fine-tuning entries to the shared Model menu (issue #73).
+
+        No longer a top-level menu of its own: "Train on Current Project" is now
+        reachable as the SAM option in the one Train Model dialog, and the two
+        genuinely advanced entries are demoted alongside YOLO's.
+
+        **"Refresh Fine-Tuned Model List" is gone.** Registration happens
+        automatically after a run (issue #74); a manual refresh action existing
+        at all was the symptom this workflow set out to remove.
+        """
+        menu = parent_menu
+        if menu is None:
+            # Defensive: if the Model menu has not been built yet, fall back to
+            # a top-level menu rather than dropping the actions entirely.
+            menu = self.mw.menuBar().addMenu("SAM &Fine-Tune")
         self._menu = menu
 
-        train_project = QAction("Train on Current Project…", self.mw)
-        train_project.triggered.connect(self.train_on_project)
-        menu.addAction(train_project)
-
         prepare = QAction("Prepare SAM Dataset…", self.mw)
+        prepare.setToolTip(
+            "Write a SAM training dataset for use outside this app."
+        )
         prepare.triggered.connect(self.prepare_dataset)
         menu.addAction(prepare)
 
-        train_folder = QAction("Train from Dataset Folder…", self.mw)
+        train_folder = QAction("Fine-Tune SAM from Dataset Folder…", self.mw)
+        train_folder.setToolTip(
+            "Fine-tune against an externally prepared SAM dataset folder."
+        )
         train_folder.triggered.connect(self.train_from_folder)
         menu.addAction(train_folder)
-
-        menu.addSeparator()
-        refresh = QAction("Refresh Fine-Tuned Model List", self.mw)
-        refresh.triggered.connect(self.refresh_model_selector)
-        menu.addAction(refresh)
 
     # -- entry points --------------------------------------------------------
 

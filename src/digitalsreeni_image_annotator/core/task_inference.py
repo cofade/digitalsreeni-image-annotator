@@ -1,0 +1,183 @@
+"""Infer the training task and summarise the dataset from annotations (#73).
+
+What kind of model to train is not a decision the user should be asked to make:
+it is entailed by what they annotated. Boxes only means detect, polygons mean
+segment, keypoints mean pose. Asking is asking them to restate the data.
+
+**One function, two consumers.** ``train_model`` already infers the task a
+second time — from the prepared dataset YAML (``kpt_shape`` present means pose)
+— and raises pre-flight if the loaded model's ``.task`` disagrees. A mismatch
+between what the dialog says it is training and what the trainer decides to
+train is a bug by construction, so both derive from the same rules here.
+
+Qt-free: this is arithmetic over the annotations dict, and it is the sort of
+thing that should be exhaustively unit-tested on hand-built inputs rather than
+through a dialog.
+"""
+
+TASK_DETECT = "detect"
+TASK_SEGMENT = "segment"
+TASK_POSE = "pose"
+
+
+def _is_pose(annotation):
+    """Pose instances are identified by the **absence** of a segmentation key,
+    the discriminator the whole app routes on (ADR-029)."""
+    return "keypoints" in annotation and not annotation.get("segmentation")
+
+
+def infer_task(all_annotations):
+    """``(task, reason)`` for a project's annotations.
+
+    Precedence is pose > segment > detect, and that order is deliberate rather
+    than arbitrary: a pose instance cannot be trained as anything else, and a
+    polygon carries strictly more information than the box it implies. Where
+    shapes are mixed the reason says so, because "segment" on a project that is
+    90 % boxes is a surprise worth explaining up front.
+
+    An empty project yields ``(None, reason)`` — there is nothing to train, and
+    guessing a default would produce a confusing failure later.
+    """
+    counts = count_shapes(all_annotations)
+    if counts["pose"]:
+        if counts["polygon"] or counts["bbox"]:
+            return TASK_POSE, (
+                f"{counts['pose']} pose instance(s) present; "
+                f"{counts['polygon'] + counts['bbox']} other shape(s) cannot be "
+                "trained alongside them"
+            )
+        return TASK_POSE, f"{counts['pose']} pose instance(s)"
+    if counts["polygon"]:
+        if counts["bbox"]:
+            return TASK_SEGMENT, (
+                f"{counts['polygon']} polygon(s) and {counts['bbox']} box-only "
+                "annotation(s); boxes train as their bounding rectangle"
+            )
+        return TASK_SEGMENT, f"{counts['polygon']} polygon(s)"
+    if counts["bbox"]:
+        return TASK_DETECT, f"{counts['bbox']} bounding box(es), no polygons"
+    return None, "no annotations to train on"
+
+
+def count_shapes(all_annotations):
+    """``{"polygon", "bbox", "pose"}`` counts across the project.
+
+    Iterates the annotations mapping, which is keyed by image *and* slice name,
+    so slices count too.
+    """
+    counts = {"polygon": 0, "bbox": 0, "pose": 0}
+    for by_class in (all_annotations or {}).values():
+        for class_name, annotations in (by_class or {}).items():
+            if class_name.startswith("Temp-"):
+                continue  # pending review, not training data
+            for annotation in annotations or []:
+                if _is_pose(annotation):
+                    counts["pose"] += 1
+                elif annotation.get("segmentation"):
+                    counts["polygon"] += 1
+                elif annotation.get("bbox"):
+                    counts["bbox"] += 1
+    return counts
+
+
+def summarise_dataset(all_annotations, image_names):
+    """Live figures for the training dialog's Data row.
+
+    ``unlabelled`` is the one that matters: a project where most images have no
+    annotations trains badly, and the number is invisible until someone counts
+    it. Surfacing it before the run is much cheaper than discovering it after.
+    """
+    names = list(image_names or [])
+    annotated = 0
+    for name in names:
+        by_class = (all_annotations or {}).get(name) or {}
+        if any(
+            annotations
+            for class_name, annotations in by_class.items()
+            if not class_name.startswith("Temp-")
+        ):
+            annotated += 1
+
+    counts = count_shapes(all_annotations)
+    classes = sorted(
+        {
+            class_name
+            for by_class in (all_annotations or {}).values()
+            for class_name, annotations in (by_class or {}).items()
+            if annotations and not class_name.startswith("Temp-")
+        }
+    )
+    return {
+        "images": len(names),
+        "annotated_images": annotated,
+        "unlabelled_images": len(names) - annotated,
+        "annotations": sum(counts.values()),
+        "classes": classes,
+        "shape_counts": counts,
+    }
+
+
+def pose_training_blockers(all_annotations, keypoint_schemas):
+    """Reasons a pose project cannot be exported for YOLO-pose training.
+
+    YOLO-pose carries **one dataset-global** ``kpt_shape``, so a project mixing
+    pose classes of different K — or pose alongside non-pose — cannot be
+    expressed at all. Detected here so the dialog can refuse *before* the run,
+    with the same actionable message ``_pose_export_check`` produces, rather
+    than failing opaquely deep inside Ultralytics.
+
+    Returns a list of human-readable strings; empty means clear to train.
+    """
+    blockers = []
+    counts = count_shapes(all_annotations)
+    if not counts["pose"]:
+        return blockers
+
+    if counts["polygon"] or counts["bbox"]:
+        blockers.append(
+            f"The project mixes {counts['pose']} pose instance(s) with "
+            f"{counts['polygon'] + counts['bbox']} polygon/box annotation(s). "
+            "YOLO-pose datasets cannot contain both."
+        )
+
+    pose_classes = {
+        class_name
+        for by_class in (all_annotations or {}).values()
+        for class_name, annotations in (by_class or {}).items()
+        if any(_is_pose(a) for a in annotations or [])
+    }
+    ks = {}
+    for class_name in pose_classes:
+        schema = (keypoint_schemas or {}).get(class_name)
+        if schema and schema.get("names"):
+            ks[class_name] = len(schema["names"])
+    if len(set(ks.values())) > 1:
+        detail = ", ".join(f"'{name}' K={k}" for name, k in sorted(ks.items()))
+        blockers.append(
+            "YOLO-pose needs one keypoint count for the whole dataset, but the "
+            f"pose classes disagree: {detail}."
+        )
+    return blockers
+
+
+def multidimensional_blockers(all_images):
+    """Reasons YOLO training cannot run on this project's images.
+
+    Multi-dimensional stacks and videos are unsupported for YOLO training — a
+    long-standing constraint. Reported up front instead of failing during
+    dataset preparation, which is where it used to surface.
+    """
+    blocked = [
+        info.get("file_name")
+        for info in all_images or []
+        if info.get("is_multi_slice") or info.get("is_video")
+    ]
+    if not blocked:
+        return []
+    listed = ", ".join(str(name) for name in blocked[:5])
+    if len(blocked) > 5:
+        listed += f", and {len(blocked) - 5} more"
+    return [
+        f"{len(blocked)} multi-dimensional image(s) or video(s) cannot be used "
+        f"for YOLO training: {listed}."
+    ]

@@ -22,6 +22,7 @@ from .controllers import io_controller
 from .controllers.annotation_controller import AnnotationController
 from .controllers.class_controller import ClassController
 from .controllers.clipboard_controller import ClipboardController
+from .controllers.curation_controller import CurationController
 from .controllers.dino_controller import DINOController
 from .controllers.image_controller import ImageController
 from .controllers.project_controller import ProjectController
@@ -164,6 +165,9 @@ class ImageAnnotator(QMainWindow):
         # Model-vs-ground-truth review scoring (issue #71). Closes the active-
         # learning loop: train, score, fix the worst, retrain.
         self.review_controller = ReviewController(self)
+        # Embedding-based near-duplicate detection (issue #72). Recommends
+        # only — it has no delete path at all, by design.
+        self.curation_controller = CurationController(self)
 
         # CanvasContext gives ImageLabel a narrow read view of main-window
         # state. All write paths from the canvas leave as Qt signals
@@ -652,6 +656,9 @@ class ImageAnnotator(QMainWindow):
         self.sam_utils.unload()
         self.dino_utils.unload()
         self.sam3_utils.unload()
+        # The curation embedding model (issue #72) is registered here rather
+        # than getting its own unload action -- one place to reclaim VRAM.
+        self.curation_controller.unload()
         # Reset the dropdowns to a neutral state so the user knows they
         # need to re-pick the model.
         self.sam_model_selector.setCurrentIndex(0)
@@ -664,7 +671,8 @@ class ImageAnnotator(QMainWindow):
         QMessageBox.information(
             self,
             "Models Unloaded",
-            "SAM and DINO models have been unloaded from memory.\n\n"
+            "SAM, DINO and the curation embedding model have been unloaded "
+            "from memory.\n\n"
             "Note: PyTorch keeps a per-process CUDA context that survives "
             "this unload (typically a few hundred MB visible in Task Manager / "
             "nvidia-smi). To fully reclaim GPU memory, restart the app.\n\n"
@@ -775,6 +783,9 @@ class ImageAnnotator(QMainWindow):
 
     def run_model_review(self):
         return self.review_controller.run()
+
+    def analyse_dataset_similarity(self):
+        return self.curation_controller.run()
 
     def sort_images_by_score(self):
         if not self.image_controller.sort_image_list_by_score():

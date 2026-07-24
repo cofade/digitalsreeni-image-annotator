@@ -17,7 +17,7 @@ from PyQt6.QtWidgets import (
     QWidget,
 )
 
-from .app_settings import load_ui_prefs
+from .app_settings import load_onion_prefs, load_ui_prefs
 from .controllers import io_controller
 from .controllers.annotation_controller import AnnotationController
 from .controllers.class_controller import ClassController
@@ -174,6 +174,15 @@ class ImageAnnotator(QMainWindow):
         # users expect from a 2025-era desktop annotation tool; toggle
         # with Settings → Toggle Dark Mode (Ctrl+D).
         self.ui_font_pt, self.dark_mode = load_ui_prefs()
+
+        # Onion-skinning (issue #67). A viewing preference, persisted app-wide
+        # like the other UI prefs (ADR-020) rather than per project.
+        (
+            self.onion_enabled,
+            self.onion_opacity,
+            self.onion_offset,
+            self.onion_mode,
+        ) = load_onion_prefs()
 
         # Default annotations sorting
         self.current_sort_method = "class"  # Default sorting method

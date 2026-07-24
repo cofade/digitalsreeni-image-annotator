@@ -37,6 +37,44 @@ class CanvasRenderer:
         """Overlay label font: ui-scaled, zoom-compensated (constant on screen)."""
         return QFont("Arial", max(1, int(base * self.label.ui_scale / self.label.zoom_factor)))
 
+    def draw_onion_skin(self, painter):
+        """Ghost the neighbouring slice(s) over the current image (issue #67).
+
+        **Layer position.** The issue text described this as drawing "underneath
+        the current image". That cannot work here: unlike animation cels, an
+        image slice is a fully opaque raster, so anything painted beneath it is
+        invisible. The pass therefore runs *after* the image and *before* the
+        annotations, which delivers what the requirement actually asked for —
+        a visible ghost with annotations legible on top of it.
+
+        The pixmaps are resolved on navigation, not here: ``paintEvent`` runs on
+        every repaint, and a filesystem or decode hit per repaint would make
+        panning crawl. This method only blits what the controller already put on
+        the label.
+        """
+        pixmaps = self.label.onion_pixmaps
+        if not pixmaps:
+            return
+        painter.save()
+        painter.setOpacity(self.label.onion_opacity)
+        for pixmap in pixmaps:
+            if pixmap is None or pixmap.isNull():
+                continue
+            # Same transform as the main image (offset then zoom), so ghost and
+            # current slice stay in lockstep through pan and zoom.
+            painter.drawPixmap(
+                int(self.label.offset_x),
+                int(self.label.offset_y),
+                pixmap.scaled(
+                    max(1, int(pixmap.width() * self.label.zoom_factor)),
+                    max(1, int(pixmap.height() * self.label.zoom_factor)),
+                    Qt.AspectRatioMode.KeepAspectRatio,
+                    Qt.TransformationMode.SmoothTransformation,
+                ),
+            )
+        painter.setOpacity(1.0)
+        painter.restore()
+
     def draw_temp_annotations(self, painter):
         painter.save()
         painter.translate(self.label.offset_x, self.label.offset_y)

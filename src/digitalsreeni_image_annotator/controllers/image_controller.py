@@ -41,7 +41,8 @@ from PyQt6.QtWidgets import (
 )
 from tifffile import TiffFile
 
-from ..core import image_utils
+from ..app_settings import save_onion_prefs
+from ..core import image_utils, onion
 from ..core.slice_cache import (
     LazySliceList,
     SliceProvider,
@@ -640,6 +641,11 @@ class ImageController(QObject):
     def update_video_timeline(self):
         """Sync the video timeline widget to the active image (issue #48).
 
+        Also refreshes the onion-skin control row (issue #67): both are
+        per-image navigation chrome whose visibility depends on what kind of
+        image is active, and every navigation path already funnels through here
+        — hooking the second one on separately is how the two drift apart.
+
         Shows + configures the timeline when the active image is a video,
         otherwise hides it. The timeline is a pure VIEW: it never changes the
         frame itself (user scrubs route back through ``switch_slice`` via
@@ -651,6 +657,7 @@ class ImageController(QObject):
         if timeline is None:
             return
 
+        self.update_onion_controls()
         video = self.current_video()
         if video is not None:
             base_name, handler, _info = video
@@ -1404,8 +1411,96 @@ class ImageController(QObject):
             if not pixmap.isNull():
                 self.mw.image_label.setPixmap(pixmap)
                 self.mw.image_label.adjustSize()
+                self.refresh_onion_skin()
             else:
                 logger.warning("Null pixmap")
         else:
             self.mw.image_label.clear()
             logger.debug("No current image to display")
+
+    # --- Onion skin (issue #67) ---
+
+    def onion_available(self) -> bool:
+        """True when the active image has enough slices for a ghost to mean
+        anything — a multi-slice stack or a video, never a plain image."""
+        return onion.is_available(slice_names(self.mw.slices))
+
+    def refresh_onion_skin(self):
+        """Resolve the neighbouring slice pixmaps for the current slice.
+
+        Called from :meth:`display_image` (the single funnel where the canvas
+        image changes) rather than from ``paintEvent``: resolving per repaint
+        would put a cache lookup, and on a miss a full decode, in the pan and
+        zoom path.
+
+        Neighbours are fetched through the same ``LazySliceList.get`` every
+        other consumer uses, so the shared bounded LRU (ADR-036) stays the only
+        owner of decoded slice pixels. In the default single-neighbour mode
+        that is one extra live decode; "both" makes it two, which is why the
+        LRU capacity of 8 is left alone rather than quietly raised.
+        """
+        label = self.mw.image_label
+        label.onion_pixmaps = []
+        if not self.mw.onion_enabled or not self.mw.current_slice:
+            return
+        slices = self.mw.slices
+        getter = getattr(slices, "get", None)
+        if getter is None:
+            return  # plain-list slice collection (legacy/tests): nothing to do
+
+        label.onion_opacity = self.mw.onion_opacity
+        names = onion.neighbour_names(
+            slice_names(slices),
+            self.mw.current_slice,
+            self.mw.onion_offset,
+            self.mw.onion_mode,
+        )
+        pixmaps = []
+        for name in names:
+            qimage = getter(name)
+            if qimage is None:
+                continue  # first/last slice, or a decode that failed: no ghost
+            pixmaps.append(QPixmap.fromImage(qimage))
+        label.onion_pixmaps = pixmaps
+
+    def set_onion_enabled(self, enabled):
+        self.mw.onion_enabled = bool(enabled)
+        self._store_onion_prefs()
+        self.refresh_onion_skin()
+        self.mw.image_label.update()
+
+    def set_onion_opacity(self, percent):
+        self.mw.onion_opacity = onion.clamp_opacity(percent / 100.0)
+        self.mw.image_label.onion_opacity = self.mw.onion_opacity
+        self._store_onion_prefs()
+        self.mw.image_label.update()
+
+    def set_onion_offset(self, offset):
+        self.mw.onion_offset = onion.clamp_offset(offset)
+        self._store_onion_prefs()
+        self.refresh_onion_skin()
+        self.mw.image_label.update()
+
+    def set_onion_mode(self, mode):
+        self.mw.onion_mode = onion.normalise_mode(mode)
+        self._store_onion_prefs()
+        self.refresh_onion_skin()
+        self.mw.image_label.update()
+
+    def _store_onion_prefs(self):
+        save_onion_prefs(
+            self.mw.onion_enabled,
+            self.mw.onion_opacity,
+            self.mw.onion_offset,
+            self.mw.onion_mode,
+        )
+
+    def update_onion_controls(self):
+        """Show the onion controls only for a multi-slice image or a video.
+
+        Hidden rather than greyed out: on a plain image the feature has no
+        meaning at all, and a permanently-disabled row is just clutter.
+        """
+        row = getattr(self.mw, "onion_row", None)
+        if row is not None:
+            row.setVisible(self.onion_available())

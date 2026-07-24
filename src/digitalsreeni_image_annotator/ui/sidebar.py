@@ -11,6 +11,7 @@ from PyQt6.QtCore import Qt
 from PyQt6.QtWidgets import (
     QAbstractItemView,
     QButtonGroup,
+    QCheckBox,
     QComboBox,
     QFrame,
     QHBoxLayout,
@@ -20,10 +21,13 @@ from PyQt6.QtWidgets import (
     QPushButton,
     QScrollArea,
     QSlider,
+    QSpinBox,
     QTableWidget,
     QVBoxLayout,
     QWidget,
 )
+
+from ..core import onion
 
 from ..core.constants import (
     ANNOT_COL_AREA,
@@ -386,6 +390,8 @@ def build_image_area(window):
     window.video_timeline.frameSelected.connect(window.on_timeline_frame_selected)
     window.image_layout.addWidget(window.video_timeline)
 
+    _build_onion_controls(window)
+
     window.zoom_slider = QSlider(Qt.Orientation.Horizontal)
     window.zoom_slider.setMinimum(10)
     window.zoom_slider.setMaximum(500)
@@ -397,6 +403,70 @@ def build_image_area(window):
 
     window.image_info_label = QLabel()
     window.image_layout.addWidget(window.image_info_label)
+
+
+def _build_onion_controls(window):
+    """Onion-skin toggle, opacity and offset, under the canvas (issue #67).
+
+    Placed next to the slice/frame navigation it belongs to rather than in a
+    new sidebar panel, and hidden outright on a plain image — where the feature
+    has no meaning, a permanently-disabled row is just clutter.
+
+    No background/colour literals anywhere here: the active stylesheet paints
+    these, or they punch a bright box into the soft-dark theme (CLAUDE.md,
+    "No Hardcoded Colors Rule").
+    """
+    window.onion_row = QWidget()
+    layout = QHBoxLayout(window.onion_row)
+    layout.setContentsMargins(0, 0, 0, 0)
+
+    window.onion_checkbox = QCheckBox("Onion skin")
+    window.onion_checkbox.setChecked(window.onion_enabled)
+    window.onion_checkbox.setToolTip(
+        "Ghost the neighbouring slice or frame over the current one, so you can "
+        "see how far an object moved."
+    )
+    window.onion_checkbox.toggled.connect(window.image_controller.set_onion_enabled)
+    layout.addWidget(window.onion_checkbox)
+
+    window.onion_mode_combo = QComboBox()
+    for label, value in (
+        ("Previous", onion.MODE_PREVIOUS),
+        ("Next", onion.MODE_NEXT),
+        ("Both", onion.MODE_BOTH),
+    ):
+        window.onion_mode_combo.addItem(label, value)
+    window.onion_mode_combo.setCurrentIndex(
+        window.onion_mode_combo.findData(window.onion_mode)
+    )
+    window.onion_mode_combo.currentIndexChanged.connect(
+        lambda _i: window.image_controller.set_onion_mode(
+            window.onion_mode_combo.currentData()
+        )
+    )
+    layout.addWidget(window.onion_mode_combo)
+
+    layout.addWidget(QLabel("±"))
+    window.onion_offset_spin = QSpinBox()
+    window.onion_offset_spin.setRange(1, onion.MAX_OFFSET)
+    window.onion_offset_spin.setValue(window.onion_offset)
+    window.onion_offset_spin.setToolTip("How many slices away the ghost is")
+    window.onion_offset_spin.valueChanged.connect(
+        window.image_controller.set_onion_offset
+    )
+    layout.addWidget(window.onion_offset_spin)
+
+    window.onion_opacity_slider = QSlider(Qt.Orientation.Horizontal)
+    window.onion_opacity_slider.setRange(5, 95)
+    window.onion_opacity_slider.setValue(int(round(window.onion_opacity * 100)))
+    window.onion_opacity_slider.setToolTip("Ghost opacity")
+    window.onion_opacity_slider.valueChanged.connect(
+        window.image_controller.set_onion_opacity
+    )
+    layout.addWidget(window.onion_opacity_slider, 1)
+
+    window.onion_row.setVisible(False)  # revealed by update_onion_controls
+    window.image_layout.addWidget(window.onion_row)
 
 
 def build_image_list(window):

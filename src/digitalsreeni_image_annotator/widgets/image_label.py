@@ -35,6 +35,7 @@ from .tools import (
 )
 from .canvas_renderer import CanvasRenderer
 from . import edit_gestures
+from ..core import onion
 from ..core.constants import DEFAULT_FILL_OPACITY
 from ..utils import (
     calculate_area,
@@ -168,6 +169,13 @@ class ImageLabel(QLabel):
         self.temp_eraser_mask = None
         self.is_erasing = False
         self.cursor_pos = None
+
+        # Onion skin (issue #67). Purely decorative: these pixmaps are read by
+        # CanvasRenderer.draw_onion_skin and by nothing else -- no hit-testing,
+        # no SAM input, no export. `original_pixmap` remains the one and only
+        # current image, which is what keeps the ghost from leaking downstream.
+        self.onion_pixmaps = []
+        self.onion_opacity = onion.DEFAULT_OPACITY
 
         # SAM
         self.sam_bbox = None
@@ -322,6 +330,10 @@ class ImageLabel(QLabel):
             painter.drawPixmap(
                 int(self.offset_x), int(self.offset_y), self.scaled_pixmap
             )
+            # Onion-skin ghost of the neighbouring slice(s), issue #67. Sits
+            # between the image and every annotation layer: visible over the
+            # opaque raster, never on top of an annotation.
+            self.renderer.draw_onion_skin(painter)
             # Draw committed annotations
             self.renderer.draw_annotations(painter)
             # Polygon edit mode is modal; runs orthogonal to tool selection
@@ -446,9 +458,12 @@ class ImageLabel(QLabel):
         self.scaled_pixmap = None
         self.editing_polygon = None
         self._editing_polygon_orig = None
+        self._editing_polygon_orig_raw = None
+        self._editing_polygon_orig_detail = None
         self.editing_point_index = None
         self.hover_point_index = None
         self.current_rectangle = None
+        self.onion_pixmaps = []
         self.sam_bbox = None
         self.temp_sam_prediction = None
         self.update()

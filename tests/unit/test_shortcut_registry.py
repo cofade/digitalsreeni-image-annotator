@@ -227,6 +227,20 @@ class _FakeClassController:
         self.window.current_class = self.window.class_list.item(index).text()
 
 
+class _FakeClipboardController:
+    def __init__(self):
+        self.copied = 0
+        self.pasted = 0
+
+    def copy_selection(self):
+        self.copied += 1
+        return True
+
+    def paste(self):
+        self.pasted += 1
+        return True
+
+
 class _FakeWindow(QWidget):
     """Just enough of ImageAnnotator for the bindings: a class list, the
     activate_tool choke point, and the controllers they route through."""
@@ -240,6 +254,7 @@ class _FakeWindow(QWidget):
         self.activated = []
         self.image_label = _FakeImageLabel()
         self.class_controller = _FakeClassController(self)
+        self.clipboard_controller = _FakeClipboardController()
         self.selected_items = []
 
     def on_class_selected(self, item):
@@ -328,3 +343,41 @@ def test_tool_activation_never_writes_current_tool_directly(window):
     assert window.image_label.current_tool is None, (
         "current_tool changed without going through activate_tool"
     )
+
+
+# --- clipboard bindings (issue #66) ---------------------------------------
+
+
+def test_ctrl_c_and_ctrl_v_reach_the_clipboard(window):
+    filt = build_shortcut_filter(window)
+    ctrl = Qt.KeyboardModifier.ControlModifier
+
+    assert filt.eventFilter(None, _key_event(Qt.Key.Key_C, ctrl)) is True
+    assert filt.eventFilter(None, _key_event(Qt.Key.Key_V, ctrl)) is True
+    assert window.clipboard_controller.copied == 1
+    assert window.clipboard_controller.pasted == 1
+
+
+def test_bare_v_is_the_tool_binding_not_paste(window):
+    """V and Ctrl+V are different bindings; the modifier is part of the key."""
+    filt = build_shortcut_filter(window)
+    filt.eventFilter(None, _key_event(Qt.Key.Key_V))
+    assert window.activated == [None]
+    assert window.clipboard_controller.pasted == 0
+
+
+def test_ctrl_c_in_a_text_field_is_left_alone(window, qtbot, monkeypatch):
+    """Copying text out of a class-rename field must stay normal text copy."""
+    from PyQt6.QtWidgets import QApplication
+
+    field = QLineEdit()
+    qtbot.addWidget(field)
+    monkeypatch.setattr(QApplication.instance(), "focusWidget", lambda: field)
+
+    filt = build_shortcut_filter(window)
+    consumed = filt.eventFilter(
+        None, _key_event(Qt.Key.Key_C, Qt.KeyboardModifier.ControlModifier)
+    )
+
+    assert consumed is False
+    assert window.clipboard_controller.copied == 0

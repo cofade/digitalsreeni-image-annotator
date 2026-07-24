@@ -144,11 +144,16 @@ def install_shortcuts(window):
 
 
 def build_shortcut_filter(window):
-    """Build the issue-#65 registry with the class-digit and tool-letter
-    bindings.
+    """Build the conditional-binding registry: class digits and tool letters
+    (issue #65), plus Ctrl+C / Ctrl+V for the annotation clipboard (issue #66).
 
     Split out from :func:`install_event_filters` so tests can build and drive
     the filter without installing it on the QApplication.
+
+    Copy/paste belongs here rather than in :func:`install_shortcuts` for the
+    same reason as the bare keys: Ctrl+C inside a class-rename field must copy
+    *text*, not annotations. The gate predicates already express exactly that,
+    and an ApplicationShortcut could not.
     """
     filt = ShortcutEventFilter(window)
 
@@ -160,6 +165,12 @@ def build_shortcut_filter(window):
         filt.register(
             key, (lambda t: lambda: _activate_tool_by_key(window, t))(tool_name)
         )
+
+    clipboard = window.clipboard_controller
+    filt.register(
+        Qt.Key.Key_C, clipboard.copy_selection, Qt.KeyboardModifier.ControlModifier
+    )
+    filt.register(Qt.Key.Key_V, clipboard.paste, Qt.KeyboardModifier.ControlModifier)
 
     return filt
 

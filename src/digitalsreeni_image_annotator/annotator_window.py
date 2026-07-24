@@ -21,6 +21,7 @@ from .app_settings import load_ui_prefs
 from .controllers import io_controller
 from .controllers.annotation_controller import AnnotationController
 from .controllers.class_controller import ClassController
+from .controllers.clipboard_controller import ClipboardController
 from .controllers.dino_controller import DINOController
 from .controllers.image_controller import ImageController
 from .controllers.project_controller import ProjectController
@@ -146,6 +147,10 @@ class ImageAnnotator(QMainWindow):
         self.yolo_controller = YOLOController(self)
         self.annotation_controller = AnnotationController(self)
         self.class_controller = ClassController(self)
+        # In-app annotation clipboard (issue #66). App-level, not per-image:
+        # it survives image / slice / frame / project switches, which is the
+        # entire point of copying a shape across a stack.
+        self.clipboard_controller = ClipboardController(self)
 
         # CanvasContext gives ImageLabel a narrow read view of main-window
         # state. All write paths from the canvas leave as Qt signals

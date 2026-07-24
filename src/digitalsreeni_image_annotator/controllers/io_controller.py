@@ -127,6 +127,35 @@ def import_annotations(mw):
             QMessageBox.warning(mw, "Import Error", str(e))
             return
 
+    elif import_format == "Pascal VOC":
+        # A directory, not a file: VOC is one XML per image, so there is no
+        # single manifest to point at (issue #75).
+        voc_dir = QFileDialog.getExistingDirectory(
+            mw, "Select the Pascal VOC dataset directory"
+        )
+        if not voc_dir:
+            logger.debug("No VOC directory selected, returning")
+            return
+
+        logger.debug(f"Selected VOC directory: {voc_dir}")
+        try:
+            imported_annotations, image_info, recovered_schemas = process_import_format(
+                import_format, voc_dir, mw.class_mapping
+            )
+        except ValueError as e:
+            QMessageBox.warning(mw, "Import Error", str(e))
+            return
+        # export_pascal_voc_bbox writes images/ next to Annotations/. When the
+        # user picked Annotations/ itself, step up one level to find them.
+        root_dir = voc_dir
+        if os.path.basename(os.path.normpath(voc_dir)) == "Annotations":
+            root_dir = os.path.dirname(os.path.normpath(voc_dir))
+        images_dir = os.path.join(root_dir, "images")
+        if not os.path.isdir(images_dir):
+            images_dir = os.path.join(root_dir, "JPEGImages")  # the VOC-spec name
+        if not os.path.isdir(images_dir):
+            images_dir = root_dir
+
     else:
         QMessageBox.warning(
             mw,
@@ -135,9 +164,6 @@ def import_annotations(mw):
         )
         return
 
-    logger.debug(
-        f"JSON/YOLO directory: {json_dir if import_format == 'COCO JSON' else os.path.dirname(yaml_file)}"
-    )
     logger.debug(f"Images directory: {images_dir}")
     logger.debug(f"Imported annotations count: {len(imported_annotations)}")
     logger.debug(f"Image info count: {len(image_info)}")

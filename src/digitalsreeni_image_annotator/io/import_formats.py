@@ -8,7 +8,7 @@ from PIL import Image
 from PyQt6.QtWidgets import QMessageBox
 
 from ..core.keypoint_schema import sanitize_schema
-from ..utils import keypoint_instance_bbox
+from ..utils import clamp_bbox, clamp_segmentation, keypoint_instance_bbox
 
 from ..core.logging_config import get_logger
 
@@ -489,6 +489,213 @@ def import_yolo_v5plus(yaml_file_path, class_mapping):
 
 
 
+def _voc_mask_polygons(mask_path):
+    """Polygons per colour region in a VOC segmentation mask PNG.
+
+    Returns ``{(r, g, b): [flat polygon, ...]}``. ``export_pascal_voc_both``
+    writes one colour per class, so the colour is the only link back from a
+    mask region to its class name — which is why the caller pairs these with
+    the XML objects rather than trusting order.
+
+    Contour extraction mirrors ``inference/sam_utils._mask_to_polygon``: same
+    ``RETR_EXTERNAL`` / ``CHAIN_APPROX_SIMPLE`` pass and the same >= 6
+    coordinate floor, so a mask round-tripped through export and back produces
+    the same kind of outline the app makes natively.
+    """
+    import cv2
+    import numpy as np
+
+    image = cv2.imread(mask_path, cv2.IMREAD_COLOR)
+    if image is None:
+        return {}
+    rgb = cv2.cvtColor(image, cv2.COLOR_BGR2RGB)
+
+    polygons = {}
+    for colour in np.unique(rgb.reshape(-1, 3), axis=0):
+        if not colour.any():
+            continue  # pure black is the background
+        binary = np.all(rgb == colour, axis=-1).astype(np.uint8)
+        contours, _ = cv2.findContours(
+            binary, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE
+        )
+        found = []
+        for contour in contours:
+            if cv2.contourArea(contour) <= 10:
+                continue
+            flat = contour.flatten().tolist()
+            if len(flat) >= 6:
+                found.append([float(c) for c in flat])
+        if found:
+            polygons[tuple(int(c) for c in colour)] = found
+    return polygons
+
+
+def import_pascal_voc(directory_path, class_mapping):
+    """Import a directory of Pascal VOC XML annotations (issue #75).
+
+    Closes a plain asymmetry in ``io/``: the app has exported VOC since before
+    this change but could never read its own output back, let alone the large
+    amount of VOC-format data in the wild.
+
+    ``directory_path`` may be the dataset root (containing ``Annotations/`` and
+    ``images/``, the layout ``export_pascal_voc_bbox`` writes) or the
+    ``Annotations`` directory itself — both are what a user actually picks.
+
+    Where ``SegmentationClass`` mask PNGs accompany the XML (as
+    ``export_pascal_voc_both`` writes), polygons are reconstructed so a full
+    round-trip is possible.
+
+    Returns the uniform ``(annotations, image_info, keypoint_schemas)`` triple
+    every entry point in this module returns. The schema dict is always empty:
+    VOC has no keypoint concept. Breaking that shape would break the caller.
+    """
+    import xml.etree.ElementTree as ET
+
+    if not os.path.isdir(directory_path):
+        raise ValueError("The selected Pascal VOC path is not a directory.")
+
+    annotations_dir = directory_path
+    if os.path.isdir(os.path.join(directory_path, "Annotations")):
+        annotations_dir = os.path.join(directory_path, "Annotations")
+    root_dir = os.path.dirname(annotations_dir.rstrip(os.sep)) or directory_path
+
+    xml_files = sorted(
+        name for name in os.listdir(annotations_dir) if name.lower().endswith(".xml")
+    )
+    if not xml_files:
+        raise ValueError(
+            f"No .xml annotation files found in {annotations_dir}."
+        )
+
+    masks_dir = None
+    for candidate in ("SegmentationClass", "SegmentationObject", "masks"):
+        path = os.path.join(root_dir, candidate)
+        if os.path.isdir(path):
+            masks_dir = path
+            break
+
+    imported_annotations = {}
+    image_info = {}
+    next_class_id = max(class_mapping.values(), default=0) + 1
+    local_mapping = dict(class_mapping)
+
+    for xml_name in xml_files:
+        xml_path = os.path.join(annotations_dir, xml_name)
+        try:
+            tree = ET.parse(xml_path)
+        except ET.ParseError as exc:
+            # Abort rather than import half a dataset: a partially-imported
+            # project is harder to recover from than a refused import.
+            raise ValueError(f"Malformed Pascal VOC XML in {xml_name}: {exc}")
+        root = tree.getroot()
+
+        file_name = (root.findtext("filename") or "").strip()
+        if not file_name:
+            file_name = os.path.splitext(xml_name)[0] + ".png"
+
+        size = root.find("size")
+        img_width = int(float(size.findtext("width", "0"))) if size is not None else 0
+        img_height = int(float(size.findtext("height", "0"))) if size is not None else 0
+
+        image_info[file_name] = {
+            "file_name": file_name,
+            "width": img_width,
+            "height": img_height,
+            "id": len(image_info) + 1,
+        }
+        imported_annotations.setdefault(file_name, {})
+
+        mask_polygons = {}
+        if masks_dir:
+            stem = os.path.splitext(file_name)[0]
+            for extension in (".png", ".PNG"):
+                mask_path = os.path.join(masks_dir, stem + extension)
+                if os.path.exists(mask_path):
+                    mask_polygons = _voc_mask_polygons(mask_path)
+                    break
+
+        # Mask polygons are consumed per class in XML order, so two objects of
+        # the same class each take one region rather than both taking the first.
+        polygon_queue = {}
+
+        for obj in root.findall("object"):
+            class_name = (obj.findtext("name") or "").strip()
+            if not class_name:
+                continue
+            if class_name not in local_mapping:
+                local_mapping[class_name] = next_class_id
+                next_class_id += 1
+            class_id = local_mapping[class_name]
+
+            box = obj.find("bndbox")
+            if box is None:
+                continue
+            try:
+                xmin = float(box.findtext("xmin", "0"))
+                ymin = float(box.findtext("ymin", "0"))
+                xmax = float(box.findtext("xmax", "0"))
+                ymax = float(box.findtext("ymax", "0"))
+            except (TypeError, ValueError):
+                logger.warning(
+                    "skipping an object with unreadable bndbox in %s", xml_name
+                )
+                continue
+
+            # VOC stores corners; the app stores [x, y, width, height].
+            # Convert, never copy.
+            bbox = [xmin, ymin, max(0.0, xmax - xmin), max(0.0, ymax - ymin)]
+            # Producers disagree on whether VOC coordinates are 0- or 1-based,
+            # so clamp into the image rather than trusting the file (ADR-024).
+            if img_width > 0 and img_height > 0:
+                bbox = clamp_bbox(bbox, img_width, img_height)
+
+            annotation = {
+                "category_id": class_id,
+                "category_name": class_name,
+                "type": "rectangle",
+                "bbox": bbox,
+            }
+
+            # `difficult` and `truncated` have no home in the data model.
+            # Ignored deliberately rather than invented into new fields.
+
+            if mask_polygons:
+                if class_name not in polygon_queue:
+                    polygon_queue[class_name] = _polygons_for_class(
+                        mask_polygons, class_name, local_mapping
+                    )
+                queue = polygon_queue[class_name]
+                if queue:
+                    polygon = queue.pop(0)
+                    if img_width > 0 and img_height > 0:
+                        polygon = clamp_segmentation(polygon, img_width, img_height)
+                    annotation["segmentation"] = polygon
+                    annotation["type"] = "polygon"
+
+            imported_annotations[file_name].setdefault(class_name, []).append(annotation)
+
+    # VOC has no keypoint concept, but the triple's shape is the contract.
+    return imported_annotations, image_info, {}
+
+
+def _polygons_for_class(mask_polygons, class_name, class_mapping):
+    """Mask polygons belonging to ``class_name``, best-effort.
+
+    ``export_pascal_voc_both`` paints each class in a colour derived from its
+    id, so the id indexes the colour list. When the colour cannot be resolved
+    (a mask from a foreign producer with its own palette) every unclaimed
+    region is offered instead — a polygon on the right object with a slightly
+    uncertain provenance beats no polygon at all, and the bbox is authoritative
+    either way.
+    """
+    class_id = class_mapping.get(class_name)
+    if class_id is not None:
+        for colour, polygons in mask_polygons.items():
+            if colour[0] == class_id or colour[1] == class_id or colour[2] == class_id:
+                return list(polygons)
+    return [polygon for polygons in mask_polygons.values() for polygon in polygons]
+
+
 def process_import_format(import_format, file_path, class_mapping):
     if import_format == "COCO JSON":
         return import_coco_json(file_path, class_mapping)
@@ -496,6 +703,8 @@ def process_import_format(import_format, file_path, class_mapping):
         return import_yolo_v4(file_path, class_mapping)  # Still using same function, just updated format name
     elif import_format == "YOLO (v5+)":
         return import_yolo_v5plus(file_path, class_mapping)  # New format handling
+    elif import_format == "Pascal VOC":
+        return import_pascal_voc(file_path, class_mapping)  # issue #75
     else:
         raise ValueError(f"Unsupported import format: {import_format}")
 

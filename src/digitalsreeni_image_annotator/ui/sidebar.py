@@ -88,6 +88,9 @@ def build_sidebar(window):
     window.import_format_selector.addItem("COCO JSON")
     window.import_format_selector.addItem("YOLO (v4 and earlier)")
     window.import_format_selector.addItem("YOLO (v5+)")
+    # Closes the export/import asymmetry: VOC export has existed for a long
+    # time, VOC import had not (issue #75).
+    window.import_format_selector.addItem("Pascal VOC")
     window.sidebar_layout.addWidget(window.import_format_selector)
 
     # Add spacing

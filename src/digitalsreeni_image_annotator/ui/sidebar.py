@@ -34,6 +34,7 @@ from ..core.constants import (
 from ..dialogs.dino_phrase_editor import ClassThresholdTable, PhraseEditorPanel
 from ..inference.sam3_utils import SAM3_MODEL_LABEL
 from ..widgets.video_timeline import VideoTimeline
+from .class_list_delegate import ClassShortcutDelegate
 
 
 def _section_header(text):
@@ -97,6 +98,10 @@ def build_sidebar(window):
 
     # Class list (without the "Classes" header)
     window.class_list = QListWidget()
+    # Paints the 1..9 digit-shortcut badge (issue #65). Kept out of the item
+    # text on purpose -- see ClassShortcutDelegate's docstring.
+    window.class_shortcut_delegate = ClassShortcutDelegate(window.class_list)
+    window.class_list.setItemDelegate(window.class_shortcut_delegate)
     window.class_list.setContextMenuPolicy(Qt.ContextMenuPolicy.CustomContextMenu)
     window.class_list.customContextMenuRequested.connect(window.show_class_context_menu)
     window.class_list.itemClicked.connect(window.on_class_selected)

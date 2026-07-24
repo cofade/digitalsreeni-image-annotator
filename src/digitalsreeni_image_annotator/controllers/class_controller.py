@@ -25,7 +25,7 @@ from PyQt6.QtWidgets import (
     QMessageBox,
 )
 
-from ..core.constants import default_class_color
+from ..core.constants import CLASS_KEY_LIMIT, default_class_color
 
 from ..core.logging_config import get_logger
 
@@ -204,8 +204,19 @@ class ClassController(QObject):
 
     def update_class_list(self):
         self.mw.class_list.clear()
-        for class_name, color in self.mw.image_label.class_colors.items():
+        for index, (class_name, color) in enumerate(
+            self.mw.image_label.class_colors.items()
+        ):
             item = QListWidgetItem(class_name)
+
+            # Digit shortcut hint for the first nine classes (issue #65). The
+            # visible badge is painted by ClassShortcutDelegate -- it must not
+            # go into the item *text*, which is the class name every other
+            # code path reads back (findItems, Temp-* checks, rename).
+            if index < CLASS_KEY_LIMIT:
+                item.setToolTip(f"{class_name} — press {index + 1} to select")
+            else:
+                item.setToolTip(class_name)
 
             pixmap = QPixmap(16, 16)
             pixmap.fill(color)

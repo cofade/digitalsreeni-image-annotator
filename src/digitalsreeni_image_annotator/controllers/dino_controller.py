@@ -31,10 +31,8 @@ from PyQt6.QtGui import QColor, QImage
 from PyQt6.QtWidgets import (
     QApplication,
     QFileDialog,
-    QLineEdit,
     QMessageBox,
     QProgressDialog,
-    QTextEdit,
 )
 
 from ..core.constants import default_class_color
@@ -42,6 +40,7 @@ from ..core.keypoint_schema import schema_k
 from ..core.slice_cache import slice_names
 from ..inference.sam3_utils import SAM3_MODEL_LABEL
 from ..inference.sam_utils import InferenceBusyError
+from ..ui.input_gates import focus_is_text_entry, no_modal_open
 
 from ..core.logging_config import get_logger
 
@@ -57,7 +56,10 @@ class DINOReviewEventFilter(QObject):
 
     Suppressed when a modal dialog is active or focus is on a text-input
     widget so we don't break dialog default-button behaviour or
-    in-cell editing.
+    in-cell editing. Those two checks are shared with the issue-#65 shortcut
+    registry via ``ui.input_gates`` rather than duplicated here — two filters
+    drifting apart on a safety predicate is exactly the failure the ADR-015
+    follow-up warned about.
     """
 
     def __init__(self, main_window):
@@ -70,11 +72,7 @@ class DINOReviewEventFilter(QObject):
         key = event.key()
         if key not in (Qt.Key.Key_Return, Qt.Key.Key_Enter, Qt.Key.Key_Escape):
             return False
-        app = QApplication.instance()
-        if app is None or app.activeModalWidget() is not None:
-            return False
-        focused = app.focusWidget()
-        if isinstance(focused, (QLineEdit, QTextEdit)):
+        if not no_modal_open() or focus_is_text_entry():
             return False
         temp = self.main_window.image_label.temp_annotations
         # SAM 3 (issue #50) produces temp annotations tagged "sam3"; DINO

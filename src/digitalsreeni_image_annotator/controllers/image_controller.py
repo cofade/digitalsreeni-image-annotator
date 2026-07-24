@@ -1493,7 +1493,7 @@ class ImageController(QObject):
         LRU capacity of 8 is left alone rather than quietly raised.
         """
         label = self.mw.image_label
-        label.onion_pixmaps = []
+        label.set_onion_pixmaps([])
         if not self.mw.onion_enabled or not self.mw.current_slice:
             return
         slices = self.mw.slices
@@ -1514,7 +1514,7 @@ class ImageController(QObject):
             if qimage is None:
                 continue  # first/last slice, or a decode that failed: no ghost
             pixmaps.append(QPixmap.fromImage(qimage))
-        label.onion_pixmaps = pixmaps
+        label.set_onion_pixmaps(pixmaps)
 
     def set_onion_enabled(self, enabled):
         self.mw.onion_enabled = bool(enabled)

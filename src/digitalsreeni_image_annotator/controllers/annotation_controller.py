@@ -1280,7 +1280,10 @@ class AnnotationController(QObject):
         QMessageBox.information(
             self.mw,
             "Edit Mode",
-            "You are now in edit mode. Click and drag points to move them, Shift+Click to delete points, or click on edges to add new points.",
+            "You are now in edit mode. Drag a point to move it, Alt+click a "
+            "point to delete it, and double-click an edge to insert one. "
+            "(Issue #68 moved insertion from single- to double-click: with "
+            "both, the first click of a double-click would insert too.)",
         )
 
     def exit_edit_mode(self):

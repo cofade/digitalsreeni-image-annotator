@@ -98,12 +98,16 @@ class TrainDialog(QDialog):
         # --- base model ---
         base_row = QHBoxLayout()
         self.base_combo = QComboBox()
+        # Picking a stock checkpoint has to clear a previously browsed path,
+        # or the browse wins forever and the combo selection is ignored.
+        self.base_combo.currentIndexChanged.connect(self._on_base_changed)
         base_row.addWidget(self.base_combo, 1)
         browse = QPushButton("Browse…")
         browse.setToolTip("Start from a checkpoint on disk instead")
         browse.clicked.connect(self._browse_base)
         base_row.addWidget(browse)
-        form.addRow("Base", base_row)
+        self.base_row_widget = _wrap(base_row)
+        form.addRow("Base", self.base_row_widget)
 
         # --- derived task ---
         self.task_label = QLabel()
@@ -145,7 +149,8 @@ class TrainDialog(QDialog):
         run_row.addWidget(self.imgsz_label)
         run_row.addWidget(self.imgsz_spin)
         run_row.addStretch(1)
-        form.addRow("Run", _wrap(run_row))
+        self.run_row_widget = _wrap(run_row)
+        form.addRow("Run", self.run_row_widget)
 
         layout.addLayout(form)
 
@@ -226,7 +231,12 @@ class TrainDialog(QDialog):
         return reasons
 
     def get_config(self):
-        """The user's choices, as a plain dict for the controller to act on."""
+        """The user's choices, as a plain dict for the controller to act on.
+
+        In SAM mode only ``type`` is meaningful; the rest is chosen in
+        ``SAMTrainConfigDialog``, and the controls that would collect it are
+        hidden here precisely so nothing is silently discarded.
+        """
         return {
             "type": self.training_type(),
             "task": self.task,
@@ -246,9 +256,19 @@ class TrainDialog(QDialog):
 
         # Irrelevant fields hide rather than grey out: a permanently-disabled
         # control invites the user to wonder what would enable it.
+        #
+        # For SAM this is not cosmetic. SAMTrainController.train_on_project
+        # opens its own SAMTrainConfigDialog, which is where the base
+        # checkpoint, epochs and schedule are actually chosen. Showing those
+        # controls here would collect values this dialog then silently
+        # discards -- a user could set 300 epochs, wait hours for a GPU run,
+        # and get something else entirely.
         self.imgsz_label.setVisible(is_yolo)
         self.imgsz_spin.setVisible(is_yolo)
         self.split_row_widget.setVisible(is_yolo)
+        self.base_row_widget.setVisible(is_yolo)
+        self.run_row_widget.setVisible(is_yolo)
+        self.advanced_box.setVisible(is_yolo)
 
         self.base_combo.clear()
         self.custom_base_path = None
@@ -262,12 +282,11 @@ class TrainDialog(QDialog):
                 f"{self.task or 'unknown'} — inferred from {self.task_reason}"
             )
         else:
-            from ..inference.sam_utils import SAMUtils
-
-            self.base_combo.addItems(list(SAMUtils().sam_models.keys()))
             self.task_label.setText(
                 "SAM 2 fine-tuning — mask decoder, task not applicable. "
-                "Requires a CUDA GPU to be practical."
+                "Requires a CUDA GPU to be practical.\n"
+                "Base checkpoint, epochs and schedule are chosen in the next "
+                "dialog."
             )
 
         self._refresh_summary()
@@ -304,15 +323,22 @@ class TrainDialog(QDialog):
             self.blocker_label.setVisible(False)
             self.train_button.setEnabled(True)
 
+    def _on_base_changed(self):
+        """Drop a browsed path once the user picks something else."""
+        if self.base_combo.currentText() != self.custom_base_path:
+            self.custom_base_path = None
+
     def _browse_base(self):
         path, _ = QFileDialog.getOpenFileName(
             self, "Choose a base checkpoint", "", "Model weights (*.pt)"
         )
         if not path:
             return
-        self.custom_base_path = path
         self.base_combo.insertItem(0, path)
+        # Set custom_base_path AFTER the index change, so _on_base_changed's
+        # comparison sees the new value rather than clearing what we just set.
         self.base_combo.setCurrentIndex(0)
+        self.custom_base_path = path
 
 
 def _wrap(layout):

@@ -219,7 +219,18 @@ class LoadPredictionModelDialog(QDialog):
         layout.addWidget(self.button_box)
 
     def browse_model(self):
-        file_name, _ = QFileDialog.getOpenFileName(self, "Select YOLO Model", "", "YOLO Model (*.pt)")
+        # Start in <project>/models when it exists: that is where every
+        # post-training save lands (issue #74), and a directory nothing ever
+        # opens is a backup, not a registry.
+        start_dir = ""
+        project_dir = getattr(self.parent(), "current_project_dir", None)
+        if project_dir:
+            candidate = os.path.join(project_dir, "models")
+            if os.path.isdir(candidate):
+                start_dir = candidate
+        file_name, _ = QFileDialog.getOpenFileName(
+            self, "Select YOLO Model", start_dir, "YOLO Model (*.pt)"
+        )
         if file_name:
             self.model_path = file_name
             self.model_edit.setText(file_name)

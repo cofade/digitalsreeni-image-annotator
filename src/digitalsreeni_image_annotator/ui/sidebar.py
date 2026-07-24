@@ -532,6 +532,13 @@ def build_image_list(window):
     window.image_list.currentRowChanged.connect(
         lambda row: window.switch_image(window.image_list.currentItem())
     )
+    # ExtendedSelection so a similarity cluster can actually be selected as a
+    # group (issue #72). Navigation is driven by itemClicked /
+    # currentRowChanged, not by the selection, so this does not change which
+    # image is shown.
+    window.image_list.setSelectionMode(
+        QAbstractItemView.SelectionMode.ExtendedSelection
+    )
     window.image_list.setContextMenuPolicy(Qt.ContextMenuPolicy.CustomContextMenu)
     window.image_list.customContextMenuRequested.connect(window.show_image_context_menu)
     window.image_list_layout.addWidget(window.image_list)

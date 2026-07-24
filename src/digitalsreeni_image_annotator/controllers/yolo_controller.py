@@ -497,12 +497,12 @@ class YOLOController(QObject):
             dialog.set_mlflow_url(url)
 
     def _on_mlflow_run_url(self, url):
-        self._remember_mlflow_url(url)
         """The YOLO run has opened in MLflow (signalled from the worker thread;
         this runs on the GUI thread). Show a clickable link in the progress
         dialog, start the MLflow UI server once, and open the run in the
         browser. Mirrors SAMTrainController._on_mlflow_run_url; tracking display
         must never disturb the run, so it is best-effort and self-contained."""
+        self._remember_mlflow_url(url)
         import webbrowser
 
         from PyQt6.QtCore import QTimer
@@ -609,16 +609,26 @@ class YOLOController(QObject):
         if isinstance(results_dict, dict):
             for key, value in results_dict.items():
                 if "mAP50-95" in key:
-                    metrics.setdefault("mAP50-95", float(value))
+                    name = "mAP50-95"
                 elif "mAP50" in key:
-                    metrics.setdefault("mAP50", float(value))
+                    name = "mAP50"
                 elif "precision" in key.lower():
-                    metrics.setdefault("precision", float(value))
+                    name = "precision"
                 elif "recall" in key.lower():
-                    metrics.setdefault("recall", float(value))
-        epoch = getattr(getattr(results, "trainer", None), "epoch", None)
-        if epoch is not None:
-            metrics["epochs_completed"] = int(epoch) + 1
+                    name = "recall"
+                else:
+                    continue
+                try:
+                    metrics.setdefault(name, float(value))
+                except (TypeError, ValueError):
+                    # "every read is defensive" has to include the conversion:
+                    # a non-numeric value here must shorten the panel, never
+                    # raise on a run that actually succeeded.
+                    continue
+        # No epoch count here: train_model returns Ultralytics' metrics object,
+        # which carries no `.trainer`, so the old getattr chain silently never
+        # populated. Omitting a metric is the documented behaviour anyway; a
+        # row that never appears is better than one that pretends to try.
         return metrics
 
     def set_confidence_threshold(self):

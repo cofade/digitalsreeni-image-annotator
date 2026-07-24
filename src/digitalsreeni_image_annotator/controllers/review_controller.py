@@ -215,8 +215,13 @@ class ReviewController(QObject):
         return bool(self.scores)
 
     def clear_scores(self):
-        """Drop the scores. Called after training, since a score computed with
-        the previous model says nothing about the new one."""
+        """Drop the scores.
+
+        Called from ``ModelRegistryController.finish_run`` after every
+        successful run: a score computed with the previous model says nothing
+        about the new one, and a stale ranking painted on the image list is
+        worse than none because it still looks authoritative.
+        """
         self.scores = {}
         self.scored_model = None
         self.mw.image_controller.refresh_image_list_scores()

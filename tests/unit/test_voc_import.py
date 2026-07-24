@@ -243,6 +243,97 @@ def test_similar_filenames_do_not_collide(tmp_path):
 # --- round trip ------------------------------------------------------------
 
 
+def test_inline_polygons_are_read_back(tmp_path):
+    """``export_pascal_voc_both`` writes the outline inline in the XML. The
+    first version of this importer looked for SegmentationClass mask PNGs — a
+    layout the app has never written — so importing the app's own
+    VOC-with-segmentation export silently degraded every polygon to its box.
+    """
+    from PIL import Image
+
+    from src.digitalsreeni_image_annotator.io.export_formats import (
+        export_pascal_voc_both,
+    )
+
+    source = tmp_path / "source"
+    source.mkdir()
+    Image.new("RGB", (200, 200), (64, 64, 64)).save(source / "a.png")
+
+    outline = [10.0, 10.0, 60.0, 10.0, 60.0, 80.0, 10.0, 80.0]
+    all_annotations = {
+        "a.png": {
+            "cell": [{
+                "segmentation": list(outline),
+                "bbox": [10.0, 10.0, 50.0, 70.0],
+                "category_name": "cell",
+                "number": 1,
+            }]
+        }
+    }
+    out_dir = str(tmp_path / "voc_seg")
+    os.makedirs(out_dir, exist_ok=True)
+    export_pascal_voc_both(
+        all_annotations, {"cell": 1}, {"a.png": str(source / "a.png")},
+        [], {}, out_dir,
+    )
+
+    annotations, _info, _schemas = import_pascal_voc(out_dir, {})
+    imported = annotations["a.png"]["cell"][0]
+
+    assert imported.get("segmentation"), "the outline was dropped on import"
+    assert imported["segmentation"] == pytest.approx(outline)
+    assert imported["type"] == "polygon"
+
+
+def test_an_object_without_an_inline_polygon_stays_a_box(tmp_path):
+    _write_voc(str(tmp_path), "a.png", [("cell", (10, 10, 50, 50))])
+    annotations, _info, _schemas = import_pascal_voc(str(tmp_path), {})
+    annotation = annotations["a.png"]["cell"][0]
+    assert "segmentation" not in annotation
+    assert annotation["type"] == "rectangle"
+
+
+def test_each_object_gets_its_own_outline(tmp_path):
+    """Inline polygons belong to their object, so two annotations of the same
+    class need no pairing heuristic — which the mask-based version got wrong."""
+    annotations_dir = _write_voc(
+        str(tmp_path), "a.png",
+        [("cell", (10, 10, 50, 50)), ("cell", (100, 100, 150, 150))],
+    )
+    tree = ET.parse(os.path.join(annotations_dir, "a.xml"))
+    for obj, ring in zip(
+        tree.getroot().findall("object"),
+        ([10, 10, 50, 10, 50, 50], [100, 100, 150, 100, 150, 150]),
+    ):
+        segmentation = ET.SubElement(obj, "segmentation")
+        polygon = ET.SubElement(segmentation, "polygon")
+        for index in range(0, len(ring), 2):
+            point = ET.SubElement(polygon, f"pt{index // 2 + 1}")
+            ET.SubElement(point, "x").text = str(ring[index])
+            ET.SubElement(point, "y").text = str(ring[index + 1])
+    tree.write(os.path.join(annotations_dir, "a.xml"), encoding="utf-8")
+
+    annotations, _info, _schemas = import_pascal_voc(str(tmp_path), {})
+    first, second = annotations["a.png"]["cell"]
+    assert first["segmentation"][:2] == [10.0, 10.0]
+    assert second["segmentation"][:2] == [100.0, 100.0]
+
+
+def test_a_polygon_with_too_few_points_is_ignored(tmp_path):
+    annotations_dir = _write_voc(str(tmp_path), "a.png", [("cell", (10, 10, 50, 50))])
+    tree = ET.parse(os.path.join(annotations_dir, "a.xml"))
+    obj = tree.getroot().find("object")
+    segmentation = ET.SubElement(obj, "segmentation")
+    polygon = ET.SubElement(segmentation, "polygon")
+    point = ET.SubElement(polygon, "pt1")
+    ET.SubElement(point, "x").text = "1"
+    ET.SubElement(point, "y").text = "2"
+    tree.write(os.path.join(annotations_dir, "a.xml"), encoding="utf-8")
+
+    annotations, _info, _schemas = import_pascal_voc(str(tmp_path), {})
+    assert "segmentation" not in annotations["a.png"]["cell"][0]
+
+
 def test_export_then_import_produces_an_equivalent_project(tmp_path, qtbot):
     """The whole point of the issue: a VOC export from this app must re-import."""
     from PyQt6.QtGui import QColor, QImage

@@ -244,12 +244,12 @@ class SAMTrainController(QObject):
             dialog.set_mlflow_url(url)
 
     def _on_mlflow_run_url(self, url):
-        self._remember_mlflow_url(url)
         """The fine-tuning run has opened in MLflow (signalled from the worker
         thread; this runs on the GUI thread). Show a clickable link in the
         progress dialog, start the MLflow UI server once, and open the run in
         the browser. Tracking display must never disturb the run, so this is
         best-effort and swallows its own errors."""
+        self._remember_mlflow_url(url)
         import webbrowser
 
         from PyQt6.QtCore import QTimer

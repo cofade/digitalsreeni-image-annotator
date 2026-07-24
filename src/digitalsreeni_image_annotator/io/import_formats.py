@@ -496,45 +496,51 @@ def import_yolo_v5plus(yaml_file_path, class_mapping):
 
 
 
-def _voc_mask_polygons(mask_path):
-    """Polygons per colour region in a VOC segmentation mask PNG.
+def _voc_object_polygon(obj):
+    """Flat polygon from a VOC ``<object>``'s inline segmentation, or ``None``.
 
-    Returns ``{(r, g, b): [flat polygon, ...]}``. ``export_pascal_voc_both``
-    writes one colour per class, so the colour is the only link back from a
-    mask region to its class name — which is why the caller pairs these with
-    the XML objects rather than trusting order.
+    ``export_pascal_voc_both`` writes the outline **inline** in the XML:
 
-    Contour extraction mirrors ``inference/sam_utils._mask_to_polygon``: same
-    ``RETR_EXTERNAL`` / ``CHAIN_APPROX_SIMPLE`` pass and the same >= 6
-    coordinate floor, so a mask round-tripped through export and back produces
-    the same kind of outline the app makes natively.
+    ```xml
+    <segmentation>
+      <area>1234</area>
+      <polygon><pt1><x>10</x><y>20</y></pt1> …</polygon>
+    </segmentation>
+    ```
+
+    Reading this is what makes the export/import round-trip real. The earlier
+    version of this importer looked for ``SegmentationClass`` mask PNGs
+    instead — a layout the app has never written — so importing the app's own
+    VOC-with-segmentation export silently degraded every polygon to its
+    bounding box.
+
+    Mask-PNG reconstruction was deliberately **not** kept as a fallback: in a
+    foreign VOC dataset the mask palette index is that producer's class id,
+    which has no defined relationship to a class name in this project, so any
+    colour-to-class mapping would be a guess that attributes regions to the
+    wrong classes while looking like it worked.
     """
-    import cv2
-    import numpy as np
+    segmentation = obj.find("segmentation")
+    if segmentation is None:
+        return None
+    polygon = segmentation.find("polygon")
+    if polygon is None:
+        return None
 
-    image = cv2.imread(mask_path, cv2.IMREAD_COLOR)
-    if image is None:
-        return {}
-    rgb = cv2.cvtColor(image, cv2.COLOR_BGR2RGB)
-
-    polygons = {}
-    for colour in np.unique(rgb.reshape(-1, 3), axis=0):
-        if not colour.any():
-            continue  # pure black is the background
-        binary = np.all(rgb == colour, axis=-1).astype(np.uint8)
-        contours, _ = cv2.findContours(
-            binary, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE
-        )
-        found = []
-        for contour in contours:
-            if cv2.contourArea(contour) <= 10:
-                continue
-            flat = contour.flatten().tolist()
-            if len(flat) >= 6:
-                found.append([float(c) for c in flat])
-        if found:
-            polygons[tuple(int(c) for c in colour)] = found
-    return polygons
+    flat = []
+    # Points are named pt1, pt2, ... in document order; iterate the children
+    # rather than parsing the tag numbers, so a producer starting at pt0 or
+    # padding to pt007 still reads correctly.
+    for point in polygon:
+        x = point.findtext("x")
+        y = point.findtext("y")
+        if x is None or y is None:
+            continue
+        try:
+            flat.extend([float(x), float(y)])
+        except ValueError:
+            return None
+    return flat if len(flat) >= 6 else None
 
 
 def import_pascal_voc(directory_path, class_mapping):
@@ -548,9 +554,9 @@ def import_pascal_voc(directory_path, class_mapping):
     ``images/``, the layout ``export_pascal_voc_bbox`` writes) or the
     ``Annotations`` directory itself — both are what a user actually picks.
 
-    Where ``SegmentationClass`` mask PNGs accompany the XML (as
-    ``export_pascal_voc_both`` writes), polygons are reconstructed so a full
-    round-trip is possible.
+    Where an object carries an inline ``<segmentation><polygon>`` (what
+    ``export_pascal_voc_both`` writes), the outline is read too, so the
+    export/import round-trip preserves masks and not just boxes.
 
     Returns the uniform ``(annotations, image_info, keypoint_schemas)`` triple
     every entry point in this module returns. The schema dict is always empty:
@@ -564,7 +570,6 @@ def import_pascal_voc(directory_path, class_mapping):
     annotations_dir = directory_path
     if os.path.isdir(os.path.join(directory_path, "Annotations")):
         annotations_dir = os.path.join(directory_path, "Annotations")
-    root_dir = os.path.dirname(annotations_dir.rstrip(os.sep)) or directory_path
 
     xml_files = sorted(
         name for name in os.listdir(annotations_dir) if name.lower().endswith(".xml")
@@ -573,13 +578,6 @@ def import_pascal_voc(directory_path, class_mapping):
         raise ValueError(
             f"No .xml annotation files found in {annotations_dir}."
         )
-
-    masks_dir = None
-    for candidate in ("SegmentationClass", "SegmentationObject", "masks"):
-        path = os.path.join(root_dir, candidate)
-        if os.path.isdir(path):
-            masks_dir = path
-            break
 
     imported_annotations = {}
     image_info = {}
@@ -611,19 +609,6 @@ def import_pascal_voc(directory_path, class_mapping):
             "id": len(image_info) + 1,
         }
         imported_annotations.setdefault(file_name, {})
-
-        mask_polygons = {}
-        if masks_dir:
-            stem = os.path.splitext(file_name)[0]
-            for extension in (".png", ".PNG"):
-                mask_path = os.path.join(masks_dir, stem + extension)
-                if os.path.exists(mask_path):
-                    mask_polygons = _voc_mask_polygons(mask_path)
-                    break
-
-        # Mask polygons are consumed per class in XML order, so two objects of
-        # the same class each take one region rather than both taking the first.
-        polygon_queue = {}
 
         for obj in root.findall("object"):
             class_name = (obj.findtext("name") or "").strip()
@@ -666,41 +651,19 @@ def import_pascal_voc(directory_path, class_mapping):
             # `difficult` and `truncated` have no home in the data model.
             # Ignored deliberately rather than invented into new fields.
 
-            if mask_polygons:
-                if class_name not in polygon_queue:
-                    polygon_queue[class_name] = _polygons_for_class(
-                        mask_polygons, class_name, local_mapping
-                    )
-                queue = polygon_queue[class_name]
-                if queue:
-                    polygon = queue.pop(0)
-                    if img_width > 0 and img_height > 0:
-                        polygon = clamp_segmentation(polygon, img_width, img_height)
-                    annotation["segmentation"] = polygon
-                    annotation["type"] = "polygon"
+            # The outline belongs to THIS object, so it needs no pairing
+            # heuristic — which is the other reason inline beats masks here.
+            polygon = _voc_object_polygon(obj)
+            if polygon:
+                if img_width > 0 and img_height > 0:
+                    polygon = clamp_segmentation(polygon, img_width, img_height)
+                annotation["segmentation"] = polygon
+                annotation["type"] = "polygon"
 
             imported_annotations[file_name].setdefault(class_name, []).append(annotation)
 
     # VOC has no keypoint concept, but the triple's shape is the contract.
     return imported_annotations, image_info, {}
-
-
-def _polygons_for_class(mask_polygons, class_name, class_mapping):
-    """Mask polygons belonging to ``class_name``, best-effort.
-
-    ``export_pascal_voc_both`` paints each class in a colour derived from its
-    id, so the id indexes the colour list. When the colour cannot be resolved
-    (a mask from a foreign producer with its own palette) every unclaimed
-    region is offered instead — a polygon on the right object with a slightly
-    uncertain provenance beats no polygon at all, and the bbox is authoritative
-    either way.
-    """
-    class_id = class_mapping.get(class_name)
-    if class_id is not None:
-        for colour, polygons in mask_polygons.items():
-            if colour[0] == class_id or colour[1] == class_id or colour[2] == class_id:
-                return list(polygons)
-    return [polygon for polygons in mask_polygons.values() for polygon in polygons]
 
 
 def process_import_format(import_format, file_path, class_mapping, confirm=None):

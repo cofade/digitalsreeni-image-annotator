@@ -289,8 +289,6 @@ def run_predict(args):
         _stderr(f"error: could not load {args.model}: {exc}")
         return EXIT_ERROR
 
-    from ..core.image_size import image_dimensions
-
     annotations = {}
     image_paths = {}
     class_mapping = {}
@@ -303,9 +301,7 @@ def run_predict(args):
             _stderr(f"  warning: prediction failed: {exc}")
             continue
         image_paths[file_name] = path
-        annotations[file_name] = _results_to_annotations(
-            results, class_mapping, image_dimensions(path)
-        )
+        annotations[file_name] = _results_to_annotations(results, class_mapping)
 
     project = _StandaloneProject(annotations, class_mapping, image_paths)
     os.makedirs(args.out, exist_ok=True)
@@ -320,7 +316,7 @@ def run_predict(args):
     return EXIT_OK
 
 
-def _results_to_annotations(results, class_mapping, size):
+def _results_to_annotations(results, class_mapping):
     """Ultralytics results -> the app's per-class annotation dict."""
     by_class = {}
     number = 0

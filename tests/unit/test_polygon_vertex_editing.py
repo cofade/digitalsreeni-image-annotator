@@ -346,6 +346,117 @@ def test_enter_syncs_the_bbox_after_a_plain_vertex_drag(qtbot, label):
     assert annotation["bbox"][0] == pytest.approx(10)
 
 
+# --- the undo baseline across a session switch (senior-review finding) ------
+
+
+class _RecordingAnnotationController:
+    """The two ADR-026 halves that matter here, with no main window.
+
+    ``capture_edit_baseline`` overwrites unconditionally in the real
+    controller, which is exactly the behaviour under test.
+    """
+
+    def __init__(self):
+        self.pending = None
+        self.pushed = []
+        self.state = "initial"
+
+    def capture_edit_baseline(self):
+        self.pending = self.state
+
+    def commit_edit_baseline(self):
+        if self.pending is None:
+            return
+        self.pushed.append(self.pending)
+        self.pending = None
+
+    def sync_polygon_geometry(self):
+        # Mirrors the real slot: persists, does NOT push history.
+        self.state = "persisted"
+
+
+def _wire(label):
+    controller = _RecordingAnnotationController()
+    label.editBaselineRequested.connect(controller.capture_edit_baseline)
+    label.polygonEditCommitted.connect(controller.commit_edit_baseline)
+    label.polygonGeometryChanged.connect(controller.sync_polygon_geometry)
+    return controller
+
+
+def test_switching_polygon_mid_session_does_not_lose_the_undo_entry(qtbot, label):
+    """The hole the senior review found.
+
+    An insert is persisted immediately by ``sync_polygon_geometry`` but leaves
+    the undo baseline pending until the session ends. Double-clicking a
+    *different* polygon used to call ``start_polygon_edit`` straight away,
+    which re-emitted ``editBaselineRequested`` and overwrote the pending
+    baseline with the **post-insert** state — making the first polygon's
+    already-saved edit permanently un-undoable.
+    """
+    first = square(20, 20, 40)
+    second = square(120, 120, 40, number=2)
+    label.annotations = {"cell": [first, second]}
+    controller = _wire(label)
+
+    qtbot.mouseDClick(label, Qt.MouseButton.LeftButton, pos=QPoint(40, 40))
+    assert label.editing_polygon is first
+    # Mid-edge, not on a corner: an insert exactly on a vertex is refused.
+    assert label.insert_editing_vertex((40, 20)) is True
+    assert controller.state == "persisted", "the insert should be saved"
+
+    # Now start a session on the other polygon.
+    qtbot.mouseDClick(label, Qt.MouseButton.LeftButton, pos=QPoint(140, 140))
+
+    assert controller.pushed == ["initial"], (
+        "the first polygon's edit was persisted with no history entry"
+    )
+    assert label.editing_polygon is second
+
+
+def test_enter_and_the_session_switch_push_the_same_baseline(qtbot, label):
+    """Both routes go through finish_polygon_edit, so they cannot drift on
+    which of them records history."""
+    annotation = square(20, 20, 40)
+    label.annotations = {"cell": [annotation]}
+    controller = _wire(label)
+
+    qtbot.mouseDClick(label, Qt.MouseButton.LeftButton, pos=QPoint(40, 40))
+    assert label.insert_editing_vertex((40, 20)) is True
+    qtbot.keyClick(label, Qt.Key.Key_Return)
+
+    assert controller.pushed == ["initial"]
+    assert controller.pending is None
+
+
+# --- P2 fixes from the senior review ----------------------------------------
+
+
+def test_double_clicking_a_vertex_does_not_plant_a_duplicate(qtbot, label):
+    """A vertex lies on both adjacent edges at perpendicular distance zero, so
+    an unguarded insert always "succeeds" there."""
+    annotation = square(40, 40, 80)
+    _enter_edit(qtbot, label, annotation, (80, 80))
+
+    assert label.insert_editing_vertex((40, 40)) is False
+    assert len(annotation["segmentation"]) // 2 == 4
+
+
+def test_the_inserted_vertex_is_immediately_draggable(qtbot, label):
+    """Matches what the pre-#68 edge-click path did; inserting a point you then
+    have to go and grab is a step backwards."""
+    annotation = square(40, 40, 80)
+    _enter_edit(qtbot, label, annotation, (80, 80))
+
+    label.insert_editing_vertex((80, 40))
+
+    assert label.editing_point_index is not None
+    index = label.editing_point_index
+    segmentation = annotation["segmentation"]
+    assert (segmentation[index * 2], segmentation[index * 2 + 1]) == pytest.approx(
+        (80, 40)
+    )
+
+
 # --- shapes the gesture must never reach -----------------------------------
 
 

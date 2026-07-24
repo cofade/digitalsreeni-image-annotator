@@ -202,9 +202,11 @@ class CurationController(QObject):
     def select_in_image_list(self, names):
         """Select a cluster's images in the image list.
 
-        The action a finding turns into: the existing filters, navigation and
-        context menu then apply to exactly that group. Slice names have no row
-        of their own in the image list and are skipped.
+        The action a finding turns into. The image list is in
+        ``ExtendedSelection`` mode so the group genuinely stays selected; the
+        per-image context menu still operates on the item under the cursor, so
+        this is a visual grouping and a starting point, not a bulk-operation
+        target. Slice names have no row of their own and are skipped.
         """
         wanted = set(names or [])
         image_list = self.mw.image_list

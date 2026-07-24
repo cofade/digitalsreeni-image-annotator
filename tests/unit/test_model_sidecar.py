@@ -323,17 +323,38 @@ def test_a_partially_schemad_project_records_none(qtbot, tmp_path, weights):
 # --- try it now ------------------------------------------------------------
 
 
-def test_try_now_is_disabled_without_an_open_image(qtbot, tmp_path):
+def test_try_now_is_disabled_without_an_open_image(qtbot, tmp_path, weights):
     registry, _window = _registry(qtbot, str(tmp_path), image="")
+    registry.finish_run(model_type="yolo", result={}, weights_path=weights)
     assert registry.can_try_now() is False
     registry.try_on_current_image()  # must be a silent no-op
 
 
-def test_try_now_runs_the_model_on_the_current_image(qtbot, tmp_path):
+def test_try_now_runs_the_model_on_the_current_image(qtbot, tmp_path, weights):
     registry, window = _registry(qtbot, str(tmp_path), image="a.png")
+    registry.finish_run(model_type="yolo", result={}, weights_path=weights)
     assert registry.can_try_now() is True
     registry.try_on_current_image()
     assert window.predicted == ["a.png"]
+
+
+def test_try_now_is_unavailable_after_a_sam_fine_tune(qtbot, tmp_path, weights):
+    """predict_single_image routes to the YOLO trainer regardless of what was
+    trained, so offering it after a SAM run would execute the loaded YOLO model
+    — or pop "No Model" — while the panel claimed the SAM model was active.
+    A fine-tuned SAM checkpoint is used interactively via SAM-box/SAM-points.
+    """
+    registry, window = _registry(qtbot, str(tmp_path), image="a.png")
+    registry.finish_run(model_type="sam", result={}, weights_path=weights)
+
+    assert registry.can_try_now() is False
+    registry.try_on_current_image()
+    assert window.predicted == []
+
+
+def test_try_now_is_unavailable_before_any_run(qtbot, tmp_path):
+    registry, _window = _registry(qtbot, str(tmp_path), image="a.png")
+    assert registry.can_try_now() is False
 
 
 # --- disk usage is reported, not silently managed --------------------------

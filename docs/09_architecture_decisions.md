@@ -2272,3 +2272,10 @@ unclaimed.
   than appending it to the item text, because **the item text IS the class name** across the app
   (`findItems(MatchExactly)`, the `Temp-` prefix checks, `text()[5:]` on accept, rename).
   Decorating it would break all of those at runtime only.
+- **Accepted trade-off**: the bare letter bindings shadow `QListWidget`'s built-in type-ahead
+  search in the class, image and slice lists — neither is a text-entry widget, so the gate
+  correctly passes and `P` activates the polygon tool rather than jumping to "platelet". Gating
+  letters on list focus was considered and rejected: switching tools right after clicking an
+  image is the *common* case, and breaking it would defeat the feature. Digits are unaffected in
+  practice (type-ahead on a numeric prefix is rare). Revisit if type-ahead turns out to be load-
+  bearing for anyone.

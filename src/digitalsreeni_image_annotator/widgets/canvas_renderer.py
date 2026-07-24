@@ -52,25 +52,16 @@ class CanvasRenderer:
         panning crawl. This method only blits what the controller already put on
         the label.
         """
-        pixmaps = self.label.onion_pixmaps
+        pixmaps = self.label.scaled_onion_pixmaps()
         if not pixmaps:
             return
         painter.save()
         painter.setOpacity(self.label.onion_opacity)
         for pixmap in pixmaps:
-            if pixmap is None or pixmap.isNull():
-                continue
-            # Same transform as the main image (offset then zoom), so ghost and
-            # current slice stay in lockstep through pan and zoom.
+            # Same origin as the main image, and pre-scaled to the same zoom,
+            # so ghost and current slice stay in lockstep through pan and zoom.
             painter.drawPixmap(
-                int(self.label.offset_x),
-                int(self.label.offset_y),
-                pixmap.scaled(
-                    max(1, int(pixmap.width() * self.label.zoom_factor)),
-                    max(1, int(pixmap.height() * self.label.zoom_factor)),
-                    Qt.AspectRatioMode.KeepAspectRatio,
-                    Qt.TransformationMode.SmoothTransformation,
-                ),
+                int(self.label.offset_x), int(self.label.offset_y), pixmap
             )
         painter.setOpacity(1.0)
         painter.restore()

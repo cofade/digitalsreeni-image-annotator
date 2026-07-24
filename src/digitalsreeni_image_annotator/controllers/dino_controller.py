@@ -785,6 +785,7 @@ class DINOController(QObject):
 
         self.mw.annotation_controller.record_history(image_name)
 
+        unassigned = 0
         for ann in self.mw.image_label.temp_annotations:
             # An unprompted Segment Everything proposal (issue #69) commits
             # under the class the user assigned by clicking it. One that was
@@ -795,6 +796,7 @@ class DINOController(QObject):
             if ann.get("source") == SAM_EVERYTHING_SOURCE and not ann.get(
                 "assigned_class"
             ):
+                unassigned += 1
                 continue
             if class_name not in self.mw.class_mapping:
                 logger.warning(f"Skipping DINO result for unknown class '{class_name}'")
@@ -817,7 +819,16 @@ class DINOController(QObject):
         self.mw.save_current_annotations()
         self.mw.update_slice_list_colors()
         self.mw.image_label.update()
-        self.mw.lbl_dino_status.setText("Results accepted.")
+        # Report the discards rather than losing them quietly: assigning 18 of
+        # 30 proposals and pressing Enter should not silently drop 12.
+        status = "Results accepted."
+        if unassigned:
+            status = (
+                f"Results accepted; {unassigned} unassigned proposal(s) "
+                "discarded."
+            )
+            logger.info("discarded %d unassigned proposal(s)", unassigned)
+        self.mw.lbl_dino_status.setText(status)
         logger.info("DINO results accepted.")
 
     def _drop_auto_temp_class(self):

@@ -77,6 +77,12 @@ class ModelRegistryController(QObject):
             "mlflow_url": mlflow_url,
         }
         self.last_run = summary
+        # Review scores were computed with the PREVIOUS model, so they say
+        # nothing about this one. Dropping them beats leaving a stale ranking
+        # painted on the image list (issue #71).
+        review = getattr(self.mw, "review_controller", None)
+        if review is not None:
+            review.clear_scores()
         return summary
 
     # --- (b) save into the project ---
@@ -184,7 +190,18 @@ class ModelRegistryController(QObject):
     # --- (d) try it now ---
 
     def can_try_now(self):
-        """True when there is an image to run the fresh model on."""
+        """True when a one-click try is meaningful.
+
+        **YOLO only.** ``predict_single_image`` routes to the YOLO trainer
+        regardless of what was trained, so offering it after a SAM fine-tune
+        would run the loaded YOLO model — or pop "No Model" — while the panel
+        claimed the SAM model was active. A fine-tuned SAM checkpoint is used
+        interactively via SAM-box / SAM-points, and
+        ``SAMTrainController.training_finished`` already selects it in the SAM
+        dropdown.
+        """
+        if (self.last_run or {}).get("model_type") != "yolo":
+            return False
         return bool(getattr(self.mw, "image_file_name", ""))
 
     def try_on_current_image(self):

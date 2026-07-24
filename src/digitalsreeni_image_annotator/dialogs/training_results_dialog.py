@@ -38,12 +38,18 @@ class TrainingResultsDialog(QDialog):
         self.setWindowTitle("Training complete")
 
         layout = QVBoxLayout(self)
-        layout.addWidget(
-            QLabel(
-                f"The {summary['model_type'].upper()} model is trained and is "
-                "now the active prediction model — no separate load step."
-            )
+        # Word it by what actually happened: a YOLO model becomes the active
+        # *prediction* model, a fine-tuned SAM checkpoint becomes the selected
+        # entry in the SAM dropdown. Claiming the latter is a prediction model
+        # would be plainly wrong.
+        headline = (
+            "The YOLO model is trained and is now the active prediction model "
+            "— no separate load step."
+            if summary["model_type"] == "yolo"
+            else "The fine-tuned SAM checkpoint is saved and selected in the "
+                 "SAM model dropdown — use SAM-box or SAM-points to try it."
         )
+        layout.addWidget(QLabel(headline))
 
         metrics_box = QGroupBox("Results")
         metrics_form = QFormLayout(metrics_box)
@@ -77,12 +83,19 @@ class TrainingResultsDialog(QDialog):
 
         buttons_row = QHBoxLayout()
         self.try_button = QPushButton("Try it on the current image")
-        self.try_button.setToolTip(
-            "Run the fresh model on the image you have open and review the "
-            "predictions."
-        )
-        self.try_button.setEnabled(registry.can_try_now())
-        if not registry.can_try_now():
+        can_try = registry.can_try_now()
+        self.try_button.setEnabled(can_try)
+        if can_try:
+            self.try_button.setToolTip(
+                "Run the fresh model on the image you have open and review the "
+                "predictions."
+            )
+        elif summary["model_type"] != "yolo":
+            self.try_button.setToolTip(
+                "Fine-tuned SAM checkpoints are used interactively via "
+                "SAM-box / SAM-points, not as a batch prediction model."
+            )
+        else:
             self.try_button.setToolTip("Open an image first.")
         self.try_button.clicked.connect(self._try_now)
         buttons_row.addWidget(self.try_button)

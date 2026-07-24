@@ -148,7 +148,7 @@ class SegmentEverythingController(QObject):
             )
             return
 
-        self.mw.image_label.temp_annotations = [
+        proposals_for_review = [
             {
                 "segmentation": proposal["segmentation"],
                 "category_name": TEMP_AUTO_CLASS,
@@ -159,6 +159,16 @@ class SegmentEverythingController(QObject):
             }
             for proposal in kept
         ]
+        self.mw.image_label.temp_annotations = proposals_for_review
+        # Also park them under this image's key. `temp_annotations` is a single
+        # field, not per-image, and `_refresh_dino_temp_for_current` clears it
+        # on every image/slice switch (CLAUDE.md) -- so without this, a stray
+        # click in the image list would silently discard a batch the user may
+        # have spent minutes assigning classes to. Reusing dino_batch_results
+        # means the existing re-sync restores them on the way back.
+        image_name = self.mw.current_slice or self.mw.image_file_name
+        if image_name:
+            self.mw.dino_batch_results[image_name] = proposals_for_review
         # A colour for the unassigned state, so the overlay has something to
         # draw against before any class is picked.
         self.mw.image_label.class_colors.setdefault(

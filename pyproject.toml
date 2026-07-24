@@ -74,6 +74,8 @@ sreeni-cli = "digitalsreeni_image_annotator.cli:main"
 src = ["src"]
 line-length = 100
 extend-exclude = ["build", "dist", ".venv"]
+# `ruff check .` is what CI runs, so the config has to hold for the whole tree,
+# not just src/ and tests/.
 
 [tool.ruff.lint]
 # Deliberately narrow. The codebase predates any linter, so a broad rule set

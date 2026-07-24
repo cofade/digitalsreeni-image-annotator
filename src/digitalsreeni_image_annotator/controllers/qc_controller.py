@@ -102,20 +102,36 @@ class QCController(QObject):
     def fix_findings(self, findings):
         """Repair every fixable finding. Returns the number actually changed.
 
-        One ``record_history`` for the whole batch, so a sweep over 200
-        annotations is a single Ctrl+Z rather than 200 (ADR-026).
+        **One history entry per image, not one for the batch.**
+        ``AnnotationHistory`` is keyed by image, and a finding can name any
+        image in the project, not just the one on screen. A single keyless
+        ``record_history()`` would snapshot only the current image — so repairs
+        to the other 49 images of a 50-image project would be permanent and
+        un-undoable while the UI claimed otherwise.
+
+        The consequence is that undoing a cross-image sweep takes one Ctrl+Z
+        per affected image. That is the honest cost of a per-image undo model
+        (ADR-026); claiming otherwise was the bug.
+
+        Returns ``(repaired_count, images_touched)`` so the caller can word the
+        confirmation truthfully.
         """
         if not findings:
-            return 0
+            return 0, 0
         sizes = self.collect_image_sizes()
         current = self.mw.current_slice or self.mw.image_file_name
 
-        self.mw.annotation_controller.record_history()
+        snapshotted = set()
         repaired = 0
         for finding in findings:
             annotation = self._resolve(finding)
             if annotation is None:
                 continue
+            # Snapshot this image's pre-repair state the first time we touch it,
+            # and before the mutation below.
+            if finding.image not in snapshotted:
+                self.mw.annotation_controller.record_history(finding.image)
+                snapshotted.add(finding.image)
             width, height = sizes.get(finding.image, (None, None))
             try:
                 if annotation_qc.apply_fix(annotation, finding.rule, width, height):
@@ -133,8 +149,10 @@ class QCController(QObject):
             self.mw.update_annotation_list()
         self.mw.image_label.update()
         self.mw.auto_save()
-        logger.info("QC repaired %d finding(s)", repaired)
-        return repaired
+        logger.info(
+            "QC repaired %d finding(s) across %d image(s)", repaired, len(snapshotted)
+        )
+        return repaired, len(snapshotted)
 
     def _resolve(self, finding):
         """The live annotation a finding refers to, or None.

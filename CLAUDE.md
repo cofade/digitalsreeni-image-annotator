@@ -24,7 +24,16 @@ python -m src.digitalsreeni_image_annotator.main
 
 Python 3.10+ | PyQt6 6.7+ | Ultralytics >=8.3.237,<9 (SAM 2 / SAM 3) | NumPy | OpenCV | Shapely
 
-**Test suite**: `tests/` (pytest + pytest-qt). 688 tests pass on PyQt6 (3 skipped).
+**Test suite**: `tests/` (pytest + pytest-qt). 1251 tests pass on PyQt6 (3 skipped), ~60 % line
+coverage with a `--cov-fail-under` floor in `pytest.ini` (#77).
+
+**Lint + types** (#78) — run as steps separate from the tests, so a type error is
+distinguishable from a test failure:
+
+```bash
+python -m ruff check src tests   # narrow rule set: E4, E7, E9, F
+python -m mypy                   # per-module opt-in; core/ is checked
+```
 
 ## Documentation
 
@@ -32,6 +41,7 @@ For detailed architecture and design information, see **[docs/](docs/)**:
 
 - **[Building Block View](docs/05_building_block_view.md)** - Components, data model, class responsibilities
 - **[Runtime View](docs/06_runtime_view.md)** - Workflows and key scenarios
+- **[Deployment View](docs/07_deployment_view.md)** - Entry points, the Qt-free boundary, CLI usage
 - **[Cross-cutting Concepts](docs/08_crosscutting_concepts.md)** - Coordinate systems, conversions, patterns
 - **[Architecture Decisions](docs/09_architecture_decisions.md)** - Why we made key choices
 - **[Glossary](docs/12_glossary.md)** - Terms, acronyms, data structures
@@ -48,10 +58,19 @@ src/digitalsreeni_image_annotator/
 ├── utils.py                      # Utility functions (calculate_area, …)
 ├── __init__.py                   # Public API re-exports
 │
+├── cli/                          # headless entry point (ADR-041): main.py,
+│                                 #   commands.py. NO Qt, torch only in predict
 ├── core/                         # constants, annotation_utils, image_utils
-├── controllers/                  # 9 controllers (project, image, sam,
+│                                 # Qt-free core shared with the CLI:
+│                                 #   annotation_types, annotation_qc,
+│                                 #   disagreement, similarity, task_inference,
+│                                 #   model_sidecar, project_io, mask_filters,
+│                                 #   onion, image_size
+├── controllers/                  # 16 controllers (project, image, sam,
 │                                 #   sam_train, dino, yolo, annotation,
-│                                 #   class, tracking) + io_controller
+│                                 #   class, tracking, clipboard, qc, review,
+│                                 #   curation, segment_everything, training,
+│                                 #   model_registry) + io_controller
 ├── widgets/
 │   ├── image_label.py            # ImageLabel canvas widget (dispatcher)
 │   ├── canvas_renderer.py        # CanvasRenderer painting/overlays (ADR-034)
@@ -183,7 +202,11 @@ See [Runtime View](docs/06_runtime_view.md#multi-dimensional-image-loading) for 
 | Auto-accept dropdown | Honored by **both** `run_dino_detection_single` and `run_dino_detection_batch` | Easy to forget in the single path because the combo is labeled "batch". |
 | GPU model unload | `model.cpu()` → `gc.collect()` → `torch.cuda.empty_cache()` + `ipc_collect()` + `synchronize()` — full reclaim requires app restart due to per-process CUDA context | Setting refs to None alone leaves circular refs pinned and shows zero Task Manager drop. See [Releasing Model GPU Memory](docs/08_crosscutting_concepts.md#releasing-model-gpu-memory). |
 | Export image-path lookup | Exact-key match first, substring fallback only | `"bee.jpg" in "honeybee.jpg"` is True — substring-only matching writes the wrong file. See [Export Format Filename Matching](docs/08_crosscutting_concepts.md#export-format-filename-matching). |
-| F2 / global shortcuts | Use `QShortcut` with `Qt.ShortcutContext.ApplicationShortcut`, not `keyPressEvent` | `QTableWidget` consumes F2 for in-cell edit before it bubbles up. |
+| F2 / global shortcuts | **Modified** keys (Ctrl+Z, F2): `QShortcut` with `ApplicationShortcut`. **Bare** keys (digits, letters): register a binding on `ShortcutEventFilter` (`ui/shortcuts.py`) instead — never a `QShortcut` | `QTableWidget` consumes F2 before it bubbles up, so `keyPressEvent` is out. But an `ApplicationShortcut` on `3` swallows that key in *every* `QLineEdit` in the app, so only a gated event filter works for bare keys. Gates live in `ui/input_gates.py`, shared with `DINOReviewEventFilter`. See [ADR-043](docs/09_architecture_decisions.md). |
+| Badges in list widgets | Paint them in an item delegate; **never** append to the item text | The item text IS the class name / file name across the app (`findItems(MatchExactly)`, `Temp-` prefix checks, `text()[5:]` on accept, and the `all_images[i]` ↔ `item(i)` invariant). Decorating it breaks all of those at runtime only. See `ClassShortcutDelegate` (#65) and `ImageScoreDelegate` (#71). |
+| Qt-free core | `core/annotation_qc`, `core/disagreement`, `core/similarity`, `core/task_inference`, `core/model_sidecar`, `core/project_io`, `core/annotation_types`, `core/image_size`, `core/mask_filters`, `core/onion` and **both `io/` modules** must not import Qt at module level | The CLI (#76) imports them. A stray `from PyQt6 ...` makes headless validation require a display, and works fine on the machine of whoever added it. Enforced by a **subprocess** test in `tests/integration/test_cli.py` — in-process would pass regardless, since the suite already imported PyQt6. See [ADR-041](docs/09_architecture_decisions.md). |
+| Vertex count changes | Invalidate `segmentation_raw` and reset `detail_pct` (`edit_gestures.invalidate_raw_polygon`) whenever a polygon gains or loses a vertex | The Detail-% spinbox re-simplifies *from* the raw copy (ADR-025). Leave it stale and the next Detail-% drag silently reverts the user's edit — a bug near-impossible to diagnose from a report. See #68. |
+| Training entry points | One `Model → Train Model…` dialog. The base model must load **before** `prepare_dataset` | `train_model` compares the model's `.task` against the prepared YAML; reordering silently disables the check that turns an opaque Ultralytics failure into an actionable message. See [ADR-042](docs/09_architecture_decisions.md). |
 | Canvas ↔ list selection sync | Canvas selection (idle-mode click/Shift/rubber-band) drives the annotation list via `apply_canvas_selection`; mirror the list with `blockSignals(True/False)` and match annotations by **value-equality**, never identity | PyQt round-trips `UserRole` dicts as copies and `image_label.annotations` is a deepcopy, so identity is never stable; un-blocked `setSelected` recurses through `update_highlighted_annotations`. Multi-select uses **Shift** (Ctrl stays pan). See [ADR-022](docs/09_architecture_decisions.md#adr-022-canvas-mask-selection-unified-with-the-annotation-list). |
 | Selection rendering | Don't recolour a selected mask. Keep its class colour; draw a class-colour-independent overlay (dashed `_SELECTION_COLOR` blue bounding box + bright handle squares at corners/edge-midpoints, OGP-style) in a final pass — `_draw_selection_overlay`. For a single selected shape those handles are draggable (resize/move, any shape). Default class colours come from `core/constants.py::default_class_color` (red last, muted) | Red selection was invisible on a red-class mask; a thin dashed outline alone was too faint; the handles carry the visibility. See ADR-022 amendment. |
 | Shape editing (#40) | Direct manipulation on the selection handles for **any** single selected shape (`_single_selected_shape()` — most shapes are `"segmentation"`, not `"bbox"`; gating on a bbox key made it unreachable). `_begin_shape_edit` records `kind`: a `"seg"` polygon **scales** its vertices (`_scale_segmentation`) / translates them; a `"bbox"` edits `[x,y,w,h]`. `_draw_selection_overlay` + `_bbox_handle_at` share `_bbox_handle_points` (visual == grab); resize anchors the opposite side (`_resize_bbox`); interior drag moves, **drag-gated**. `_sync_bbox_key` keeps an imported bbox consistent. Clamp + `bboxEditCommitted` → `commit_bbox_edit` on release; Esc reverts | Handles drawn since #75 were visual-only; dispatch sits before the rubber-band branch but stays gated on `_is_select_mode()`. Names keep the `bbox_edit` prefix = "edit via the bounding-box handles". See [ADR-023](docs/09_architecture_decisions.md). |
@@ -247,7 +270,11 @@ Address all P0s before merging. Address P1s unless there's explicit justificatio
 
 ## Known Constraints
 
-- No type hints (gradual addition encouraged)
+- Type hints cover the **Qt-free core only** (#78); `io/`, `utils.py`, controllers and widgets
+  are annotated only where they already were. mypy uses a per-module opt-in, so extending
+  coverage means adding a module to the list in `pyproject.toml` — the boundary is explicit, not
+  a silent gap. Widget internals stay out of scope: the PyQt6 stubs are incomplete, so annotating
+  them produces noise, not safety.
 - Print statements instead of logging (acceptable)
 - Absolute paths in projects (not portable)
 - SAM 2 large crashes on limited RAM
@@ -261,6 +288,10 @@ See [Risks and Technical Debt](docs/11_risks_and_technical_debt.md) for full lis
 |--------|--------|
 | Ctrl+N/O/S | New/Open/Save Project |
 | Ctrl+Z / Ctrl+Y (or Ctrl+Shift+Z) | Undo / redo annotation edit (ADR-026) |
+| 1 … 9 | Select the 1st…9th class (#65, ADR-043) |
+| P / R / B / E / K | Polygon / Rectangle / Paint / Eraser / Keypoint tool; pressing the active one toggles it off |
+| V | Return to selection mode |
+| Ctrl+C / Ctrl+V | Copy / paste the selected annotations (#66) |
 | Ctrl+Shift+= / Ctrl+Shift+- | UI font bigger/smaller (8-24pt, persisted via QSettings) |
 | Ctrl+Shift+0 | Reset UI font size |
 | F1 | Help |
@@ -273,6 +304,8 @@ See [Risks and Technical Debt](docs/11_risks_and_technical_debt.md) for full lis
 | Drag / Shift+Drag (no tool) | Rubber-band select / add |
 | Drag handle / inside (one shape selected) | Resize (scale) / move the shape |
 | Double-click | Vertex-edit mode |
+| Double-click an edge (in vertex-edit mode) | Insert a vertex there (#68) |
+| Alt+click a vertex (in vertex-edit mode) | Remove it — refused at 3 vertices (#68; Shift also works, the pre-#68 binding) |
 | Delete | Delete selected mask(s) — instant, undoable (no confirm dialog) |
 | Enter | Finish/Accept (keypoint tool: finish pose early, padding unplaced points v=0) |
 | Esc | Cancel in-progress shape **and** return to selection mode (deactivates the tool) |

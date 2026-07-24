@@ -832,3 +832,112 @@ auto-increments on collision), **not** the default `./runs` — parallel to SAM'
 (`run_ui_url`, `start_mlflow_ui_server`); the only difference is YOLO reads the
 run id from Ultralytics' *native* MLflow callback rather than the in-process
 `MLflowTracker`.
+
+## Training, End to End (issues #73 / #74, ADR-042)
+
+The path from "I have annotations" to "I can see the model working" used to be six menu
+navigations and about ten dialogs, with a step in the middle where you reloaded the model you had
+just produced.
+
+```
+Model → Train Model…
+  │
+  ├─ TrainDialog reads the project
+  │    • task inferred from the annotations (core/task_inference)
+  │    • live data summary, incl. how many images have no labels
+  │    • pre-flight blockers disable Train with the specific reason:
+  │        - mixed-K pose / pose + non-pose (YOLO-pose has ONE global kpt_shape)
+  │        - multi-dimensional images or videos (unsupported for YOLO training)
+  │
+  └─ Train pressed → TrainingController
+       1. load the base model          ← BEFORE prepare, so train_model's
+       2. prepare the dataset             .task-vs-YAML pre-flight still runs
+       3. build_yolo_train_opts (ADR-028)
+       4. start_training → worker thread, progress + stop dialog, MLflow armed
+            │
+            └─ training_finished
+                 │ error?  → message box, nothing registered
+                 └─ ModelRegistryController.finish_run
+                      a. register as the active prediction model
+                      b. copy weights to <project>/models/<name>_<ts>.pt
+                         + JSON sidecar (classes, task, kpt_shape, config, metrics)
+                      c. TrainingResultsDialog — metrics, paths, MLflow link
+                      d. "Try it on the current image" → predict_single_image
+                         → temp_annotations → the existing review overlay
+```
+
+Guards worth knowing: a failed or stopped run registers and writes nothing; nothing is written
+while `is_loading_project` is set (ADR-005); a filename collision does not overwrite, because two
+runs can finish inside the same second.
+
+## Reviewing a Model Against the Labels (issue #71)
+
+The active-learning loop the prediction path was already 60 % wired for:
+
+```
+Images panel → "Review with model"
+  │
+  └─ for each plain 2D image (stacks and videos are reported as skipped)
+       predict → extract predictions  ← NOT via process_yolo_results, which
+       │                                 writes into the review overlay as a
+       │                                 side effect; a scoring run must not
+       │                                 touch the canvas
+       ├─ has annotations?  → disagreement score
+       └─ has none?         → uncertainty score
+  │
+  ├─ score painted on each image row (ImageScoreDelegate — never in the text)
+  ├─ "Sort by score" reorders; unscored images sink rather than hide
+  └─ selecting one and predicting shows its predictions as temp annotations,
+     so the disagreement is visible against the existing labels
+```
+
+Nothing is ever mutated, and the wording says "worth a look", never "wrong".
+
+## Auditing a Project (issue #70)
+
+```
+Tools → Check Annotations…
+  │
+  └─ QCController gathers annotations + image sizes + class names
+       └─ core/annotation_qc.run_audit   ← Qt-free; sreeni-cli validate
+            geometry / pose / redundancy /   runs these exact rules
+            statistics / hygiene rules
+  │
+  └─ AnnotationQCDialog: grouped by rule, with counts
+       • "Go to" → reuses the DINO batch-review navigator, which already
+         handles the mixed image-name / slice-name namespace
+       • "Fix all repairable" → ONE record_history for the whole batch
+```
+
+Only unambiguous repairs are offered. An area outlier might be a genuinely large object.
+
+## Segment Everything (issue #69)
+
+A third producer into the **existing** review overlay — not a second review mechanic (ADR-015):
+
+```
+Segment Everything → SAMUtils.apply_sam_everything (no prompt, via _run_sync)
+  │                                              └─ inherits the in-flight guard
+  └─ core/mask_filters: area bounds, overlap-with-existing IoU, count cap
+     (applied AFTER sorting by score, so the cap keeps the best candidates)
+  │
+  └─ temp_annotations under "Temp-Auto", source="sam-everything"
+       • click assigns the active class (digits 1-9 switch class — #65)
+       • assigned candidates draw solid in the class colour, unassigned dashed
+       • Enter commits only the assigned ones; unassigned are discarded rather
+         than guessed at, so no orphan Temp-* class survives
+       • Escape discards everything
+```
+
+## Headless Operation (issue #76, ADR-041)
+
+```
+sreeni-cli validate --project data.iap --fail-on error
+  │
+  ├─ core/project_io.load_project      ← read-only; no write path exists
+  ├─ core/annotation_qc.run_audit      ← the same rules the dialog runs
+  ├─ summary JSON → stdout, per-finding lines → stderr
+  └─ exit 2 if findings reach the threshold, else 0
+```
+
+No Qt, no torch, no display. See [Deployment View](07_deployment_view.md).

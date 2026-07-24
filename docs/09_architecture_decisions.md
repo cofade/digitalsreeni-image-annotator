@@ -2103,3 +2103,172 @@ to match what the real `SAM3VideoPredictor` actually does (see Consequences).
 - Disk space duplication
 - Slow for large image sets
 - Export already copies images
+
+---
+
+## ADR-041: Headless CLI as a Separate Entry Point Behind a Qt-Free Boundary
+
+**Status**: Accepted (issue #76)
+
+**Context**: Everything the app could do required a human, a screen and a mouse. There was no
+way to regenerate a training dataset in a build script, convert annotation formats without
+opening the GUI, fail a CI job because someone committed self-intersecting polygons, or run a
+model over a folder overnight. For an ML engineer, an annotation tool that cannot be scripted is
+a tool that has to be baby-sat.
+
+**Decision**:
+
+- **A separate console script**, `sreeni-cli`, not a `--headless` flag on the GUI entry point.
+  `main.py` imports torch eagerly *before* constructing the `QApplication` to work around a
+  Windows DLL conflict (ADR-017). A flag would inherit that whole startup path, so `validate`
+  would load torch and require a display on a CI runner.
+- **Four commands**: `export`, `convert`, `validate`, `predict`. `train` is deliberately out of
+  scope — it needs a GPU, a progress UI and a stop button, none of which belong in a build step.
+- **Exit codes are the contract**: 0 success, 1 usage/read/operation error, 2 `validate` findings
+  at or above `--fail-on`. Progress narration to stderr, machine-readable output to stdout.
+  `--fail-on` is inclusive-upward (`warning` also fails on errors), so a project can tighten its
+  gate over time.
+- **Read-only by construction**: `core/project_io.py` has no write path at all. Autosave and
+  recovery exist to protect interactive editing (ADR-005/032); a build script silently rewriting
+  the file it was asked to read is exactly the surprise a CI gate must not spring.
+- **Lazy heavy imports per command**: only `predict` imports torch and Ultralytics.
+
+**The architectural work was the separation, not the argument parsing.** Two Qt dependencies sat
+in the shared layer, each sufficient on its own to make headless operation impossible:
+
+| Dependency | Why it was there | Replacement |
+|---|---|---|
+| `QImage` in `io/export_formats.py` | reading a file's dimensions, nothing else | `core/image_size.image_dimensions` (Pillow header read — Qt-free and faster) |
+| `QMessageBox` in `io/import_formats.py` | prompting when images and labels do not line up | a `confirm` callback; the GUI supplies the prompt (ADR-031) |
+
+**Alternatives considered**:
+
+- *A `--headless` flag on the existing entry point*: rejected for the ADR-017 startup path above.
+- *A thin CLI calling the controllers with a hidden QApplication*: would require a display on
+  every CI runner and drag the whole widget tree into a format conversion.
+- *Duplicating the export logic for the CLI*: two implementations of a format drift, and the
+  divergence surfaces as a dataset that trains differently depending on how it was produced.
+
+**Consequences**:
+
+- The Qt-free boundary is now load-bearing and **enforced by a subprocess test**
+  (`tests/integration/test_cli.py`) over `cli/`, `cli.commands`, both `io/` modules,
+  `core/project_io` and `core/annotation_qc`. The subprocess matters: the test session has
+  already imported PyQt6, so an in-process `sys.modules` check would pass regardless.
+- An accidental `from PyQt6 ...` in any shared module re-breaks headless operation, and would
+  work perfectly on the machine of whoever added it. The test is the only thing that catches it.
+- **Documented limits**: the CLI exports what a project already materialised; extracting new
+  slices from a stack runs through the Qt-bound `ImageController` and is out of scope (the count
+  skipped is reported). An unresolvable image path refuses the export rather than writing a
+  partial dataset that looks complete but trains on fewer images than the user believes.
+- `docs/07_deployment_view.md` exists now because there are two entry points with materially
+  different runtime requirements.
+
+---
+
+## ADR-042: One Training Dialog, with the Task Derived Rather Than Asked
+
+**Status**: Accepted (issue #73; builds on ADR-028 LR schedule, ADR-029 pose)
+
+**Context**: Training a YOLO model *and actually using it* took six menu navigations and about
+ten dialogs, including a step in the middle where the user reloaded the model they had just
+produced. SAM fine-tuning was a separate top-level menu with four more actions, one of which was
+a manual "Refresh Model Selector". Eleven menu actions for what is conceptually one operation —
+and dataset preparation, YAML handling and saving are mechanics, not decisions anyone wanted to
+make.
+
+**Decision**:
+
+- **One `Train Model…` action, one dialog**, covering both YOLO training and SAM 2 fine-tuning.
+  Preparation, YAML writing, model loading, saving and selector refresh happen implicitly.
+- **The task is derived from the annotations, not asked**: boxes only means detect, polygons mean
+  segment, keypoints mean pose. Asking is asking the user to restate their own data.
+- **`core/task_inference.py` is a module, not a dialog method.** `train_model` already infers the
+  task a second time from the prepared dataset YAML (`kpt_shape` present means pose) and raises
+  pre-flight if the loaded model's `.task` disagrees. A dialog announcing one task while the
+  trainer decides another would be a bug by construction, so both derive from one place.
+- **Pre-flight refusals before the run**: mixed-K pose and pose-plus-non-pose projects cannot be
+  expressed in YOLO-pose's single dataset-global `kpt_shape`, and multi-dimensional images and
+  videos are unsupported for YOLO training. Both previously surfaced late — the first deep inside
+  Ultralytics, the second during dataset preparation.
+- **Advanced options collapsed, not removed.** ADR-028 deliberately kept `lr0`/`cos_lr`/
+  `patience` off the main surface; they stay reachable.
+- **Advanced menu entries demoted, not deleted.** Preparing a dataset for external use and
+  training from an externally-prepared folder are real workflows for someone who already has one.
+  "Refresh Fine-Tuned Model List" *is* deleted: a manual refresh action existing at all was the
+  symptom this set out to remove (issue #74 makes registration automatic).
+
+**Alternatives considered**:
+
+- *A wizard*: more clicks, not fewer, for a form that fits on one screen.
+- *Keeping two dialogs and just tidying the menus*: the duplicate mechanics (prepare, save,
+  reload) were the actual cost; the menu depth was a symptom.
+- *Asking for the task*: every project already answers it, and a user who picks wrongly discovers
+  it as an opaque Ultralytics failure.
+
+**Consequences**:
+
+- The trainers (`YOLOTrainer`, `SAMFineTuner`) are untouched — this is UI and orchestration only,
+  so the GPU gate, busy guard, progress/stop dialog and automatic MLflow configuration (ADR-027)
+  all keep working unchanged.
+- The base model must be loaded *before* dataset preparation, so `train_model`'s `.task`-vs-YAML
+  pre-flight still runs. Reordering those two steps would silently disable the check that turns
+  an opaque failure into an actionable message.
+- Irrelevant fields hide rather than grey out when the type changes: a permanently-disabled
+  control invites the user to wonder what would enable it.
+
+---
+
+## ADR-043: A Gated Shortcut Registry Instead of More Top-Level Event Filters
+
+**Status**: Accepted (issue #65; fulfils the ADR-015 follow-up)
+
+**Context**: The app had exactly three global shortcuts (F2, Undo, Redo). Every class switch cost
+a trip to the class list with the mouse and every tool switch a trip to the sidebar — in a dense
+annotation session, the single largest source of wasted motion. Digits 1-9 and every letter were
+unclaimed.
+
+**Decision**: Bare-key bindings go through a **gated application-wide event filter**, not
+`QShortcut`.
+
+- A `QShortcut` on `3` with `ApplicationShortcut` context swallows that keystroke in **every**
+  `QLineEdit` in the app: renaming a class to "Layer 3" or typing a DINO phrase would silently
+  drop characters. An event filter is the only mechanism that can be *conditional* on where the
+  focus currently is. `QShortcut` remains right for modified keys (Ctrl+Z, F2) that no text field
+  wants.
+- `ShortcutEventFilter` is a **registry** — `{(key, modifiers): callable}` plus a list of gate
+  predicates that must all pass — rather than another bespoke filter. This is what ADR-015's
+  follow-up note asked for: *"Future review modes should share filter or layer via strategy
+  registry, not install multiple top-level filters."*
+- The two gate predicates live in `ui/input_gates.py` and are **shared with
+  `DINOReviewEventFilter`**, which previously duplicated them inline. Two filters drifting apart
+  on a *safety* predicate is precisely the failure that note warned about. The extraction also
+  widened the DINO filter's notion of "typing" to include spin boxes and editable combos.
+- `widget_is_text_entry` is split from `focus_is_text_entry` so the classification is testable on
+  its own: which widget holds focus is a property of the windowing system and unreliable under
+  the offscreen platform, whereas "is a QSpinBox a text entry" is a decision this module owns.
+- Tool bindings call `ImageAnnotator.activate_tool` and nothing else — never `current_tool` or
+  the SAM flags directly — so a SAM tool still cannot end up active alongside a manual one. A
+  test asserts the binding does not write `current_tool`.
+
+**Alternatives considered**:
+
+- *`QShortcut` for everything*: breaks text entry, as above.
+- *`keyPressEvent` on the main window*: `QTableWidget` and other focusable children consume keys
+  before they bubble — the original reason `ui/shortcuts.py` uses `ApplicationShortcut` at all.
+- *A second bespoke top-level filter*: the thing ADR-015 explicitly warned against.
+- *A modifier-based second bank for classes 10+*: two-key class selection is slower than
+  clicking, so it would add surface without adding speed. Digits address the first nine; the rest
+  stay mouse-reachable.
+
+**Consequences**:
+
+- Adding a global-key feature now means registering a binding, not installing a filter. Ctrl+C /
+  Ctrl+V for the annotation clipboard (issue #66) joined this way, and inherit the same gating —
+  Ctrl+C in a rename field still copies text.
+- A binding that returns `False` does not consume the event, which is what makes an out-of-range
+  digit a silent no-op rather than an error.
+- Discoverability is a paint-pass concern: `ClassShortcutDelegate` draws the 1-9 badge rather
+  than appending it to the item text, because **the item text IS the class name** across the app
+  (`findItems(MatchExactly)`, the `Temp-` prefix checks, `text()[5:]` on accept, rename).
+  Decorating it would break all of those at runtime only.

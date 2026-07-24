@@ -551,6 +551,115 @@ def generate_slice_name(filename, t, z, c, s):
 # Example: "stack.tif_T0_Z5_C0"
 ```
 
+## The Shortcut Registry and Its Gates (issue #65, ADR-043)
+
+The app has **two** keyboard mechanisms, and which one a binding belongs to is a real decision:
+
+| Mechanism | For | Why |
+|---|---|---|
+| `QShortcut` with `ApplicationShortcut` | **unconditional** bindings — Ctrl+Z, Ctrl+Y, F2 | `QTableWidget` and other focusable children consume keys before they bubble to the main window, so `keyPressEvent` never sees them. No text field wants a modified key. |
+| `ShortcutEventFilter` (`ui/shortcuts.py`) | **conditional** bindings — bare digits and letters, plus Ctrl+C/Ctrl+V | An `ApplicationShortcut` on `3` swallows that keystroke in *every* `QLineEdit`: renaming a class to "Layer 3" or typing a DINO phrase would silently drop characters. An event filter is the only mechanism that can be conditional on where focus is. |
+
+The filter is a **registry**, not another bespoke filter: `{(key, modifiers): callable}` plus a
+list of gate predicates that must all pass. Adding a global-key feature means registering a
+binding. This is what ADR-015's follow-up asked for.
+
+### The gates
+
+Both live in `ui/input_gates.py` and are **shared with `DINOReviewEventFilter`**, which used to
+duplicate them inline. Two filters drifting apart on a *safety* predicate is exactly the failure
+that note warned about.
+
+- `no_modal_open()` — a modal owns the keyboard; firing a canvas binding underneath it would act
+  on state the user cannot see.
+- `focus_is_text_entry()` — covers `QLineEdit`, `QTextEdit`, `QPlainTextEdit`, `QAbstractSpinBox`
+  and **editable** combo boxes. A non-editable combo takes no typed text, so gating on it would
+  needlessly disable the bindings whenever a dropdown has focus.
+
+`widget_is_text_entry(widget)` is split out from `focus_is_text_entry()` deliberately: which
+widget holds focus is a property of the windowing system and unreliable under the offscreen
+platform used in CI, whereas "is a `QSpinBox` a text entry" is a decision this module owns and
+must get right. The split is what makes the classification testable.
+
+### Rules for new bindings
+
+- A binding returning `False` does **not** consume the event — that is what makes an out-of-range
+  digit a silent no-op rather than an error.
+- Tool bindings must call `ImageAnnotator.activate_tool` and nothing else. Writing `current_tool`
+  or the SAM flags directly reintroduces the drift the choke-point exists to prevent.
+- Digits address the **first nine** classes only. Classes 10+ stay mouse-reachable; a
+  modifier-based second bank was rejected because two-key class selection is slower than clicking.
+
+### Discoverability without breaking the item text
+
+`ClassShortcutDelegate` *paints* the 1-9 badge. It cannot go into the item text, because **the
+item text IS the class name** across the app — `findItems(MatchExactly)` re-selects on it, the
+`Temp-` prefix checks drive the whole review workflow, `text()[5:]` derives the permanent name on
+accept, and rename reads it back. The same rule applies to the review-score badge on the image
+list (`ImageScoreDelegate`, issue #71), where the text additionally backs the
+`all_images[i]` ↔ `image_list.item(i)` positional invariant (ADR-035).
+
+## The Annotation Clipboard (issue #66)
+
+App-level, not per-image: it survives switching image, slice, frame and project, because "copy
+here, paste 40 slices later" is the entire point. Deliberately **not** the system clipboard —
+annotations are rich dicts with class bindings and schema constraints, and round-tripping them
+through text would lose the class-mapping decision.
+
+Three rules, each present because of a specific way the naive version breaks:
+
+1. **Deep copy in and out.** `image_label.annotations` is itself a deep copy and PyQt round-trips
+   `UserRole` dicts as copies, so value-equality is the only stable identity (ADR-022). A
+   reference would make the pasted shape an alias of the source.
+2. **Clamp, don't clip.** The target may be smaller. Per-coordinate clamping preserves vertex
+   count and ordering (ADR-024); a shapely clip is geometrically prettier but changes the vertex
+   count out from under a shape the user is about to nudge. `segmentation_raw` is clamped the
+   same way, or restoring Detail-% to 100 would push coordinates back out of bounds.
+3. **A pose travels only to a class with the same K.** K is locked once instances exist
+   (ADR-029); a 17-point pose on a 5-point class is not slightly wrong, it is corrupt. Mismatches
+   are reported and skipped — and a skipped pose does not cost the user the polygons pasted
+   alongside it.
+
+One `record_history()` before any mutation, so a five-annotation paste is one Ctrl+Z. A cancel at
+the class-mapping dialog pastes **nothing at all**: a partial paste after a cancel is worse than
+none.
+
+## Onion-Skinning and the Slice LRU (issue #67)
+
+The ghost is drawn **after** the current image and **before** every annotation layer. The issue
+asked for "underneath the current image", which cannot work: unlike an animation cel, an image
+slice is a fully opaque raster, so anything painted beneath it is invisible. The chosen order
+delivers what the requirement actually wanted — a visible ghost with annotations legible on top.
+
+Neighbours are resolved in `display_image`, the single funnel where the canvas image changes,
+**never in `paintEvent`**: a cache lookup (and on a miss, a full decode) per repaint would put
+decoding in the pan and zoom path. They go through `LazySliceList.get` like every other consumer,
+so the shared bounded LRU (ADR-036) stays the only owner of decoded pixels. The default
+single-neighbour mode costs one extra live decode; "both" costs two, which is why the capacity of
+8 was left alone rather than quietly raised.
+
+The ghost is **decorative and stays that way**: it never becomes `original_pixmap` (what SAM,
+export and every measurement read), contributes nothing to hit-testing, and is dropped on
+`clear()`. Opacity is restored to 1.0 after the pass so it cannot wash out later layers.
+
+## Vertex Count Changes and the Detail-% Baseline (issue #68)
+
+`segmentation_raw` (ADR-025) is captured lazily the first time a mask is thinned and is the source
+the Detail-% spinbox re-simplifies **from**. Once the live polygon gains or loses a vertex, that
+copy describes a different shape — so the next Detail-% drag would re-derive the outline from
+pre-edit geometry and **silently revert the user's work**.
+
+Resolved by **invalidating** rather than mirroring. Mirroring only means something if the raw and
+the live polygon share a vertex correspondence, and after simplification they do not: the raw is
+denser, so "the vertex the user just deleted" has no single counterpart there. Invalidation makes
+the edited shape the new baseline — correct, and explainable as "Detail-% restarts from what you
+now see". Esc restores the raw/detail pair too, so cancelling costs nothing either.
+
+The undo model stays session-scoped: the baseline is captured at edit-mode entry, insert/remove
+save and refresh the table via `polygonGeometryChanged` **without** pushing history, and Enter
+commits the session as one undo step. Esc reverts everything including insertions, leaving no
+entry (ADR-026).
+
 ## Keyboard Shortcuts
 
 ### Global Shortcuts

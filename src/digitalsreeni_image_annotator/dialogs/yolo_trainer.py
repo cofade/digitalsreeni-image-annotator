@@ -754,9 +754,27 @@ class YOLOTrainer(QObject):
             logger.debug(f"Loaded class names: {self.class_names}")
 
             self.prediction_keypoint_schema = None
-            full_schema = self.prediction_yaml.get('keypoint_schema')
+            # A model saved by this app carries a JSON sidecar next to its
+            # weights (issue #74). Prefer it, then the training yaml's embedded
+            # schema, then the bare kpt_shape reconstruction. Each step is a
+            # strict fallback, so an externally trained .pt with none of them
+            # still loads exactly as it did before the sidecar existed.
+            from ..core.model_sidecar import read_sidecar
+
+            sidecar = read_sidecar(model_path)
+            full_schema = (sidecar or {}).get('keypoint_schema') or \
+                self.prediction_yaml.get('keypoint_schema')
+            if sidecar and sidecar.get('class_names') and 'names' not in self.prediction_yaml:
+                self.class_names = sidecar['class_names']
             if full_schema:
                 self.prediction_keypoint_schema = sanitize_schema(full_schema)
+            elif (sidecar or {}).get('kpt_shape'):
+                k = int(sidecar['kpt_shape'][0])
+                self.prediction_keypoint_schema = sanitize_schema({
+                    "names": [f"kp{i}" for i in range(k)],
+                    "skeleton": [],
+                    'flip_idx': sidecar.get('flip_idx'),
+                })
             elif self.prediction_yaml.get('kpt_shape'):
                 k = int(self.prediction_yaml['kpt_shape'][0])
                 self.prediction_keypoint_schema = sanitize_schema({

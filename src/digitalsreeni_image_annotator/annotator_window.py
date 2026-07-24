@@ -25,6 +25,7 @@ from .controllers.clipboard_controller import ClipboardController
 from .controllers.curation_controller import CurationController
 from .controllers.dino_controller import DINOController
 from .controllers.image_controller import ImageController
+from .controllers.model_registry_controller import ModelRegistryController
 from .controllers.project_controller import ProjectController
 from .controllers.qc_controller import QCController
 from .controllers.review_controller import ReviewController
@@ -169,6 +170,9 @@ class ImageAnnotator(QMainWindow):
         # One entry point for all training (issue #73). Orchestrates the
         # existing trainers; it does not replace them.
         self.training_controller = TrainingController(self)
+        # Post-training lifecycle (issue #74): register, save into the project
+        # with a sidecar, report, and offer a one-click try.
+        self.model_registry_controller = ModelRegistryController(self)
         # Embedding-based near-duplicate detection (issue #72). Recommends
         # only — it has no delete path at all, by design.
         self.curation_controller = CurationController(self)

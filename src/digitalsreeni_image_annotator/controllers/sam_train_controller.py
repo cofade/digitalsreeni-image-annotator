@@ -232,7 +232,19 @@ class SAMTrainController(QObject):
             self._set_sam_ui_locked(False)
             QMessageBox.critical(self.mw, "Could Not Start Training", str(e))
 
+    def _remember_mlflow_url(self, url):
+        """Latch the run URL so the results panel can link to it.
+
+        It arrives asynchronously (ADR-027), so the panel may open before or
+        after this fires; both paths handle a missing URL.
+        """
+        self._last_mlflow_url = url
+        dialog = getattr(self.mw, "training_results_dialog", None)
+        if dialog is not None:
+            dialog.set_mlflow_url(url)
+
     def _on_mlflow_run_url(self, url):
+        self._remember_mlflow_url(url)
         """The fine-tuning run has opened in MLflow (signalled from the worker
         thread; this runs on the GUI thread). Show a clickable link in the
         progress dialog, start the MLflow UI server once, and open the run in
@@ -313,6 +325,8 @@ class SAMTrainController(QObject):
             QMessageBox.critical(self.mw, "Fine-Tuning Error", f"An error occurred:\n{result}")
             return
 
+        # Registration is automatic (issue #74) -- the manual "Refresh
+        # Fine-Tuned Model List" action it used to require is gone.
         self.refresh_model_selector()
         out_path = result.get("out_path")
         display = f"★ {os.path.splitext(os.path.basename(out_path))[0]}" if out_path else None
@@ -320,11 +334,32 @@ class SAMTrainController(QObject):
             idx = self.mw.sam_model_selector.findText(display)
             if idx >= 0:
                 self.mw.sam_model_selector.setCurrentIndex(idx)
-        QMessageBox.information(
-            self.mw, "Fine-Tuning Complete",
-            f"Saved and verified:\n{out_path}\n\nSelected it in the SAM model "
-            f"dropdown — use SAM-box / SAM-points to try it.",
+
+        # Same post-training routine as the YOLO path, so both behave
+        # identically here: copy into <project>/models with a sidecar and show
+        # the results panel instead of a bare message box.
+        summary = self.mw.model_registry_controller.finish_run(
+            model_type="sam",
+            result=result,
+            weights_path=out_path,
+            metrics=result.get("metrics"),
+            config=result.get("config"),
+            mlflow_url=getattr(self, "_last_mlflow_url", None),
         )
+        if summary is None:
+            QMessageBox.information(
+                self.mw, "Fine-Tuning Complete",
+                f"Saved and verified:\n{out_path}\n\nSelected it in the SAM "
+                "model dropdown — use SAM-box / SAM-points to try it.",
+            )
+            return
+
+        from ..dialogs.training_results_dialog import TrainingResultsDialog
+
+        self.mw.training_results_dialog = TrainingResultsDialog(
+            self.mw, summary, self.mw.model_registry_controller
+        )
+        self.mw.training_results_dialog.exec()
 
     # -- selector ------------------------------------------------------------
 

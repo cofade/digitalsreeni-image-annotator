@@ -485,7 +485,19 @@ class YOLOController(QObject):
         self.mw.training_thread.finished.connect(self.training_finished)
         self.mw.training_thread.start()
 
+    def _remember_mlflow_url(self, url):
+        """Latch the run URL so the results panel can link to it (issue #74).
+
+        It arrives asynchronously (ADR-027), so the panel may open before or
+        after this fires; both paths handle a missing URL.
+        """
+        self._last_mlflow_url = url
+        dialog = getattr(self.mw, "training_results_dialog", None)
+        if dialog is not None:
+            dialog.set_mlflow_url(url)
+
     def _on_mlflow_run_url(self, url):
+        self._remember_mlflow_url(url)
         """The YOLO run has opened in MLflow (signalled from the worker thread;
         this runs on the GUI thread). Show a clickable link in the progress
         dialog, start the MLflow UI server once, and open the run in the
@@ -544,19 +556,70 @@ class YOLOController(QObject):
                 "Training Error",
                 f"An error occurred during training: {results}",
             )
-        else:
-            saved = getattr(self.mw.yolo_trainer, "last_saved_model_path", None)
-            where = (
-                f"\n\nSaved to:\n{saved}\n\nIt's now selectable under "
-                "Prediction Settings → Load Model."
-                if saved
-                else ""
-            )
+            return
+
+        # Post-training lifecycle (issue #74): register, save, report, try.
+        # Both trainers converge on the same routine so YOLO and SAM behave
+        # identically at the end of a run.
+        self._finish_post_training(results)
+
+    def _finish_post_training(self, results):
+        weights = getattr(self.mw.yolo_trainer, "last_saved_model_path", None)
+        summary = self.mw.model_registry_controller.finish_run(
+            model_type="yolo",
+            result=results,
+            weights_path=weights,
+            metrics=self._collect_metrics(results),
+            config=getattr(self.mw.yolo_trainer, "last_train_config", None),
+            mlflow_url=getattr(self, "_last_mlflow_url", None),
+        )
+        if summary is None:
+            # Nothing was registered (no weights, or a project load in
+            # progress). Say so rather than showing a results panel for a run
+            # that produced nothing usable.
             QMessageBox.information(
                 self.mw,
                 "Training Complete",
-                f"YOLO model training completed successfully.{where}",
+                "Training finished, but no weights were available to register.",
             )
+            return
+
+        from ..dialogs.training_results_dialog import TrainingResultsDialog
+
+        self.mw.training_results_dialog = TrainingResultsDialog(
+            self.mw, summary, self.mw.model_registry_controller
+        )
+        self.mw.training_results_dialog.exec()
+
+    def _collect_metrics(self, results):
+        """Best-effort metrics from an Ultralytics results object.
+
+        Every read is defensive: keys vary by task and Ultralytics version, and
+        a missing one must produce a shorter panel, never an exception on a run
+        that actually succeeded.
+        """
+        metrics = {}
+        box = getattr(getattr(results, "box", None), "map50", None)
+        if box is not None:
+            metrics["mAP50"] = float(box)
+        map_all = getattr(getattr(results, "box", None), "map", None)
+        if map_all is not None:
+            metrics["mAP50-95"] = float(map_all)
+        results_dict = getattr(results, "results_dict", None)
+        if isinstance(results_dict, dict):
+            for key, value in results_dict.items():
+                if "mAP50-95" in key:
+                    metrics.setdefault("mAP50-95", float(value))
+                elif "mAP50" in key:
+                    metrics.setdefault("mAP50", float(value))
+                elif "precision" in key.lower():
+                    metrics.setdefault("precision", float(value))
+                elif "recall" in key.lower():
+                    metrics.setdefault("recall", float(value))
+        epoch = getattr(getattr(results, "trainer", None), "epoch", None)
+        if epoch is not None:
+            metrics["epochs_completed"] = int(epoch) + 1
+        return metrics
 
     def set_confidence_threshold(self):
         if not hasattr(self.mw, "current_project_file"):

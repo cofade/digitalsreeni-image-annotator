@@ -25,6 +25,7 @@ from .controllers.clipboard_controller import ClipboardController
 from .controllers.dino_controller import DINOController
 from .controllers.image_controller import ImageController
 from .controllers.project_controller import ProjectController
+from .controllers.qc_controller import QCController
 from .controllers.sam_controller import SAMController
 from .controllers.segment_everything_controller import SegmentEverythingController
 from .controllers.sam_train_controller import SAMTrainController
@@ -156,6 +157,9 @@ class ImageAnnotator(QMainWindow):
         # it survives image / slice / frame / project switches, which is the
         # entire point of copying a shape across a stack.
         self.clipboard_controller = ClipboardController(self)
+        # Rule-based annotation audit (issue #70). The rules themselves are
+        # Qt-free in core/annotation_qc.py so the headless CLI can reuse them.
+        self.qc_controller = QCController(self)
 
         # CanvasContext gives ImageLabel a narrow read view of main-window
         # state. All write paths from the canvas leave as Qt signals
@@ -761,6 +765,9 @@ class ImageAnnotator(QMainWindow):
         self.dataset_splitter = DatasetSplitterTool(self)
         self.dataset_splitter.setWindowModality(Qt.WindowModality.ApplicationModal)
         self.dataset_splitter.show_centered(self)
+
+    def check_annotations(self):
+        return self.qc_controller.run_audit()
 
     def show_annotation_statistics(self):
         if not self.all_annotations:

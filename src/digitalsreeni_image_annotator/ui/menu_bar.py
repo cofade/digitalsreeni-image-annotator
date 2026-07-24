@@ -115,6 +115,16 @@ def build_menu_bar(window):
     annotation_stats_action.setShortcut(QKeySequence("Ctrl+Alt+S"))
     tools_menu.addAction(annotation_stats_action)
 
+    # Diagnostic counterpart to the (purely descriptive) statistics above:
+    # this one reports what is *wrong* with the dataset (issue #70).
+    check_annotations_action = QAction("Check Annotations…", window)
+    check_annotations_action.setToolTip(
+        "Audit the project for invalid geometry, duplicates, class-name typos "
+        "and leftover review classes"
+    )
+    check_annotations_action.triggered.connect(window.check_annotations)
+    tools_menu.addAction(check_annotations_action)
+
     coco_json_combiner_action = QAction("COCO JSON Combiner", window)
     coco_json_combiner_action.triggered.connect(window.show_coco_json_combiner)
     tools_menu.addAction(coco_json_combiner_action)

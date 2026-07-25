@@ -102,23 +102,29 @@ ignore_errors = true
 follow_imports = "silent"
 ignore_missing_imports = false
 warn_unused_configs = true
+# Do not read type information out of installed packages. This is the only
+# setting that behaves identically across the 3.10-3.14 CI matrix: a dependency
+# ships whatever stubs its own release targets, and mypy parses them under OUR
+# python_version. numpy 2.x's __init__.pyi uses 3.12+ `type` statements, so
+# targeting the 3.10 floor made mypy fail on numpy's own stubs on every matrix
+# entry -- a file we neither own nor call. A per-module follow_imports = "skip"
+# does not prevent that parse for site-packages stubs; this does.
+#
+# The trade-off is explicit: third-party boundaries type as `Any`, which is
+# already what the ignore list below declares for most of them. We type-check
+# our own core, not our dependencies.
+no_site_packages = true
 
 # Untyped third-party packages. Listed individually rather than switching on a
 # global ignore_missing_imports, so the ignore list stays visible and shrinks
 # as upstreams ship stubs.
 #
-# follow_imports = "skip" matters as much as the ignore: several of these ship
-# source (or stubs) written for a newer Python than our floor, and mypy parsing
-# them under python_version = "3.10" fails on syntax we neither own nor call.
-# Skipping means we type-check against `Any` at those boundaries, which is the
-# honest description of an untyped dependency anyway.
+# With no_site_packages above, every one of these is unresolvable by design;
+# listing them individually rather than switching on a global
+# ignore_missing_imports keeps the set visible, so a typo in an INTERNAL import
+# still fails the check instead of being silently ignored.
 #
-# numpy is here for that second reason only -- it IS typed, but on Python 3.14
-# its __init__.pyi uses 3.12+ `type` statements, which mypy rejects while
-# targeting 3.10. Keeping python_version pinned to the floor is worth more than
-# following numpy's stubs: the floor is what we promise to support, and a
-# 3.10-incompatible construct in our own code has to fail the check on every
-# matrix entry, not only the oldest one.
+# follow_imports = "skip" is belt-and-braces for the same parse problem.
 [[tool.mypy.overrides]]
 module = [
     "cv2.*", "czifile.*", "mlflow.*", "numpy.*", "plotly.*", "pystackreg.*",

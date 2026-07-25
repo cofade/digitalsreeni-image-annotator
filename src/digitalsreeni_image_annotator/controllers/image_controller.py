@@ -440,6 +440,14 @@ class ImageController(QObject):
     def setup_slice_list(self):
         self.mw.slice_list = QListWidget()
         self.mw.slice_list.itemClicked.connect(self.switch_slice)
+        # Keyboard navigation. A focused QListWidget handles the arrow keys
+        # itself and does NOT propagate them, so the main window's keyPressEvent
+        # never saw Up/Down here -- the row moved and the canvas did not follow.
+        # The image list above has always connected both signals, which is
+        # exactly why arrow keys worked there and not here.
+        self.mw.slice_list.currentRowChanged.connect(
+            lambda _row: self.switch_slice(self.mw.slice_list.currentItem())
+        )
         self.mw.image_list_layout.addWidget(QLabel("Slices:"))
         self.mw.image_list_layout.addWidget(self.mw.slice_list)
 
@@ -769,6 +777,15 @@ class ImageController(QObject):
 
     def switch_slice(self, item):
         if item is None:
+            return
+        # Already showing it -> nothing to do. This is what lets
+        # `currentRowChanged` drive navigation without blockSignals at a dozen
+        # call sites: every programmatic selection in this file selects the
+        # slice it has just made current, so each one lands here as a no-op,
+        # and the two paths that set the row and THEN call switch_slice
+        # explicitly (Home/End, DINO review navigation) do the work on the
+        # signal and no-op on the explicit call.
+        if item.text() == self.mw.current_slice:
             return
         # check_unsaved_changes prompts the user and commits/discards
         # all dirty tool handlers; returns False on Cancel.

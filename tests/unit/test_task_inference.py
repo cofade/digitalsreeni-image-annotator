@@ -198,30 +198,82 @@ def test_a_non_pose_project_has_no_pose_blockers():
     assert ti.pose_training_blockers(_project(cell=[_polygon()]), {}) == []
 
 
-def test_multidimensional_images_block_yolo_training():
-    """Reported up front instead of failing during dataset preparation, which
-    is where it used to surface."""
+# --- stacks and videos ARE trainable ---------------------------------------
+#
+# The blocker here used to refuse every stack and video outright, citing a note
+# that predated slice-aware export. A video's image_slices[base] is an ordinary
+# LazySliceList and the exporters resolve slice pixels through it (#45/#47), so
+# annotating 27 frames of a video produces a perfectly good dataset -- which
+# training then declined to use.
+
+
+def test_a_video_with_loaded_frames_does_not_block_training():
+    images = [{"file_name": "clip.mp4", "is_multi_slice": True, "is_video": True}]
+    assert ti.unresolvable_stack_blockers(images, loaded_stack_bases=["clip"]) == []
+
+
+def test_a_stack_with_no_loaded_slices_blocks_training():
+    """The genuine failure: no materialised slices means no pixels to write,
+    and the exporter would skip it with nothing but a log line."""
     images = [
         {"file_name": "flat.png"},
         {"file_name": "stack.tif", "is_multi_slice": True},
-        {"file_name": "clip.avi", "is_video": True},
     ]
-    blockers = ti.multidimensional_blockers(images)
+    blockers = ti.unresolvable_stack_blockers(images, loaded_stack_bases=[])
     assert len(blockers) == 1
-    assert "stack.tif" in blockers[0] and "clip.avi" in blockers[0]
+    assert "stack.tif" in blockers[0]
+    assert "flat.png" not in blockers[0]
 
 
 def test_plain_images_do_not_block():
-    assert ti.multidimensional_blockers([{"file_name": "a.png"}]) == []
-    assert ti.multidimensional_blockers([]) == []
+    assert ti.unresolvable_stack_blockers([{"file_name": "a.png"}], []) == []
+    assert ti.unresolvable_stack_blockers([], []) == []
 
 
 def test_the_blocker_list_is_truncated_for_readability():
     images = [
         {"file_name": f"stack{i}.tif", "is_multi_slice": True} for i in range(12)
     ]
-    blockers = ti.multidimensional_blockers(images)
+    blockers = ti.unresolvable_stack_blockers(images, loaded_stack_bases=[])
     assert "and 7 more" in blockers[0]
+
+
+# --- what actually counts as an image --------------------------------------
+
+
+def test_a_video_contributes_its_frames_not_itself():
+    """Counting the parent entry reported a video with annotated frames as
+    "368 annotation(s) across 0 of 1 image(s)" -- both halves wrong, and the
+    second alarming enough to read as data loss."""
+    images = [
+        {"file_name": "clip.mp4", "is_multi_slice": True, "is_video": True},
+        {"file_name": "flat.png"},
+    ]
+    names = ti.trainable_image_names(
+        images, {"clip": ["clip_F00001", "clip_F00002", "clip_F00003"]}
+    )
+    assert names == ["clip_F00001", "clip_F00002", "clip_F00003", "flat.png"]
+
+
+def test_a_stack_whose_slices_are_unknown_contributes_nothing():
+    images = [{"file_name": "stack.tif", "is_multi_slice": True}]
+    assert ti.trainable_image_names(images, {}) == []
+
+
+def test_the_summary_counts_annotated_frames(): 
+    """End to end for the Data row: frames annotated, frames total."""
+    images = [{"file_name": "clip.mp4", "is_multi_slice": True, "is_video": True}]
+    by_base = {"clip": [f"clip_F{i:05d}" for i in range(4)]}
+    project = {
+        "clip_F00000": {"bee": [_polygon()]},
+        "clip_F00002": {"bee": [_polygon()]},
+    }
+
+    summary = ti.summarise_dataset(project, ti.trainable_image_names(images, by_base))
+
+    assert summary["images"] == 4
+    assert summary["annotated_images"] == 2
+    assert summary["unlabelled_images"] == 2
 
 
 # --- the dialog's derived config ------------------------------------------
@@ -231,19 +283,20 @@ class _FakeWindow(QWidget):
     """Just the three attributes the dialog reads. A QWidget because QDialog
     requires a real widget parent."""
 
-    def __init__(self, annotations, images, schemas=None):
+    def __init__(self, annotations, images, schemas=None, image_slices=None):
         super().__init__()
         self.all_annotations = annotations
         self.all_images = images
         self.keypoint_schemas = schemas or {}
+        self.image_slices = image_slices or {}
 
 
 @pytest.fixture
 def dialog_factory(qtbot):
     from src.digitalsreeni_image_annotator.dialogs.train_dialog import TrainDialog
 
-    def _make(annotations, images, schemas=None):
-        window = _FakeWindow(annotations, images, schemas)
+    def _make(annotations, images, schemas=None, image_slices=None):
+        window = _FakeWindow(annotations, images, schemas, image_slices)
         qtbot.addWidget(window)
         dialog = TrainDialog(window)
         qtbot.addWidget(dialog)
@@ -279,13 +332,26 @@ def test_the_dialog_refuses_a_mixed_k_pose_project(dialog_factory):
     assert "one keypoint count" in dialog.blocker_label.text()
 
 
-def test_the_dialog_refuses_a_multidimensional_project(dialog_factory):
+def test_the_dialog_refuses_a_stack_with_no_loaded_slices(dialog_factory):
     dialog = dialog_factory(
         _project(cell=[_polygon()]),
         [{"file_name": "stack.tif", "is_multi_slice": True}],
     )
     assert dialog.train_button.isEnabled() is False
     assert "stack.tif" in dialog.blocker_label.text()
+
+
+def test_the_dialog_allows_training_on_annotated_video_frames(dialog_factory):
+    """The regression: 368 polygons across a video's frames, and Train was
+    disabled with a message claiming videos cannot be used."""
+    dialog = dialog_factory(
+        {"clip_F00001": {"bee": [_polygon()]}},
+        [{"file_name": "clip.mp4", "is_multi_slice": True, "is_video": True}],
+        image_slices={"clip": [("clip_F00001", None), ("clip_F00002", None)]},
+    )
+    assert dialog.train_button.isEnabled() is True
+    assert dialog.blocker_label.isVisible() is False
+    assert "1 of 2 image(s)" in dialog.data_label.text()
 
 
 def test_switching_to_sam_lifts_the_yolo_only_blockers(dialog_factory):

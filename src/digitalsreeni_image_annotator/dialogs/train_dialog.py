@@ -39,6 +39,7 @@ from PyQt6.QtWidgets import (
 )
 
 from ..core import task_inference
+from ..core.slice_cache import slice_names
 
 TYPE_YOLO = "yolo"
 TYPE_SAM = "sam"
@@ -71,9 +72,16 @@ class TrainDialog(QDialog):
         self.setWindowTitle("Train Model")
         self.custom_base_path = None
 
-        image_names = [
-            info.get("file_name") for info in getattr(main_window, "all_images", [])
-        ]
+        # A stack or video contributes its slices, not itself -- count those,
+        # or a video with 27 annotated frames reads as "0 of 1 image(s)".
+        # Name-only, so building this decodes nothing (issue #45).
+        slice_names_by_base = {
+            base: slice_names(collection)
+            for base, collection in getattr(main_window, "image_slices", {}).items()
+        }
+        image_names = task_inference.trainable_image_names(
+            getattr(main_window, "all_images", []), slice_names_by_base
+        )
         self.summary = task_inference.summarise_dataset(
             main_window.all_annotations, image_names
         )
@@ -214,7 +222,7 @@ class TrainDialog(QDialog):
         """Reasons this configuration cannot run, checked **before** the run.
 
         Both of these used to surface as an opaque failure much later: the
-        pose constraint deep inside Ultralytics, the multi-dimensional one
+        pose constraint deep inside Ultralytics, the unresolvable-slice one
         during dataset preparation.
         """
         if self.training_type() == TYPE_SAM:
@@ -224,8 +232,9 @@ class TrainDialog(QDialog):
                 self.mw.all_annotations, getattr(self.mw, "keypoint_schemas", {})
             )
         )
-        reasons += task_inference.multidimensional_blockers(
-            getattr(self.mw, "all_images", [])
+        reasons += task_inference.unresolvable_stack_blockers(
+            getattr(self.mw, "all_images", []),
+            getattr(self.mw, "image_slices", {}).keys(),
         )
         if self.task is None:
             reasons.append("There are no annotations to train on.")

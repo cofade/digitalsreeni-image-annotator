@@ -15,6 +15,8 @@ thing that should be exhaustively unit-tested on hand-built inputs rather than
 through a dialog.
 """
 
+import os
+
 TASK_DETECT = "detect"
 TASK_SEGMENT = "segment"
 TASK_POSE = "pose"
@@ -160,17 +162,56 @@ def pose_training_blockers(all_annotations, keypoint_schemas):
     return blockers
 
 
-def multidimensional_blockers(all_images):
-    """Reasons YOLO training cannot run on this project's images.
+def _base_name(file_name):
+    return os.path.splitext(file_name or "")[0]
 
-    Multi-dimensional stacks and videos are unsupported for YOLO training — a
-    long-standing constraint. Reported up front instead of failing during
-    dataset preparation, which is where it used to surface.
+
+def trainable_image_names(all_images, slice_names_by_base=None):
+    """The names a training export will actually write labels for.
+
+    A stack or a video **is not itself an image**: it contributes its slices or
+    frames, which is what carries the annotations and what the exporter writes.
+    Counting the parent entries instead reported a video with 27 annotated
+    frames as "368 annotation(s) across 0 of 1 image(s)" -- both halves wrong,
+    and the second one alarming enough to look like data loss.
     """
+    by_base = slice_names_by_base or {}
+    names = []
+    for info in all_images or []:
+        file_name = info.get("file_name")
+        if not file_name:
+            continue
+        if info.get("is_multi_slice") or info.get("is_video"):
+            names.extend(by_base.get(_base_name(file_name), []))
+        else:
+            names.append(file_name)
+    return names
+
+
+def unresolvable_stack_blockers(all_images, loaded_stack_bases=()):
+    """Stacks or videos whose slices cannot be resolved to pixels.
+
+    **Not** "stacks and videos are unsupported". They are supported: a video's
+    ``image_slices[base]`` is an ordinary ``LazySliceList`` and the exporters
+    resolve slice pixels through it (issues #45/#47 -- ``core.video_handler``
+    says so in as many words). Annotate frames of a video and the YOLO export
+    writes them like any other image.
+
+    This function previously blocked every stack and video outright, on the
+    strength of a note that predated slice-aware export, and so refused
+    perfectly good datasets: 368 polygons across a video's frames, and training
+    was unavailable with a message claiming videos cannot be used.
+
+    What genuinely cannot be exported is a stack whose slices were never
+    materialised in this session -- there are no pixels to write, and the
+    exporter would skip it with nothing but a log line.
+    """
+    loaded = set(loaded_stack_bases or ())
     blocked = [
         info.get("file_name")
         for info in all_images or []
-        if info.get("is_multi_slice") or info.get("is_video")
+        if (info.get("is_multi_slice") or info.get("is_video"))
+        and _base_name(info.get("file_name")) not in loaded
     ]
     if not blocked:
         return []
@@ -178,6 +219,6 @@ def multidimensional_blockers(all_images):
     if len(blocked) > 5:
         listed += f", and {len(blocked) - 5} more"
     return [
-        f"{len(blocked)} multi-dimensional image(s) or video(s) cannot be used "
-        f"for YOLO training: {listed}."
+        f"{len(blocked)} stack(s)/video(s) have no loaded slices, so there are "
+        f"no pixels to export: {listed}. Open each one once, then train."
     ]

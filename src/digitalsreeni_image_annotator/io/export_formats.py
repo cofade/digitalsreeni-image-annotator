@@ -376,6 +376,46 @@ def _pose_export_check(all_annotations, class_mapping, keypoint_schemas):
     return k, (flip_idx or list(range(k)))
 
 
+def _slice_index(slices, image_slices):
+    """``{slice_name: collection}`` for every known slice, decoding nothing.
+
+    Built from names only, so constructing it is free. Resolution then goes
+    through :func:`_resolve_slice_image`, which uses the collection's own
+    ``get`` -- the LRU-backed single-slice path.
+
+    The alternative spelling, ``{name: qimage for name, qimage in slices}``,
+    materialises the WHOLE collection at once: on a 191-frame video that is
+    every frame decoded and held simultaneously, which is precisely what the
+    bounded lazy cache (issue #45) exists to prevent. Its fallback then rescans
+    ``image_slices`` linearly per miss, decoding as it goes -- O(n^2) decodes
+    over a stack.
+    """
+    index = {}
+    for collection in (slices, *(image_slices or {}).values()):
+        if not collection:
+            continue
+        # `.names` on a LazySliceList; plain [(name, qimage), ...] otherwise.
+        # Deliberately not importing core.slice_cache.slice_names: this module
+        # must stay Qt-free at import time (ADR-041) and that one reaches Qt.
+        names = getattr(collection, "names", None)
+        if names is None:
+            names = [name for name, _ in collection]
+        for name in names:
+            index.setdefault(name, collection)
+    return index
+
+
+def _resolve_slice_image(index, name):
+    """The QImage for a slice name, or None. One decode at most."""
+    collection = index.get(name)
+    if collection is None:
+        return None
+    getter = getattr(collection, "get", None)
+    if getter is not None:
+        return getter(name)
+    return next((image for n, image in collection if n == name), None)
+
+
 def export_yolo_v5plus(all_annotations, class_mapping, image_paths, slices, image_slices, output_dir, val_split=0, keypoint_schemas=None):
     """
     Export annotations in YOLO v5+ format.
@@ -405,8 +445,9 @@ def export_yolo_v5plus(all_annotations, class_mapping, image_paths, slices, imag
     # Create a mapping of class names to YOLO indices
     class_to_index = {name: i for i, name in enumerate(class_mapping.keys())}
 
-    # Create a mapping of slice names to their QImage objects
-    slice_map = {slice_name: qimage for slice_name, qimage in slices}
+    # Name -> collection, no decoding. Video frames and stack slices both live
+    # here, which is what lets a video's annotated frames train (#45/#47).
+    slice_index = _slice_index(slices, image_slices)
 
     # Deterministically split the annotated images into train/val.
     annotated = [name for name, ann in all_annotations.items() if ann]
@@ -433,14 +474,9 @@ def export_yolo_v5plus(all_annotations, class_mapping, image_paths, slices, imag
             images_dir, labels_dir = images_train_dir, labels_train_dir
 
         # Handle image saving (similar logic to the v4 version)
-        if image_name in slice_map or ('_' in image_name and '.' not in image_name):
-            # Handle slice images
-            qimage = slice_map.get(image_name)
-            if qimage is None:
-                for stack_slices in image_slices.values():
-                    qimage = next((s[1] for s in stack_slices if s[0] == image_name), None)
-                    if qimage:
-                        break
+        if image_name in slice_index or ('_' in image_name and '.' not in image_name):
+            # Handle slice images (stack slices AND video frames)
+            qimage = _resolve_slice_image(slice_index, image_name)
             if qimage is None:
                 logger.warning(f"skipping: no image data for slice {image_name}")
                 continue

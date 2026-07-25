@@ -560,21 +560,12 @@ class ImageAnnotator(QMainWindow):
                 self.delete_selected_annotations()
             elif self.image_list.hasFocus() and self.image_list.currentItem():
                 self.delete_selected_image()
-        elif event.key() == Qt.Key.Key_Up or event.key() == Qt.Key.Key_Down:
-            # Handle slice navigation
-            if self.slice_list.hasFocus():
-                current_row = self.slice_list.currentRow()
-                if event.key() == Qt.Key.Key_Up and current_row > 0:
-                    self.slice_list.setCurrentRow(current_row - 1)
-                elif (
-                    event.key() == Qt.Key.Key_Down
-                    and current_row < self.slice_list.count() - 1
-                ):
-                    self.slice_list.setCurrentRow(current_row + 1)
-                self.switch_slice(self.slice_list.currentItem())
-            else:
-                # Pass the event to the parent for default handling
-                super().keyPressEvent(event)
+        # NOTE: there is deliberately no Up/Down branch here. A focused
+        # QListWidget consumes the arrow keys for its own row navigation and
+        # never propagates them, so this was unreachable code pretending to be
+        # the slice-navigation implementation -- the row moved and the canvas
+        # stayed put. Slice navigation is driven by the slice list's
+        # `currentRowChanged` signal instead (see setup_slice_list).
         elif event.key() == Qt.Key.Key_Home or event.key() == Qt.Key.Key_End:
             # First / last frame jump for videos (issue #48). Gated on the
             # active image being a video AND focus on the slice list or the

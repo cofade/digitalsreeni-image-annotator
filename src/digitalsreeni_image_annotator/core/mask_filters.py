@@ -22,7 +22,13 @@ SAM_EVERYTHING_SOURCE = "sam-everything"
 # drowning, not to second-guess what the user is annotating.
 DEFAULT_MIN_AREA = 100.0        # px^2 -- below this it is speckle, not an object
 DEFAULT_MAX_AREA_FRACTION = 0.5  # a mask over half the image is the background
-DEFAULT_MAX_CANDIDATES = 100
+# A pathological-output valve, NOT a routine filter. At 100 it was the latter:
+# a dense field of cells legitimately produces 120+ masks, and the cap threw
+# away perfectly good ones purely for being 101st by score. Everything that
+# survives the area and overlap filters is a real object the user asked for,
+# so the only job left here is to stop a degenerate run (fine texture, thousands
+# of fragments) from freezing the canvas.
+DEFAULT_MAX_CANDIDATES = 500
 DEFAULT_OVERLAP_IOU = 0.5        # already-annotated regions are not proposals
 
 

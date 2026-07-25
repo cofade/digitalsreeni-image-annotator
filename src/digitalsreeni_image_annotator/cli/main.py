@@ -22,9 +22,12 @@ EXIT_FINDINGS = 2
 def build_parser():
     parser = argparse.ArgumentParser(
         prog="sreeni-cli",
+        # ASCII only in anything the CLI prints. A Windows console under a
+        # legacy code page renders non-ASCII as mojibake when output is
+        # redirected, which is exactly what a CI job or a batch script does.
         description=(
             "Headless operations on DigitalSreeni Image Annotator projects. "
-            "Training is deliberately out of scope — use the GUI for that."
+            "Training is deliberately out of scope - use the GUI for that."
         ),
     )
     parser.add_argument(

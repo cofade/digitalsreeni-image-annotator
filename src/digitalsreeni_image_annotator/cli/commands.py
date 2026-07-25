@@ -90,12 +90,12 @@ def run_export(args):
     if skipped:
         _stderr(
             f"note: {skipped} slice(s) of multi-dimensional images are not "
-            "exported headlessly — slice extraction needs the GUI."
+            "exported headlessly - slice extraction needs the GUI."
         )
 
     os.makedirs(args.out, exist_ok=True)
     label = EXPORT_FORMATS[args.format]
-    _stderr(f"Exporting {len(project.image_paths)} image(s) as {label}…")
+    _stderr(f"Exporting {len(project.image_paths)} image(s) as {label}...")
     try:
         _export_dispatch(label, project, args.out, args.val_split)
     except Exception as exc:
@@ -112,7 +112,7 @@ def run_convert(args):
 
     source_label = IMPORT_FORMATS[args.source_format]
     target_label = EXPORT_FORMATS[args.target_format]
-    _stderr(f"Reading {source_label} from {args.source}…")
+    _stderr(f"Reading {source_label} from {args.source}...")
     try:
         annotations, image_info, _schemas = process_import_format(
             source_label, args.source, {}
@@ -148,7 +148,7 @@ def run_convert(args):
 
     project = _StandaloneProject(annotations, class_mapping, image_paths)
     os.makedirs(args.out, exist_ok=True)
-    _stderr(f"Writing {target_label} to {args.out}…")
+    _stderr(f"Writing {target_label} to {args.out}...")
     try:
         _export_dispatch(target_label, project, args.out, 0)
     except Exception as exc:

@@ -97,6 +97,7 @@ def import_annotations(mw):
             return
 
         logger.debug(f"Selected file: {file_name}")
+        source = file_name
         json_dir = os.path.dirname(file_name)
         images_dir = os.path.join(json_dir, "images")
         try:
@@ -114,6 +115,7 @@ def import_annotations(mw):
             return
 
         logger.debug(f"Selected YAML file: {yaml_file}")
+        source = yaml_file
         try:
             imported_annotations, image_info, recovered_schemas = process_import_format(
                 import_format, yaml_file, mw.class_mapping,
@@ -145,6 +147,7 @@ def import_annotations(mw):
             return
 
         logger.debug(f"Selected VOC directory: {voc_dir}")
+        source = voc_dir
         try:
             imported_annotations, image_info, recovered_schemas = process_import_format(
                 import_format, voc_dir, mw.class_mapping
@@ -270,9 +273,12 @@ def import_annotations(mw):
 
     mw.image_label.update()
 
+    # `source` is set by every branch above. The previous form picked between
+    # `file_name` and `yaml_file` inline, which raised UnboundLocalError on any
+    # branch that set neither -- Pascal VOC (issue #75) crashed here AFTER
+    # doing the whole import, so the user saw a traceback instead of a result.
     message = (
-        f"Annotations have been imported successfully from "
-        f"{file_name if import_format == 'COCO JSON' else yaml_file}.\n"
+        f"Annotations have been imported successfully from {source}.\n"
     )
     message += f"{images_loaded} images were loaded from the 'images' directory.\n"
     if images_not_found:

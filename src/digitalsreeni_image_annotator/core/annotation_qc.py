@@ -183,7 +183,7 @@ def check_geometry(all_annotations, image_sizes, config):
         if area < config.min_area:
             findings.append(Finding(
                 RULE_DEGENERATE_AREA, SEVERITY_ERROR,
-                f"Annotation has effectively no area ({area:.2f} px²).",
+                f"Annotation has effectively no area ({area:.2f} px2).",
                 image, class_name, number,
             ))
 
@@ -343,7 +343,7 @@ def check_statistics(all_annotations, image_sizes, config):
             if area > class_median * config.outlier_factor:
                 findings.append(Finding(
                     RULE_AREA_OUTLIER, SEVERITY_INFO,
-                    f"Area {area:.0f} px² is {area / class_median:.1f}x the "
+                    f"Area {area:.0f} px2 is {area / class_median:.1f}x the "
                     f"median for '{class_name}'.",
                     image, class_name, annotation.get("number"),
                     detail={"area": area, "median": class_median},

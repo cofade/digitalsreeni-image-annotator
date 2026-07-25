@@ -1374,9 +1374,11 @@ class ImageLabel(QLabel):
         self.editing_polygon["segmentation"] = edit_gestures.insert_vertex(
             self.editing_polygon["segmentation"], index, point
         )
-        # Arm the new vertex for dragging, matching what the pre-#68 edge-click
-        # path did -- inserting a point you then have to go and grab is a step
-        # backwards.
+        # Point the drag index at the new vertex. Note this only survives a
+        # programmatic call: reached through a real double-click, the release
+        # that ends the gesture clears it again (the button is already up, so
+        # there is no drag to arm). Kept because a future press-drag path would
+        # want it, not because the double-click flow uses it.
         self.editing_point_index = index
         self._after_vertex_count_change()
         return True

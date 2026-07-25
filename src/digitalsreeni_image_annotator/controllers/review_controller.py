@@ -128,8 +128,7 @@ class ReviewController(QObject):
 
     def score_image(self, file_name, path, trainer):
         """Score one image. Returns the score record; never mutates anything."""
-        results = trainer.predict(path)
-        predictions = self.extract_predictions(results, file_name)
+        predictions = self.extract_predictions(trainer.predict(path), file_name)
 
         ground_truth = [
             annotation
@@ -154,9 +153,13 @@ class ReviewController(QObject):
         writes into the review overlay as a side effect, and a scoring run must
         leave the canvas alone. The class names it produces carry the
         ``Temp-`` prefix, which the scorer strips.
+
+        Accepts either the raw results list or the
+        ``(results, input_size, original_size)`` triple ``YOLOTrainer.predict``
+        actually returns — see :func:`_unwrap_results`.
         """
         predictions = []
-        for result in results or []:
+        for result in _unwrap_results(results):
             boxes = getattr(result, "boxes", None)
             if boxes is None:
                 continue
@@ -238,6 +241,34 @@ class ReviewController(QObject):
         if not file_name:
             return
         self.mw.predict_single_image(file_name)
+
+
+def _unwrap_results(returned):
+    """The Ultralytics results list out of whatever ``predict`` handed back.
+
+    ``YOLOTrainer.predict`` returns ``(results, input_size, original_size)``,
+    not a bare list — ``process_yolo_results`` unpacks it explicitly. Scoring
+    did not, and iterating the triple yielded three objects with no ``.boxes``,
+    so **every image produced zero predictions**. Nothing raised: annotated
+    images simply scored "every label missed" and unannotated ones scored 0,
+    which is a ranking that looks entirely plausible and means nothing.
+
+    Normalising here rather than at the one call site is deliberate: this is
+    the exact silent failure the module docstring warns about, and a second
+    caller passing the triple must not be able to reintroduce it.
+    """
+    if returned is None:
+        return []
+    # The triple: first element is the results list, the other two are
+    # (height, width) size tuples.
+    if (
+        isinstance(returned, tuple)
+        and len(returned) == 3
+        and isinstance(returned[1], tuple)
+        and isinstance(returned[2], tuple)
+    ):
+        return returned[0] or []
+    return returned
 
 
 def unscored_names(slices):

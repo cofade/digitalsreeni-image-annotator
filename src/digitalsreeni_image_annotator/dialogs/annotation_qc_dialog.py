@@ -7,7 +7,13 @@ file only groups, renders and dispatches — core raises, the UI catches
 
 The two affordances that make an audit useful rather than merely informative:
 **jump to** the offending annotation, and **fix** where the repair is
-unambiguous. A batch fix is one undo entry, not one per annotation.
+unambiguous.
+
+A batch fix is one undo entry **per image**, not one per annotation and not one
+for the batch. ``AnnotationHistory`` is keyed by image (ADR-026), so a single
+snapshot would cover only the image on screen and leave every other repair
+permanent — which is what an earlier version of this dialog claimed was a
+single Ctrl+Z.
 """
 
 from PyQt6.QtCore import Qt

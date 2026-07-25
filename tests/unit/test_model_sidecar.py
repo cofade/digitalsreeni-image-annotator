@@ -133,10 +133,19 @@ def test_unique_weights_path_creates_the_directory(tmp_path):
 def test_only_reported_metrics_are_formatted():
     """An empty row reads as "the model scored nothing", a very different claim
     from "this path does not report that"."""
-    rows = model_sidecar.format_metrics({"mAP50": 0.8123, "epochs_completed": 40})
+    rows = model_sidecar.format_metrics(
+        {"mAP50": 0.8123, "recall": 0.77, "unknown_key": 1}
+    )
     labels = [label for label, _ in rows]
-    assert labels == ["mAP@50", "Epochs completed"]
+    assert labels == ["mAP@50", "Recall"]
     assert dict(rows)["mAP@50"] == "0.8123"
+
+
+def test_an_unproduced_metric_has_no_label_mapping():
+    """epochs_completed was mapped but never populated — train_model returns
+    Ultralytics' metrics object, which has no `.trainer` to read an epoch from.
+    A label for a metric nothing emits is a row that pretends to try."""
+    assert model_sidecar.format_metrics({"epochs_completed": 40}) == []
 
 
 def test_formatting_no_metrics_yields_no_rows():

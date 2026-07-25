@@ -741,19 +741,30 @@ diagnostic channel, dialogs are the user channel; the two are independent
 
 ## DINO Temp Annotations — Single Field, Many Images
 
-> **Three producers (ADR-039/040):** the temp-annotation / `dino_batch_results`
-> pipeline is fed by the Grounding-DINO two-stage path, SAM 3's one-stage
-> `SAM3Utils.detect_text`, AND SAM 3 video tracking's uncertain frames
-> (`TrackingController`, source `"sam3"`). Tracking's CONFIDENT frames bypass
-> review and commit directly as `source:"sam3-track"`.
-
-> **Two detect producers (ADR-039):** the temp-annotation pipeline is fed by BOTH the
-> Grounding-DINO two-stage path and SAM 3's one-stage `SAM3Utils.detect_text`.
-> Temps are tagged `source: "dino"` or `source: "sam3"`; every `source ==`
-> check (the `DINOReviewEventFilter` Enter/Escape gate, commit/store/accept)
-> is `in ("dino", "sam3")`. SAM 3 batch results share the SAME
-> `dino_batch_results` dict, so the single-field re-sync rule below applies to
-> both unchanged.
+> **Four producers** now feed the temp-annotation / `dino_batch_results`
+> pipeline. Adding one means widening `REVIEW_SOURCES` in `dino_controller.py`
+> and parking results under the image key — never installing a parallel review
+> mechanic (ADR-015).
+>
+> | Producer | `source` tag | Notes |
+> |---|---|---|
+> | Grounding-DINO two-stage | `"dino"` | the original |
+> | SAM 3 text prompt | `"sam3"` | ADR-039, one-stage `SAM3Utils.detect_text` |
+> | SAM 3 video tracking | `"sam3"` | ADR-040, **uncertain** frames only; confident frames bypass review and commit directly as `source: "sam3-track"` |
+> | Segment Everything | `"sam-everything"` | issue #69, unprompted; additionally carries `assigned_class`, which is `None` until the user clicks the proposal |
+>
+> Every `source ==` check reads the shared `REVIEW_SOURCES` tuple rather than
+> its own literal list, so a producer cannot be half-registered. All four share
+> the SAME `dino_batch_results` dict, so the single-field re-sync rule below
+> applies to all of them unchanged — which is precisely why Segment Everything
+> parks its proposals there rather than living only in `temp_annotations`:
+> without that, one click in the image list would silently discard a batch of
+> class assignments.
+>
+> **Known limit**: one image key holds one producer's entries. Two producers
+> parking for the same image means the last writer wins, silently. In practice
+> the runs are sequential and `stage_proposals` refuses to start while a review
+> is pending, but there is no structural guard.
 
 `ImageLabel.temp_annotations` is a **single list on the image_label**,
 not a per-image cache. It holds the pending DINO+SAM masks shown as

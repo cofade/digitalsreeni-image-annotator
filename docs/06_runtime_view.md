@@ -906,7 +906,11 @@ Tools → Check Annotations…
   └─ AnnotationQCDialog: grouped by rule, with counts
        • "Go to" → reuses the DINO batch-review navigator, which already
          handles the mixed image-name / slice-name namespace
-       • "Fix all repairable" → ONE record_history for the whole batch
+       • "Fix all repairable" → one record_history PER IMAGE, taken before
+         that image's first mutation. AnnotationHistory is keyed by image
+         (ADR-026), so a keyless snapshot would have covered only the image
+         on screen and made every other repair permanent. The cost is one
+         Ctrl+Z per affected image, and the dialog says so.
 ```
 
 Only unambiguous repairs are offered. An area outlier might be a genuinely large object.

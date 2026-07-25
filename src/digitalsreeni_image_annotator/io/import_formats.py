@@ -6,7 +6,12 @@ import yaml
 from PIL import Image
 
 from ..core.keypoint_schema import sanitize_schema
-from ..utils import clamp_bbox, clamp_segmentation, keypoint_instance_bbox
+from ..utils import (
+    calculate_bbox,
+    clamp_bbox,
+    clamp_segmentation,
+    keypoint_instance_bbox,
+)
 
 from ..core.logging_config import get_logger
 
@@ -543,6 +548,26 @@ def _voc_object_polygon(obj):
     return flat if len(flat) >= 6 else None
 
 
+def _voc_object_bbox(obj, xml_name):
+    """``[x, y, w, h]`` from a VOC ``<bndbox>``, or ``None`` if absent/unreadable.
+
+    VOC stores corners (``xmin, ymin, xmax, ymax``); the app stores origin plus
+    size. Convert, never copy.
+    """
+    box = obj.find("bndbox")
+    if box is None:
+        return None
+    try:
+        xmin = float(box.findtext("xmin", "0"))
+        ymin = float(box.findtext("ymin", "0"))
+        xmax = float(box.findtext("xmax", "0"))
+        ymax = float(box.findtext("ymax", "0"))
+    except (TypeError, ValueError):
+        logger.warning("unreadable bndbox in %s", xml_name)
+        return None
+    return [xmin, ymin, max(0.0, xmax - xmin), max(0.0, ymax - ymin)]
+
+
 def import_pascal_voc(directory_path, class_mapping):
     """Import a directory of Pascal VOC XML annotations (issue #75).
 
@@ -619,23 +644,22 @@ def import_pascal_voc(directory_path, class_mapping):
                 next_class_id += 1
             class_id = local_mapping[class_name]
 
-            box = obj.find("bndbox")
-            if box is None:
-                continue
-            try:
-                xmin = float(box.findtext("xmin", "0"))
-                ymin = float(box.findtext("ymin", "0"))
-                xmax = float(box.findtext("xmax", "0"))
-                ymax = float(box.findtext("ymax", "0"))
-            except (TypeError, ValueError):
-                logger.warning(
-                    "skipping an object with unreadable bndbox in %s", xml_name
-                )
-                continue
+            # The outline is read FIRST and a missing <bndbox> is not fatal.
+            # This is not defensiveness for its own sake: shapes drawn in this
+            # app carry no `bbox` key at all (see edit_gestures.sync_bbox_key),
+            # so `export_pascal_voc_both` emits no <bndbox> for them — and an
+            # importer that required one silently discarded every polygon the
+            # app itself had exported, while reporting success.
+            polygon = _voc_object_polygon(obj)
+            if polygon and img_width > 0 and img_height > 0:
+                polygon = clamp_segmentation(polygon, img_width, img_height)
 
-            # VOC stores corners; the app stores [x, y, width, height].
-            # Convert, never copy.
-            bbox = [xmin, ymin, max(0.0, xmax - xmin), max(0.0, ymax - ymin)]
+            bbox = _voc_object_bbox(obj, xml_name)
+            if bbox is None and polygon:
+                # Derive it from the outline the object does have.
+                bbox = calculate_bbox(polygon)
+            if bbox is None:
+                continue  # neither a box nor an outline: nothing to import
             # Producers disagree on whether VOC coordinates are 0- or 1-based,
             # so clamp into the image rather than trusting the file (ADR-024).
             if img_width > 0 and img_height > 0:
@@ -644,21 +668,16 @@ def import_pascal_voc(directory_path, class_mapping):
             annotation = {
                 "category_id": class_id,
                 "category_name": class_name,
-                "type": "rectangle",
+                "type": "polygon" if polygon else "rectangle",
                 "bbox": bbox,
             }
+            if polygon:
+                # The outline belongs to THIS object, so it needs no pairing
+                # heuristic — the other reason inline beats masks here.
+                annotation["segmentation"] = polygon
 
             # `difficult` and `truncated` have no home in the data model.
             # Ignored deliberately rather than invented into new fields.
-
-            # The outline belongs to THIS object, so it needs no pairing
-            # heuristic — which is the other reason inline beats masks here.
-            polygon = _voc_object_polygon(obj)
-            if polygon:
-                if img_width > 0 and img_height > 0:
-                    polygon = clamp_segmentation(polygon, img_width, img_height)
-                annotation["segmentation"] = polygon
-                annotation["type"] = "polygon"
 
             imported_annotations[file_name].setdefault(class_name, []).append(annotation)
 

@@ -68,8 +68,17 @@ invisible.
 ### Pascal VOC
 An XML annotation format (one file per image) from the PASCAL Visual Object Classes challenge.
 Coordinates are corners — `xmin, ymin, xmax, ymax` — not `[x, y, width, height]`, so the importer
-converts (issue #75). Optional `SegmentationClass` mask PNGs carry per-class regions, from which
-polygons are reconstructed.
+converts (issue #75). `export_pascal_voc_both` additionally writes each outline **inline** as
+`<segmentation><polygon><ptN>`, and the importer reads it back, which is what makes the
+round-trip preserve masks rather than degrading them to boxes.
+
+Mask-PNG (`SegmentationClass`) reconstruction is deliberately **not** supported: in a foreign
+dataset the palette index is that producer's class id, with no defined relationship to a class
+name in this project, so any colour-to-class mapping would misattribute regions while appearing
+to work.
+
+A bndbox is always written, derived from the outline when the annotation has no `bbox` key —
+which is the normal case, since shapes drawn in this app carry segmentation only.
 
 ### Fine-Tuning (SAM)
 Continuing training of a pre-trained SAM 2 / 2.1 model on the user's own annotations so the assisted tools work better on their imagery. Because Ultralytics ships no SAM trainer, the app uses a custom loop over the Ultralytics `SAM2Model` (see [ADR-021](09_architecture_decisions.md#adr-021-sam-fine-tuning-via-a-custom-loop-over-the-ultralytics-sam2-module)). **Decoder-only** (default) trains just the mask decoder, freezing the image and prompt encoders — fast, low-VRAM, robust on modest data; optionally the image encoder is also unfrozen for heavily domain-shifted data.
@@ -167,9 +176,6 @@ Post-processing step that removes redundant overlapping boxes. After Grounding D
 
 ### Paint Brush Tool
 Drawing tool that creates freeform annotations by painting a mask with adjustable brush size. Converted to polygon contours when finished.
-
-### Pascal VOC
-Visual Object Classes dataset format. XML-based annotation format primarily for bounding boxes.
 
 ### Phrase (DINO)
 A free-form text description used by Grounding DINO to find objects. Each annotation class has a list of phrases — for example a "drone" class might use phrases `["drone", "quadcopter", "octocopter", "helicopter"]`. The class name itself is always the first phrase and cannot be removed.

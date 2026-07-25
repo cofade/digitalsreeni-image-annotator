@@ -258,6 +258,44 @@ def test_ghost_is_not_hit_testable(label):
 
 
 def test_clearing_the_canvas_drops_the_ghost(label):
-    label.onion_pixmaps = [_ghost()]
+    label.set_onion_pixmaps([_ghost()])
     label.clear()
     assert label.onion_pixmaps == []
+    assert label.scaled_onion_pixmaps() == []
+
+
+# --- the scaled cache ------------------------------------------------------
+#
+# Scaling in the paint pass meant two full-resolution SmoothTransformation
+# rescales per repaint on the GUI thread throughout a pan -- the exact cost the
+# main image already avoids with `scaled_pixmap`. These pin the cache contract.
+
+
+def test_the_scaled_cache_is_reused_within_one_zoom_level(label):
+    label.set_onion_pixmaps([_ghost(100, 100)])
+    first = label.scaled_onion_pixmaps()
+    assert label.scaled_onion_pixmaps() is first, "rescaled on an unchanged zoom"
+
+
+def test_changing_the_zoom_invalidates_the_cache(label):
+    label.zoom_factor = 1.0
+    label.set_onion_pixmaps([_ghost(100, 100)])
+    assert label.scaled_onion_pixmaps()[0].width() == 100
+
+    label.zoom_factor = 2.0
+    assert label.scaled_onion_pixmaps()[0].width() == 200
+
+
+def test_replacing_the_ghosts_invalidates_the_cache(label):
+    """The whole reason set_onion_pixmaps exists rather than assigning the list
+    directly: a stale scaled copy would keep drawing the previous slice."""
+    label.set_onion_pixmaps([_ghost(100, 100)])
+    assert len(label.scaled_onion_pixmaps()) == 1
+
+    label.set_onion_pixmaps([_ghost(100, 100), _ghost(100, 100, "#FF0000")])
+    assert len(label.scaled_onion_pixmaps()) == 2
+
+
+def test_null_ghosts_are_dropped_by_the_cache_not_the_paint_pass(label):
+    label.set_onion_pixmaps([QPixmap(), None, _ghost()])
+    assert len(label.scaled_onion_pixmaps()) == 1

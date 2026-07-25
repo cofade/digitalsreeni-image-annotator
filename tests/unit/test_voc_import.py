@@ -158,7 +158,10 @@ def test_an_object_without_a_name_is_skipped(tmp_path):
     assert list(annotations["a.png"]) == ["cell"]
 
 
-def test_an_object_without_a_bndbox_is_skipped(tmp_path):
+def test_an_object_with_neither_a_bndbox_nor_a_polygon_is_skipped(tmp_path):
+    """No geometry at all is nothing to import. An object with only a polygon
+    is a different case and must NOT be skipped — see
+    test_an_object_with_a_polygon_and_no_bndbox_still_imports."""
     annotations_dir = _write_voc(str(tmp_path), "a.png", [("cell", (10, 10, 50, 50))])
     tree = ET.parse(os.path.join(annotations_dir, "a.xml"))
     obj = ET.SubElement(tree.getroot(), "object")
@@ -243,11 +246,31 @@ def test_similar_filenames_do_not_collide(tmp_path):
 # --- round trip ------------------------------------------------------------
 
 
-def test_inline_polygons_are_read_back(tmp_path):
-    """``export_pascal_voc_both`` writes the outline inline in the XML. The
-    first version of this importer looked for SegmentationClass mask PNGs — a
-    layout the app has never written — so importing the app's own
-    VOC-with-segmentation export silently degraded every polygon to its box.
+def _drawn_polygon(outline, name="cell", number=1):
+    """An annotation in the shape the app ACTUALLY produces for a drawn mask.
+
+    **No ``bbox`` key.** Every drawing path — polygon, rectangle, paint,
+    eraser, SAM accept, DINO accept — emits segmentation-only;
+    ``edit_gestures.sync_bbox_key`` states the rule outright ("drawn shapes
+    have no bbox key"). Seeding a bbox in a round-trip fixture certifies a
+    shape the app never creates, which is exactly how the missing-bndbox bug
+    survived its own test.
+    """
+    return {
+        "segmentation": list(outline),
+        "category_id": 1,
+        "category_name": name,
+        "number": number,
+    }
+
+
+def test_a_drawn_polygon_survives_the_voc_round_trip(tmp_path):
+    """The regression that the first version of this importer shipped.
+
+    ``export_pascal_voc_both`` writes the outline inline, but emitted no
+    ``<bndbox>`` for a segmentation-only annotation — and the importer required
+    one. Exporting a drawn polygon and re-importing it returned an EMPTY
+    project while the UI reported "imported successfully". Total silent loss.
     """
     from PIL import Image
 
@@ -260,16 +283,7 @@ def test_inline_polygons_are_read_back(tmp_path):
     Image.new("RGB", (200, 200), (64, 64, 64)).save(source / "a.png")
 
     outline = [10.0, 10.0, 60.0, 10.0, 60.0, 80.0, 10.0, 80.0]
-    all_annotations = {
-        "a.png": {
-            "cell": [{
-                "segmentation": list(outline),
-                "bbox": [10.0, 10.0, 50.0, 70.0],
-                "category_name": "cell",
-                "number": 1,
-            }]
-        }
-    }
+    all_annotations = {"a.png": {"cell": [_drawn_polygon(outline)]}}
     out_dir = str(tmp_path / "voc_seg")
     os.makedirs(out_dir, exist_ok=True)
     export_pascal_voc_both(
@@ -278,11 +292,72 @@ def test_inline_polygons_are_read_back(tmp_path):
     )
 
     annotations, _info, _schemas = import_pascal_voc(out_dir, {})
-    imported = annotations["a.png"]["cell"][0]
 
+    assert annotations.get("a.png"), "the whole image came back empty"
+    imported = annotations["a.png"]["cell"][0]
     assert imported.get("segmentation"), "the outline was dropped on import"
     assert imported["segmentation"] == pytest.approx(outline)
     assert imported["type"] == "polygon"
+    # The box is derived from the outline, since VOC needs one and the drawn
+    # annotation had none.
+    assert imported["bbox"] == pytest.approx([10.0, 10.0, 50.0, 70.0])
+
+
+def test_the_bbox_exporter_also_emits_a_box_for_a_drawn_polygon(tmp_path):
+    """VOC without a bndbox is not VOC — a foreign consumer would read nothing
+    either, so the fix belongs in both exporters, not just the importer."""
+    from PIL import Image
+
+    from src.digitalsreeni_image_annotator.io.export_formats import (
+        export_pascal_voc_bbox,
+    )
+
+    source = tmp_path / "source"
+    source.mkdir()
+    Image.new("RGB", (200, 200), (64, 64, 64)).save(source / "a.png")
+
+    outline = [10.0, 10.0, 60.0, 10.0, 60.0, 80.0, 10.0, 80.0]
+    out_dir = str(tmp_path / "voc")
+    os.makedirs(out_dir, exist_ok=True)
+    export_pascal_voc_bbox(
+        {"a.png": {"cell": [_drawn_polygon(outline)]}},
+        {"cell": 1}, {"a.png": str(source / "a.png")}, [], {}, out_dir,
+    )
+
+    xml = ET.parse(os.path.join(out_dir, "Annotations", "a.xml"))
+    box = xml.getroot().find("object/bndbox")
+    assert box is not None, "a drawn polygon exported with no geometry at all"
+    assert box.findtext("xmin") == "10"
+    assert box.findtext("xmax") == "60"
+
+
+def test_an_object_with_a_polygon_and_no_bndbox_still_imports(tmp_path):
+    """Directly, without going through the exporter — foreign VOC producers
+    write this shape too."""
+    annotations_dir = os.path.join(str(tmp_path), "Annotations")
+    os.makedirs(annotations_dir, exist_ok=True)
+
+    root = ET.Element("annotation")
+    ET.SubElement(root, "filename").text = "a.png"
+    size = ET.SubElement(root, "size")
+    ET.SubElement(size, "width").text = "200"
+    ET.SubElement(size, "height").text = "200"
+    obj = ET.SubElement(root, "object")
+    ET.SubElement(obj, "name").text = "cell"
+    segmentation = ET.SubElement(obj, "segmentation")
+    polygon = ET.SubElement(segmentation, "polygon")
+    for index, (x, y) in enumerate([(10, 10), (60, 10), (60, 80)], start=1):
+        point = ET.SubElement(polygon, f"pt{index}")
+        ET.SubElement(point, "x").text = str(x)
+        ET.SubElement(point, "y").text = str(y)
+    ET.ElementTree(root).write(
+        os.path.join(annotations_dir, "a.xml"), encoding="utf-8"
+    )
+
+    annotations, _info, _schemas = import_pascal_voc(str(tmp_path), {})
+    imported = annotations["a.png"]["cell"][0]
+    assert imported["segmentation"] == pytest.approx([10, 10, 60, 10, 60, 80])
+    assert imported["bbox"] == pytest.approx([10, 10, 50, 70])
 
 
 def test_an_object_without_an_inline_polygon_stays_a_box(tmp_path):

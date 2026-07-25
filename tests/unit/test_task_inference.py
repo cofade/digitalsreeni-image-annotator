@@ -304,7 +304,12 @@ def test_switching_to_sam_lifts_the_yolo_only_blockers(dialog_factory):
 
 def test_yolo_only_fields_hide_for_sam(dialog_factory):
     """Hidden rather than greyed out: a permanently-disabled control invites
-    the user to wonder what would enable it."""
+    the user to wonder what would enable it.
+
+    Hiding matters more than cosmetics here — SAM fine-tuning collects its real
+    settings in SAMTrainConfigDialog, so leaving these visible would gather
+    values this dialog then discards.
+    """
     dialog = dialog_factory(_project(cell=[_polygon()]), [{"file_name": "img.png"}])
     # isVisibleTo, not isVisible: the dialog is never shown in a headless test,
     # so isVisible would be False for everything and assert nothing.
@@ -312,6 +317,34 @@ def test_yolo_only_fields_hide_for_sam(dialog_factory):
     dialog.sam_radio.setChecked(True)
     assert dialog.imgsz_spin.isVisibleTo(dialog) is False
     assert dialog.split_row_widget.isVisibleTo(dialog) is False
+    assert dialog.base_row_widget.isVisibleTo(dialog) is False
+    assert dialog.advanced_box.isVisibleTo(dialog) is False
+
+
+def test_hiding_a_row_hides_its_label_too(dialog_factory):
+    """setVisible on a QFormLayout field leaves the caption behind, so SAM mode
+    showed orphan "Base" / "Val split" / "Run" labels next to blank space."""
+    dialog = dialog_factory(_project(cell=[_polygon()]), [{"file_name": "img.png"}])
+    dialog.sam_radio.setChecked(True)
+
+    for field in (
+        dialog.base_row_widget, dialog.split_row_widget, dialog.run_row_widget
+    ):
+        label = dialog.form.labelForField(field)
+        assert label is None or label.isVisibleTo(dialog) is False
+
+
+def test_a_browsed_base_is_dropped_when_a_stock_model_is_picked(dialog_factory):
+    """Otherwise the browse wins forever and the combo selection is ignored."""
+    dialog = dialog_factory(_project(cell=[_polygon()]), [{"file_name": "img.png"}])
+    dialog.base_combo.insertItem(0, "/tmp/custom.pt")
+    dialog.base_combo.setCurrentIndex(0)
+    dialog.custom_base_path = "/tmp/custom.pt"
+    assert dialog.get_config()["base_model"] == "/tmp/custom.pt"
+
+    dialog.base_combo.setCurrentIndex(1)
+    assert dialog.custom_base_path is None
+    assert dialog.get_config()["base_model"] == dialog.base_combo.currentText()
 
 
 def test_the_config_carries_the_advanced_values(dialog_factory):

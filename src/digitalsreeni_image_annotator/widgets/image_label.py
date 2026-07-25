@@ -822,6 +822,13 @@ class ImageLabel(QLabel):
                 if self.insert_editing_vertex(pos):
                     self.update()
                     return
+                # Double-clicking an existing vertex is refused above (it would
+                # plant a coincident duplicate). Stop here rather than falling
+                # through: a vertex sits on the polygon boundary, where
+                # point_in_polygon is unreliable, so falling through could end
+                # the session outright on what the user meant as a no-op.
+                if self._vertex_at(pos) is not None:
+                    return
                 # The click missed this polygon's edges, so it is starting a
                 # NEW edit session -- probably on a different polygon. Commit
                 # the current one first. Without this, start_polygon_edit
@@ -1412,12 +1419,22 @@ class ImageLabel(QLabel):
             )
 
     def exit_editing_mode(self):
-        self.editing_polygon = None
-        self._editing_polygon_orig = None
-        self._editing_polygon_orig_raw = None
-        self._editing_polygon_orig_detail = None
-        self.editing_point_index = None
-        self.hover_point_index = None
+        """Leave vertex-edit mode, committing whatever the session changed.
+
+        Called on image and slice switches. It used to just clear the state,
+        which reopened the lost-baseline hole from the other side: a vertex
+        insert is persisted eagerly by ``sync_polygon_geometry`` but leaves the
+        undo baseline pending until the session ends, so exiting without
+        emitting ``polygonEditCommitted`` left an already-saved edit with no
+        history entry — and ``commit_edit_baseline``'s key guard then dropped
+        the stale baseline once the new image was current.
+
+        Routing through :meth:`finish_polygon_edit` also picks up the
+        ``clamp_segmentation`` this path was skipping, so a vertex dragged out
+        of bounds at the moment of a switch can no longer be persisted
+        unclamped (ADR-024).
+        """
+        self.finish_polygon_edit()
         self.update()
 
     @staticmethod

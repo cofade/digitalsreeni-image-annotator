@@ -122,7 +122,6 @@ def format_metrics(metrics):
         "precision": "Precision",
         "recall": "Recall",
         "best_epoch": "Best epoch",
-        "epochs_completed": "Epochs completed",
         "final_loss": "Final loss",
         "mean_iou": "Mean IoU",
     }

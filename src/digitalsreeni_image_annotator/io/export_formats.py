@@ -906,8 +906,14 @@ def export_pascal_voc_bbox(all_annotations, class_mapping, image_paths, slices, 
                 ET.SubElement(obj, 'truncated').text = '0'
                 ET.SubElement(obj, 'difficult').text = '0'
 
-                if 'bbox' in ann:
-                    x, y, w, h = ann['bbox']
+                # Always emit a bndbox -- see export_pascal_voc_both for why
+                # gating on the `bbox` key silently produced geometry-less
+                # objects for every shape drawn in the app.
+                box = ann.get('bbox')
+                if box is None and ann.get('segmentation'):
+                    box = calculate_bbox(ann['segmentation'])
+                if box is not None:
+                    x, y, w, h = box
                     bndbox = ET.SubElement(obj, 'bndbox')
                     ET.SubElement(bndbox, 'xmin').text = str(int(x))
                     ET.SubElement(bndbox, 'ymin').text = str(int(y))
@@ -1008,15 +1014,25 @@ def export_pascal_voc_both(all_annotations, class_mapping, image_paths, slices, 
                 ET.SubElement(obj, 'truncated').text = '0'
                 ET.SubElement(obj, 'difficult').text = '0'
 
-                if 'bbox' in ann:
-                    x, y, w, h = ann['bbox']
+                # Always emit a bndbox. Shapes drawn in this app carry no
+                # `bbox` key (edit_gestures.sync_bbox_key), so gating on its
+                # presence produced <object> elements with no geometry a VOC
+                # consumer can read -- including this app's own importer, which
+                # then silently dropped every exported polygon. Derive it from
+                # the outline when it is missing; VOC without a bndbox is not
+                # VOC.
+                box = ann.get('bbox')
+                if box is None and ann.get('segmentation'):
+                    box = calculate_bbox(ann['segmentation'])
+                if box is not None:
+                    x, y, w, h = box
                     bndbox = ET.SubElement(obj, 'bndbox')
                     ET.SubElement(bndbox, 'xmin').text = str(int(x))
                     ET.SubElement(bndbox, 'ymin').text = str(int(y))
                     ET.SubElement(bndbox, 'xmax').text = str(int(x + w))
                     ET.SubElement(bndbox, 'ymax').text = str(int(y + h))
 
-                if 'segmentation' in ann:
+                if ann.get('segmentation'):
                     segmentation = ET.SubElement(obj, 'segmentation')
                     ET.SubElement(segmentation, 'area').text = str(ann.get('area', 0))
                     

@@ -82,7 +82,9 @@ class TrainDialog(QDialog):
         )
 
         layout = QVBoxLayout(self)
-        form = QFormLayout()
+        # Kept on self so _on_type_changed can use setRowVisible, which hides
+        # a row's label along with its field.
+        self.form = form = QFormLayout()
 
         # --- type ---
         type_row = QHBoxLayout()
@@ -145,8 +147,7 @@ class TrainDialog(QDialog):
         self.imgsz_spin.setRange(64, 4096)
         self.imgsz_spin.setSingleStep(32)
         self.imgsz_spin.setValue(640)
-        self.imgsz_label = QLabel("Image size")
-        run_row.addWidget(self.imgsz_label)
+        run_row.addWidget(QLabel("Image size"))
         run_row.addWidget(self.imgsz_spin)
         run_row.addStretch(1)
         self.run_row_widget = _wrap(run_row)
@@ -263,11 +264,13 @@ class TrainDialog(QDialog):
         # controls here would collect values this dialog then silently
         # discards -- a user could set 300 epochs, wait hours for a GPU run,
         # and get something else entirely.
-        self.imgsz_label.setVisible(is_yolo)
-        self.imgsz_spin.setVisible(is_yolo)
-        self.split_row_widget.setVisible(is_yolo)
-        self.base_row_widget.setVisible(is_yolo)
-        self.run_row_widget.setVisible(is_yolo)
+        # setRowVisible, not setVisible on the field: hiding a QFormLayout
+        # field leaves its LABEL behind, so SAM mode showed three orphan
+        # captions -- "Base", "Val split", "Run" -- next to blank space.
+        for widget in (
+            self.base_row_widget, self.split_row_widget, self.run_row_widget
+        ):
+            self.form.setRowVisible(widget, is_yolo)
         self.advanced_box.setVisible(is_yolo)
 
         self.base_combo.clear()

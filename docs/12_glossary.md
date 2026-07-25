@@ -59,11 +59,14 @@ metrics. **Additive, never required** — a `.pt` without one still loads throug
 reads as no sidecar.
 
 ### Onion Skin
-The neighbouring slice or frame ghosted over the current one at low opacity (issue #67), so you
-can see how far an object moved between them. Purely decorative: it participates in no
-hit-testing, no SAM input and no export. Drawn *after* the image and *before* the annotations —
-unlike an animation cel, an image slice is opaque, so a ghost painted beneath it would be
-invisible.
+The neighbouring slice or frame ghosted over the current one at low opacity (issue #67). Two
+ghosts are available and the **annotation** ghost is the default: the neighbour's committed
+shapes, dashed and unfilled in their class colour, answering "what did I label there, and does
+this slice line up with it?". The **raster** ghost (the animator's onion skin) is opt-in, because
+blending two adjacent photographic slices — which differ everywhere, unlike two animation cels —
+mostly just makes the current one look out of focus. Purely decorative either way: it participates
+in no hit-testing, no SAM input and no export. Drawn *after* the image and *before* the
+annotations — an image slice is opaque, so a ghost painted beneath it would be invisible.
 
 ### Pascal VOC
 An XML annotation format (one file per image) from the PASCAL Visual Object Classes challenge.

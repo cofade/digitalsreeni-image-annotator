@@ -441,11 +441,36 @@ def _build_onion_controls(window):
     window.onion_checkbox = QCheckBox("Onion skin")
     window.onion_checkbox.setChecked(window.onion_enabled)
     window.onion_checkbox.setToolTip(
-        "Ghost the neighbouring slice or frame over the current one, so you can "
-        "see how far an object moved."
+        "Ghost the neighbouring slice or frame over the current one - by "
+        "default what you annotated there, so you can line this slice up "
+        "against it."
     )
     window.onion_checkbox.toggled.connect(window.image_controller.set_onion_enabled)
     layout.addWidget(window.onion_checkbox)
+
+    # WHAT to ghost. Annotations first because it is the default and the
+    # reason the feature earns its screen space: ghosting the neighbouring
+    # *pixels* over an opaque photographic slice mostly just makes the current
+    # one look out of focus.
+    window.onion_content_combo = QComboBox()
+    for label, value in (
+        ("Annotations", onion.CONTENT_ANNOTATIONS),
+        ("Image", onion.CONTENT_IMAGE),
+        ("Both", onion.CONTENT_BOTH),
+    ):
+        window.onion_content_combo.addItem(label, value)
+    window.onion_content_combo.setCurrentIndex(
+        window.onion_content_combo.findData(window.onion_content)
+    )
+    window.onion_content_combo.setToolTip(
+        "What to ghost: the neighbour's annotations, its image, or both."
+    )
+    window.onion_content_combo.currentIndexChanged.connect(
+        lambda _i: window.image_controller.set_onion_content(
+            window.onion_content_combo.currentData()
+        )
+    )
+    layout.addWidget(window.onion_content_combo)
 
     window.onion_mode_combo = QComboBox()
     for label, value in (

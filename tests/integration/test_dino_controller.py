@@ -110,6 +110,65 @@ def _seed_batch(window, tmp_path):
     return ["reg1.png", "stack_T0_Z0"]
 
 
+# --- discarded detections are reported, not just logged --------------------
+#
+# A rename used to leave the DINO threshold table on the old class name (fixed
+# in ClassController.rename_class). Every detection then came back tagged with
+# a class that no longer existed, _commit_dino_results dropped all of them with
+# only a console warning, and the run still finished on "Detections have been
+# saved to annotations." A total failure was indistinguishable from a total
+# success. These pin the reporting half of that fix.
+
+
+def test_commit_reports_what_it_actually_wrote(dino_ready):
+    window = dino_ready
+    committed, skipped = window.dino_controller._commit_dino_results(
+        "img1.png",
+        [{"class_name": "cell", "score": 0.9, "bbox": [1, 1, 10, 10]},
+         {"class_name": "ghost", "score": 0.8, "bbox": [2, 2, 9, 9]}],
+        [{"segmentation": [1.0, 1.0, 10.0, 1.0, 10.0, 10.0]},
+         {"segmentation": [2.0, 2.0, 9.0, 2.0, 9.0, 9.0]}],
+    )
+
+    assert committed == 1
+    assert dict(skipped) == {"ghost": 1}
+
+
+def test_a_detection_for_a_missing_class_is_surfaced(dino_ready, monkeypatch):
+    from PyQt6.QtWidgets import QMessageBox
+
+    window = dino_ready
+    window.class_mapping = {}  # the configured class is gone from the project
+
+    warnings = []
+    monkeypatch.setattr(
+        QMessageBox, "warning",
+        staticmethod(lambda *a, **k: warnings.append(" ".join(map(str, a)))),
+    )
+    window.dino_batch_mode.setCurrentText("Auto-accept all detections")
+
+    window.dino_controller.run_dino_detection_single()
+
+    assert warnings, "the discard was invisible outside the console log"
+    assert "cell" in warnings[0]
+
+
+def test_a_clean_run_does_not_warn(dino_ready, monkeypatch):
+    from PyQt6.QtWidgets import QMessageBox
+
+    window = dino_ready
+    warnings = []
+    monkeypatch.setattr(
+        QMessageBox, "warning", staticmethod(lambda *a, **k: warnings.append(a))
+    )
+    window.dino_batch_mode.setCurrentText("Auto-accept all detections")
+
+    window.dino_controller.run_dino_detection_single()
+
+    assert warnings == []
+    assert len(window.image_label.annotations["cell"]) == 1
+
+
 # --- single detection ------------------------------------------------------
 
 def test_single_review_attaches_temp_annotations(dino_ready):

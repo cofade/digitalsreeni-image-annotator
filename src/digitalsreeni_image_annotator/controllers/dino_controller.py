@@ -25,6 +25,7 @@ but is now shared with DINO and most easily co-located.
 """
 
 import os
+from collections import Counter
 
 from PyQt6.QtCore import QEvent, QObject, Qt, QTimer
 from PyQt6.QtGui import QColor, QImage
@@ -171,13 +172,24 @@ class DINOController(QObject):
         if not sam3.weights_available():
             self.mw.lbl_dino_status.setText(
                 "SAM 3 weights (sam3.pt) not found. Request access on Hugging "
-                "Face, then place sam3.pt in the working directory or the "
-                "models/sam/ folder."
+                "Face, then place sam3.pt in one of the folders in this "
+                "label's tooltip."
+            )
+            # The exact paths go in the tooltip rather than the label: it is a
+            # one-line status strip, and three absolute Windows paths in it
+            # would push everything else off the end. Naming them at all is the
+            # point -- "not found" without a location sends you hunting.
+            self.mw.lbl_dino_status.setToolTip(
+                "Searched for sam3.pt in:\n  "
+                + "\n  ".join(sam3.searched_weight_paths())
+                + "\n\nOr point the SAM3_MODEL_PATH environment variable at "
+                "the checkpoint."
             )
             self.mw.btn_detect_single.setEnabled(False)
             self.mw.btn_detect_batch.setEnabled(False)
             return
 
+        self.mw.lbl_dino_status.setToolTip("")
         self.mw.lbl_dino_status.setText("Loading SAM 3 ...")
         QApplication.processEvents()
         try:
@@ -442,11 +454,19 @@ class DINOController(QObject):
         )
         if auto_accept:
             logger.debug(f"detect_single: auto_accept=True, committing {len(results)} result(s)")
+            n_committed = 0
+            skipped = Counter()
             try:
-                self._commit_dino_results(image_name, results, sam_results)
+                # The count has to come from the commit, not from `sam_results`:
+                # a result whose class no longer exists is dropped in there, and
+                # counting the inputs reported it as saved anyway.
+                n_committed, skipped = self._commit_dino_results(
+                    image_name, results, sam_results
+                )
             except Exception:
                 logger.exception("_commit_dino_results failed")
-            n_committed = sum(1 for s in sam_results if "error" not in s)
+            if skipped:
+                self._warn_unknown_classes(skipped)
             self.mw.image_label.temp_annotations = []
             self.mw.image_label.update()
             self.mw.update_annotation_list()
@@ -551,6 +571,9 @@ class DINOController(QObject):
         progress.setWindowModality(Qt.WindowModality.WindowModal)
         progress.setMinimumDuration(0)
 
+        committed_total = 0
+        skipped_total = Counter()
+
         for idx, (image_name, qimage) in enumerate(work_items):
             if progress.wasCanceled():
                 break
@@ -572,7 +595,11 @@ class DINOController(QObject):
                 continue
 
             if auto_accept:
-                self._commit_dino_results(image_name, results, sam_results)
+                committed, skipped = self._commit_dino_results(
+                    image_name, results, sam_results
+                )
+                committed_total += committed
+                skipped_total.update(skipped)
             else:
                 self._store_dino_batch_results(image_name, results, sam_results)
 
@@ -580,10 +607,13 @@ class DINOController(QObject):
         progress.close()
 
         if auto_accept:
-            QMessageBox.information(
-                self.mw, "Batch Detection Complete",
-                "Detections have been saved to annotations."
-            )
+            if skipped_total:
+                self._warn_unknown_classes(skipped_total, committed_total)
+            else:
+                QMessageBox.information(
+                    self.mw, "Batch Detection Complete",
+                    f"{committed_total} detection(s) saved to annotations."
+                )
             self.mw.update_annotation_list()
             self.mw.update_slice_list_colors()
             self.mw.auto_save()
@@ -639,6 +669,13 @@ class DINOController(QObject):
         image_label.annotations so the canvas reflects the change and the
         next save_current_annotations() doesn't overwrite the additions.
         Otherwise write directly to the project-level cache.
+
+        Returns ``(committed, skipped)`` -- the number of annotations actually
+        written, and a ``Counter`` of the class names that were dropped because
+        no such class exists. Callers must surface that second half: a detection
+        aimed at a class that isn't in the class list has nowhere to go, and
+        reporting it only to the log is how a run that saved *nothing* still
+        ended with a "detections have been saved" dialog.
         """
         current_image = self.mw.current_slice or self.mw.image_file_name
         is_current = image_name == current_image
@@ -654,12 +691,15 @@ class DINOController(QObject):
                 self.mw.all_annotations[image_name] = {}
             target = self.mw.all_annotations[image_name]
 
+        committed = 0
+        skipped = Counter()
         for r, s in zip(dino_results, sam_results):
             if "error" in s:
                 continue
             class_name = r["class_name"]
             if class_name not in self.mw.class_mapping:
                 logger.warning(f"Skipping DINO result for unknown class '{class_name}'")
+                skipped[class_name] += 1
                 continue
             existing = target.get(class_name, [])
             number = max((a.get("number", 0) for a in existing), default=0) + 1
@@ -672,10 +712,44 @@ class DINOController(QObject):
                 "number": number,
             }
             target.setdefault(class_name, []).append(ann)
+            committed += 1
 
         if is_current:
             self.mw.save_current_annotations()
             self.mw.image_label.update()
+        return committed, skipped
+
+    def _warn_unknown_classes(self, skipped, committed=None):
+        """Tell the user which detections were thrown away, and why.
+
+        ``_commit_dino_results`` drops any detection whose class is missing
+        from the class list. That used to be a console warning only, so the run
+        still finished on "Detections have been saved to annotations." even
+        when every last one had been discarded -- a total failure and a total
+        success looked identical from the UI.
+
+        The usual cause was renaming a class: the detection phrase table kept
+        the old name and kept prompting with it. ``ClassController.rename_class``
+        now renames the table row too, so this should be rare -- but a project
+        saved before that fix still carries the mismatch, and it must not fail
+        quietly a second time.
+        """
+        dropped = sum(skipped.values())
+        names = ", ".join(
+            f"'{name}' ({count})" for name, count in sorted(skipped.items())
+        )
+        saved = (
+            f"{committed} detection(s) saved to annotations.\n\n"
+            if committed is not None else ""
+        )
+        QMessageBox.warning(
+            self.mw,
+            "Detections Discarded",
+            f"{saved}{dropped} detection(s) were discarded: {names}.\n\n"
+            "Those names appear in the detection phrase table but not in the "
+            "class list, so there was nowhere to file the results. Correct the "
+            "names in the phrase table and run the detection again.",
+        )
 
     def _store_dino_batch_results(self, image_name, dino_results, sam_results):
         """Store results for batch review mode."""

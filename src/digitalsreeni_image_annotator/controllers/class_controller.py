@@ -441,6 +441,26 @@ class ClassController(QObject):
                     self.mw.keypoint_schemas.pop(old_name)
                 )
 
+            # Visibility is keyed by class name too. The visible behaviour was
+            # already right (hiding goes through the checkbox, and the
+            # setText below re-fires itemChanged), but the entry under the old
+            # name was left behind to be saved into the .iap.
+            if old_name in self.mw.image_label.class_visibility:
+                self.mw.image_label.class_visibility[new_name] = (
+                    self.mw.image_label.class_visibility.pop(old_name)
+                )
+
+            # The DINO threshold row and the phrase list are keyed by class
+            # name as well. add_class and delete_class have always kept both in
+            # sync; rename did not, and the damage stayed invisible until
+            # detection ran, because _build_dino_class_configs reads the TABLE,
+            # not the class list. Every detection therefore came back tagged
+            # with the OLD name and _commit_dino_results dropped the lot as
+            # "unknown class" -- while the batch dialog still said it had saved
+            # them.
+            self.mw.dino_class_table.rename_class(old_name, new_name)
+            self.mw.dino_phrase_panel.on_class_renamed(old_name, new_name)
+
             for image_name, image_annotations in self.mw.all_annotations.items():
                 if old_name in image_annotations:
                     image_annotations[new_name] = image_annotations.pop(old_name)

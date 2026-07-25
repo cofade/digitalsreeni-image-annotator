@@ -109,6 +109,20 @@ class ClassThresholdTable(QTableWidget):
                 return True
         return False
 
+    def rename_class(self, old_name: str, new_name: str) -> bool:
+        """Rename a row in place, keeping its thresholds.
+
+        In place rather than ``remove_class`` + ``add_class``: the thresholds
+        live in that row's cell widgets, so the remove-and-re-add spelling
+        would quietly reset all three back to the defaults.
+        """
+        for r in range(self.rowCount()):
+            item = self.item(r, _COL_NAME)
+            if item is not None and item.text() == old_name:
+                item.setText(new_name)
+                return True
+        return False
+
     def get_class_configs(self) -> list[dict]:
         """Return list of {name, box_thr, txt_thr, nms_thr}."""
         configs = []
@@ -328,6 +342,26 @@ class PhraseEditorPanel(QWidget):
     def on_class_added(self, class_name: str):
         if class_name not in self._phrases:
             self._phrases[class_name] = [class_name]
+
+    def on_class_renamed(self, old_name: str, new_name: str):
+        """Move a class's phrases across to its new name.
+
+        Any phrase that is *literally the old class name* follows the rename;
+        every other phrase is left exactly as typed. Both halves of that rule
+        matter. The auto-seeded phrase is the class name (``on_class_added``),
+        so leaving it behind means renaming "cell" to "hole" still prompts the
+        model with "cell" -- but a phrase the user deliberately wrote, such as
+        "small green blob", is not a stale copy of the class name and must
+        survive untouched. ``get_phrases_for`` makes the same distinction.
+        """
+        if old_name not in self._phrases:
+            return
+        phrases = self._phrases.pop(old_name)
+        self._phrases[new_name] = [
+            new_name if phrase == old_name else phrase for phrase in phrases
+        ]
+        if self._active_class == old_name:
+            self.set_active_class(new_name)
 
     def on_class_removed(self, class_name: str):
         self._phrases.pop(class_name, None)

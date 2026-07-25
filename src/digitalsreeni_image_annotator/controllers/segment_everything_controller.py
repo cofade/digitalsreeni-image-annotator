@@ -78,6 +78,7 @@ class SegmentEverythingController(QObject):
         progress.setMinimumDuration(0)
         progress.show()
         QApplication.processEvents()
+        cancelled = False
         try:
             proposals = self.mw.sam_utils.apply_sam_everything(self.mw.current_image)
         except InferenceBusyError:
@@ -97,9 +98,17 @@ class SegmentEverythingController(QObject):
             )
             return
         finally:
+            # Read the flag BEFORE closing. ``QProgressDialog.closeEvent``
+            # emits ``canceled()``, which Qt wires to the ``cancel()`` slot --
+            # so ``close()`` sets ``wasCanceled()`` all by itself. Checking it
+            # afterwards reported "cancelled" on every single run and threw
+            # away every proposal SAM had just spent seconds producing, with
+            # one log line to show for it. Verified on Qt 6.7: after close() it
+            # is True; after hide() or reset() it is False.
+            cancelled = progress.wasCanceled()
             progress.close()
 
-        if progress.wasCanceled():
+        if cancelled:
             logger.info("Segment Everything cancelled by the user")
             return
         if not proposals:

@@ -32,6 +32,7 @@ _KEY_ONION_ENABLED = "ui/onion_enabled"
 _KEY_ONION_OPACITY = "ui/onion_opacity"
 _KEY_ONION_OFFSET = "ui/onion_offset"
 _KEY_ONION_MODE = "ui/onion_mode"
+_KEY_ONION_CONTENT = "ui/onion_content"
 
 
 def clamp_font_pt(pt) -> int:
@@ -68,8 +69,8 @@ def save_ui_prefs(font_pt, dark_mode, settings=None) -> None:
     settings.setValue(_KEY_DARK_MODE, bool(dark_mode))
 
 
-def load_onion_prefs(settings=None) -> tuple[bool, float, int, str]:
-    """Return ``(enabled, opacity, offset, mode)`` for onion-skinning.
+def load_onion_prefs(settings=None) -> tuple[bool, float, int, str, str]:
+    """Return ``(enabled, opacity, offset, mode, content)`` for onion-skinning.
 
     Every value is passed through the ``core.onion`` clamps, so a hand-edited
     registry or INI cannot produce an opacity of 0 (invisible ghost, decode
@@ -87,10 +88,13 @@ def load_onion_prefs(settings=None) -> tuple[bool, float, int, str]:
     mode = onion.normalise_mode(
         settings.value(_KEY_ONION_MODE, onion.DEFAULT_MODE, type=str)
     )
-    return bool(enabled), opacity, offset, mode
+    content = onion.normalise_content(
+        settings.value(_KEY_ONION_CONTENT, onion.DEFAULT_CONTENT, type=str)
+    )
+    return bool(enabled), opacity, offset, mode, content
 
 
-def save_onion_prefs(enabled, opacity, offset, mode, settings=None) -> None:
+def save_onion_prefs(enabled, opacity, offset, mode, content, settings=None) -> None:
     from .core import onion
 
     if settings is None:
@@ -99,6 +103,7 @@ def save_onion_prefs(enabled, opacity, offset, mode, settings=None) -> None:
     settings.setValue(_KEY_ONION_OPACITY, onion.clamp_opacity(opacity))
     settings.setValue(_KEY_ONION_OFFSET, onion.clamp_offset(offset))
     settings.setValue(_KEY_ONION_MODE, onion.normalise_mode(mode))
+    settings.setValue(_KEY_ONION_CONTENT, onion.normalise_content(content))
 
 
 def load_mlflow_prefs(settings=None) -> tuple[str, str]:

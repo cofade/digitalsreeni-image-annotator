@@ -36,6 +36,20 @@ DEFAULT_MODE = MODE_PREVIOUS
 DEFAULT_OFFSET = 1
 DEFAULT_OPACITY = 0.35
 
+# WHAT gets ghosted, which turns out to matter more than which neighbour does.
+# Ghosting the neighbour's *pixels* is the animator's onion skin, and on an
+# opaque photographic slice it mostly reads as "this image is out of focus" --
+# it was the first thing tried and the first thing complained about. The
+# question actually worth answering while stepping through a stack is "what did
+# I label on the previous slice, and does this one line up with it?", so the
+# ANNOTATION ghost is the default and the raster ghost is opt-in.
+CONTENT_ANNOTATIONS = "annotations"
+CONTENT_IMAGE = "image"
+CONTENT_BOTH = "both"
+CONTENTS = (CONTENT_ANNOTATIONS, CONTENT_IMAGE, CONTENT_BOTH)
+
+DEFAULT_CONTENT = CONTENT_ANNOTATIONS
+
 # Offsets beyond this are not useful (the ghost is unrecognisable) and each one
 # is another live decode competing for the shared LRU's 8 slots.
 MAX_OFFSET = 5
@@ -64,6 +78,25 @@ def clamp_offset(value: Any) -> int:
 
 def normalise_mode(value: Any) -> str:
     return value if value in MODES else DEFAULT_MODE
+
+
+def normalise_content(value: Any) -> str:
+    return value if value in CONTENTS else DEFAULT_CONTENT
+
+
+def wants_annotations(content: Any) -> bool:
+    return normalise_content(content) in (CONTENT_ANNOTATIONS, CONTENT_BOTH)
+
+
+def wants_image(content: Any) -> bool:
+    """True when the neighbouring *pixels* are needed.
+
+    Worth its own predicate because it gates the only expensive half of the
+    feature: a False here skips a slice decode and the LRU traffic that comes
+    with it, which is why the default content setting costs nothing but a dict
+    lookup per neighbour.
+    """
+    return normalise_content(content) in (CONTENT_IMAGE, CONTENT_BOTH)
 
 
 def neighbour_names(

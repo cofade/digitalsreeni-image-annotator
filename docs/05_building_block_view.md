@@ -282,7 +282,7 @@ out-of-process.
 | `core/model_sidecar.py` | Build / read / locate the trained-model JSON sidecar, and the non-colliding weights filename (#74). |
 | `core/project_io.py` | Read an `.iap` without the GUI (#76). **No write path at all** — the CLI must never autosave into a project it was asked to read. |
 | `core/mask_filters.py` | Polygon IoU and the noise limits for unprompted mask proposals (#69). |
-| `core/onion.py` | Onion-skin neighbour selection and the settings clamps (#67). Ends never wrap. |
+| `core/onion.py` | Onion-skin neighbour selection, the content choice (annotations / image / both) and the settings clamps (#67). Ends never wrap. |
 | `core/image_size.py` | Image dimensions via a Pillow header read (#76) — what replaced `QImage` in the export layer. |
 
 ## Level 3: CLI

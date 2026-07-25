@@ -1494,13 +1494,11 @@ class ImageController(QObject):
         """
         label = self.mw.image_label
         label.set_onion_pixmaps([])
+        label.set_onion_annotations([])
         if not self.mw.onion_enabled or not self.mw.current_slice:
             return
-        slices = self.mw.slices
-        getter = getattr(slices, "get", None)
-        if getter is None:
-            return  # plain-list slice collection (legacy/tests): nothing to do
 
+        slices = self.mw.slices
         label.onion_opacity = self.mw.onion_opacity
         names = onion.neighbour_names(
             slice_names(slices),
@@ -1508,6 +1506,20 @@ class ImageController(QObject):
             self.mw.onion_offset,
             self.mw.onion_mode,
         )
+
+        # The annotation ghost first: it is a dict lookup per neighbour, needs
+        # no decoded pixels at all, and is the half of the feature people
+        # actually use.
+        if onion.wants_annotations(self.mw.onion_content):
+            label.set_onion_annotations(self._onion_annotations_for(names))
+
+        if not onion.wants_image(self.mw.onion_content):
+            return  # nothing will draw the pixels; don't pay to decode them
+
+        getter = getattr(slices, "get", None)
+        if getter is None:
+            return  # plain-list slice collection (legacy/tests): nothing to do
+
         pixmaps = []
         for name in names:
             qimage = getter(name)
@@ -1515,6 +1527,23 @@ class ImageController(QObject):
                 continue  # first/last slice, or a decode that failed: no ghost
             pixmaps.append(QPixmap.fromImage(qimage))
         label.set_onion_pixmaps(pixmaps)
+
+    def _onion_annotations_for(self, names):
+        """Flatten the committed annotations of the neighbour slices.
+
+        ``[(class_name, annotation), ...]``, read from ``all_annotations`` --
+        the project-level cache, which holds every slice except the one on
+        screen (that one lives on the label until ``save_current_annotations``
+        writes it back). Since a neighbour is by definition not the current
+        slice, that cache is the right and only source here.
+        """
+        ghosts = []
+        for name in names:
+            by_class = self.mw.all_annotations.get(name) or {}
+            for class_name, annotations in by_class.items():
+                for annotation in annotations:
+                    ghosts.append((class_name, annotation))
+        return ghosts
 
     def set_onion_enabled(self, enabled):
         self.mw.onion_enabled = bool(enabled)
@@ -1540,12 +1569,19 @@ class ImageController(QObject):
         self.refresh_onion_skin()
         self.mw.image_label.update()
 
+    def set_onion_content(self, content):
+        self.mw.onion_content = onion.normalise_content(content)
+        self._store_onion_prefs()
+        self.refresh_onion_skin()
+        self.mw.image_label.update()
+
     def _store_onion_prefs(self):
         save_onion_prefs(
             self.mw.onion_enabled,
             self.mw.onion_opacity,
             self.mw.onion_offset,
             self.mw.onion_mode,
+            self.mw.onion_content,
         )
 
     def update_onion_controls(self):

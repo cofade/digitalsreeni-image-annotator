@@ -176,6 +176,12 @@ class ImageLabel(QLabel):
         # no SAM input, no export. `original_pixmap` remains the one and only
         # current image, which is what keeps the ghost from leaking downstream.
         self.onion_pixmaps = []
+        # Ghosted neighbour shapes as [(class_name, annotation), ...]. Same
+        # decorative contract as the pixmaps above, and the default content
+        # setting -- ghosting what you LABELLED on the neighbouring slice is
+        # the question worth answering while stepping through a stack; ghosting
+        # its pixels mostly just makes the current slice look out of focus.
+        self.onion_annotations = []
         self.onion_opacity = onion.DEFAULT_OPACITY
         # Zoom-scaled copies, cached exactly like `scaled_pixmap` is for the
         # main image. Scaling in the paint pass would put two full-resolution
@@ -410,6 +416,14 @@ class ImageLabel(QLabel):
         self._scaled_onion_pixmaps = []
         self._scaled_onion_zoom = None
 
+    def set_onion_annotations(self, ghosts):
+        """Replace the ghosted neighbour shapes (``[(class_name, ann), ...]``).
+
+        No scaled cache to invalidate: these are drawn under the painter's own
+        zoom transform, so there is nothing pre-rendered to go stale.
+        """
+        self.onion_annotations = list(ghosts or [])
+
     def draw_temp_annotations(self, painter):
         return self.renderer.draw_temp_annotations(painter)
 
@@ -555,6 +569,7 @@ class ImageLabel(QLabel):
         self.hover_point_index = None
         self.current_rectangle = None
         self.set_onion_pixmaps([])
+        self.set_onion_annotations([])
         self.sam_bbox = None
         self.temp_sam_prediction = None
         self.update()

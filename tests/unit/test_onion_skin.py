@@ -10,8 +10,10 @@ The rendering side asserts two things: that the ghost is drawn at all, and
 hit-testing, SAM input or export would be a correctness bug, not a cosmetic one.
 """
 
+from types import SimpleNamespace
+
 import pytest
-from PyQt6.QtCore import QSettings
+from PyQt6.QtCore import QSettings, Qt
 from PyQt6.QtGui import QColor, QPixmap
 
 from src.digitalsreeni_image_annotator import app_settings
@@ -113,6 +115,35 @@ def test_unknown_mode_falls_back_to_the_default():
     assert onion.normalise_mode(onion.MODE_BOTH) == onion.MODE_BOTH
 
 
+def test_unknown_content_falls_back_to_the_default():
+    assert onion.normalise_content("pixels") == onion.CONTENT_ANNOTATIONS
+    assert onion.normalise_content(None) == onion.CONTENT_ANNOTATIONS
+    assert onion.normalise_content(onion.CONTENT_IMAGE) == onion.CONTENT_IMAGE
+
+
+def test_the_default_ghost_is_annotations_not_pixels():
+    """The raster ghost shipped first and was the first thing complained about:
+    over an opaque photographic slice it just reads as "this image is out of
+    focus". Ghosting what you *labelled* there is the half that earns the
+    feature its screen space, so it is the default."""
+    assert onion.DEFAULT_CONTENT == onion.CONTENT_ANNOTATIONS
+    assert onion.wants_annotations(onion.DEFAULT_CONTENT) is True
+    assert onion.wants_image(onion.DEFAULT_CONTENT) is False
+
+
+@pytest.mark.parametrize(
+    "content,annotations,image",
+    [
+        (onion.CONTENT_ANNOTATIONS, True, False),
+        (onion.CONTENT_IMAGE, False, True),
+        (onion.CONTENT_BOTH, True, True),
+    ],
+)
+def test_content_selects_which_ghosts_are_wanted(content, annotations, image):
+    assert onion.wants_annotations(content) is annotations
+    assert onion.wants_image(content) is image
+
+
 # --- persistence (ADR-020) -------------------------------------------------
 
 
@@ -122,20 +153,24 @@ def settings(tmp_path):
 
 
 def test_onion_prefs_round_trip(settings):
-    app_settings.save_onion_prefs(True, 0.6, 3, onion.MODE_BOTH, settings)
-    enabled, opacity, offset, mode = app_settings.load_onion_prefs(settings)
+    app_settings.save_onion_prefs(
+        True, 0.6, 3, onion.MODE_BOTH, onion.CONTENT_BOTH, settings
+    )
+    enabled, opacity, offset, mode, content = app_settings.load_onion_prefs(settings)
     assert enabled is True
     assert opacity == pytest.approx(0.6)
     assert offset == 3
     assert mode == onion.MODE_BOTH
+    assert content == onion.CONTENT_BOTH
 
 
 def test_onion_prefs_default_to_off(settings):
-    enabled, opacity, offset, mode = app_settings.load_onion_prefs(settings)
+    enabled, opacity, offset, mode, content = app_settings.load_onion_prefs(settings)
     assert enabled is False
     assert opacity == pytest.approx(onion.DEFAULT_OPACITY)
     assert offset == onion.DEFAULT_OFFSET
     assert mode == onion.MODE_PREVIOUS
+    assert content == onion.CONTENT_ANNOTATIONS
 
 
 def test_garbage_in_settings_does_not_crash_startup(settings):
@@ -144,10 +179,12 @@ def test_garbage_in_settings_does_not_crash_startup(settings):
     settings.setValue("ui/onion_opacity", "not a number")
     settings.setValue("ui/onion_offset", "lots")
     settings.setValue("ui/onion_mode", "diagonally")
-    _enabled, opacity, offset, mode = app_settings.load_onion_prefs(settings)
+    settings.setValue("ui/onion_content", "vibes")
+    _enabled, opacity, offset, mode, content = app_settings.load_onion_prefs(settings)
     assert opacity == pytest.approx(onion.DEFAULT_OPACITY)
     assert offset == onion.DEFAULT_OFFSET
     assert mode == onion.MODE_PREVIOUS
+    assert content == onion.CONTENT_ANNOTATIONS
 
 
 # --- rendering -------------------------------------------------------------
@@ -259,9 +296,177 @@ def test_ghost_is_not_hit_testable(label):
 
 def test_clearing_the_canvas_drops_the_ghost(label):
     label.set_onion_pixmaps([_ghost()])
+    label.set_onion_annotations([("cell", square(10, 10, 40))])
     label.clear()
     assert label.onion_pixmaps == []
     assert label.scaled_onion_pixmaps() == []
+    assert label.onion_annotations == []
+
+
+# --- the annotation ghost --------------------------------------------------
+#
+# The half of the feature that answers the question actually worth asking while
+# stepping through a stack: what did I label on the neighbouring slice, and does
+# this one line up with it?
+
+
+def _ghosted(label, class_name="cell", annotation=None, colour="#1F77B4"):
+    label.class_colors = {class_name: QColor(colour)}
+    label.onion_annotations = [
+        (class_name, annotation if annotation is not None else square(10, 10, 40))
+    ]
+    painter = RecordingPainter()
+    label.renderer.draw_onion_skin(painter)
+    return painter
+
+
+def test_the_annotation_ghost_is_outlined_never_filled(label):
+    """The current slice's own masks are filled. A filled ghost would compete
+    with exactly the thing it exists to be compared against."""
+    painter = _ghosted(label)
+    assert painter.count("drawPolygon") == 1
+    brushes = [args[0] for name, args in painter.calls if name == "setBrush"]
+    assert brushes and all(b.style() == Qt.BrushStyle.NoBrush for b in brushes)
+
+
+def test_the_annotation_ghost_is_dashed_so_it_reads_as_not_current(label):
+    painter = _ghosted(label)
+    styles = [args[0].style() for name, args in painter.calls if name == "setPen"]
+    assert styles == [Qt.PenStyle.DashLine]
+
+
+def test_the_annotation_ghost_keeps_its_class_colour(label):
+    painter = _ghosted(label, colour="#1F77B4")
+    pen = next(args[0] for name, args in painter.calls if name == "setPen")
+    assert pen.color().name().lower() == "#1f77b4"
+
+
+def test_a_hidden_class_is_not_ghosted(label):
+    """A ghost that ignores the visibility checkbox is a ghost you cannot turn
+    off."""
+    label.class_visibility = {"cell": False}
+    painter = _ghosted(label)
+    assert painter.count("drawPolygon") == 0
+
+
+def test_a_pose_instance_is_ghosted_as_its_instance_box(label):
+    """A pose carries a bbox and deliberately NO segmentation key (ADR-029), so
+    the polygon-first ordering handles it without a special case."""
+    painter = _ghosted(
+        label,
+        class_name="person",
+        annotation={"keypoints": [5, 5, 2], "num_keypoints": 1,
+                    "bbox": [1, 2, 30, 40]},
+    )
+    assert painter.count("drawRect") == 1
+    assert painter.count("drawPolygon") == 0
+
+
+def test_the_annotation_ghost_restores_the_opacity(label):
+    """Leaving the painter faded would wash out every annotation drawn after."""
+    label.onion_opacity = 0.4
+    painter = _ghosted(label)
+    opacities = [args[0] for name, args in painter.calls if name == "setOpacity"]
+    assert opacities[0] == pytest.approx(0.4)
+    assert opacities[-1] == 1.0
+
+
+def test_a_degenerate_ghost_shape_draws_nothing_rather_than_crashing(label):
+    painter = _ghosted(label, annotation={"segmentation": [1, 2]})
+    assert painter.count("drawPolygon") == 0
+    assert painter.count("drawRect") == 0
+
+
+# --- content gating in the controller --------------------------------------
+
+
+class _RecordingSlices(list):
+    """Slice collection that records every decode it is asked to perform."""
+
+    def __init__(self, names):
+        super().__init__((name, None) for name in names)
+        self.decoded = []
+
+    def get(self, name):
+        self.decoded.append(name)
+        return None
+
+
+def _controller(label, content, all_annotations=None):
+    from src.digitalsreeni_image_annotator.controllers.image_controller import (
+        ImageController,
+    )
+
+    slices = _RecordingSlices(NAMES)
+    controller = ImageController.__new__(ImageController)
+    controller.mw = SimpleNamespace(
+        image_label=label,
+        onion_enabled=True,
+        onion_opacity=0.35,
+        onion_offset=1,
+        onion_mode=onion.MODE_PREVIOUS,
+        onion_content=content,
+        current_slice="stack_Z3",
+        slices=slices,
+        all_annotations=all_annotations or {},
+    )
+    return controller, slices
+
+
+def test_annotations_content_never_decodes_a_neighbouring_slice(label):
+    """The cheap half stays cheap: a dict lookup per neighbour and no decode,
+    no LRU traffic, no competition for the shared cache's eight slots."""
+    controller, slices = _controller(
+        label,
+        onion.CONTENT_ANNOTATIONS,
+        {"stack_Z2": {"cell": [square(10, 10, 40)]}},
+    )
+    controller.refresh_onion_skin()
+
+    assert slices.decoded == [], "decoded pixels nothing was going to draw"
+    assert len(label.onion_annotations) == 1
+    assert label.onion_annotations[0][0] == "cell"
+    assert label.onion_pixmaps == []
+
+
+def test_image_content_decodes_but_ghosts_no_annotations(label):
+    controller, slices = _controller(
+        label, onion.CONTENT_IMAGE, {"stack_Z2": {"cell": [square(10, 10, 40)]}}
+    )
+    controller.refresh_onion_skin()
+
+    assert slices.decoded == ["stack_Z2"]
+    assert label.onion_annotations == []
+
+
+def test_both_content_resolves_both_ghosts(label):
+    controller, slices = _controller(
+        label, onion.CONTENT_BOTH, {"stack_Z2": {"cell": [square(10, 10, 40)]}}
+    )
+    controller.refresh_onion_skin()
+
+    assert slices.decoded == ["stack_Z2"]
+    assert len(label.onion_annotations) == 1
+
+
+def test_a_neighbour_with_no_annotations_ghosts_nothing(label):
+    controller, _ = _controller(label, onion.CONTENT_ANNOTATIONS, {})
+    controller.refresh_onion_skin()
+    assert label.onion_annotations == []
+
+
+def test_disabling_onion_skin_clears_both_ghosts(label):
+    controller, _ = _controller(
+        label,
+        onion.CONTENT_BOTH,
+        {"stack_Z2": {"cell": [square(10, 10, 40)]}},
+    )
+    controller.refresh_onion_skin()
+    controller.mw.onion_enabled = False
+    controller.refresh_onion_skin()
+
+    assert label.onion_annotations == []
+    assert label.onion_pixmaps == []
 
 
 # --- the scaled cache ------------------------------------------------------

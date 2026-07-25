@@ -91,6 +91,77 @@ def test_rename_class_rekeys_everything(window, monkeypatch):
         assert ann["category_name"] == "blob"
 
 
+def test_rename_carries_the_dino_row_and_phrases_across(window, monkeypatch):
+    """The bug this pins cost a whole batch run and reported success anyway.
+
+    ``_build_dino_class_configs`` reads the THRESHOLD TABLE, not the class list.
+    Renaming a class used to leave that table on the old name, so every
+    detection came back tagged with a class that no longer existed and
+    ``_commit_dino_results`` dropped the lot as "unknown class" -- while the
+    batch dialog still said the detections had been saved.
+    """
+    from PyQt6.QtWidgets import QInputDialog
+
+    window.add_class("cell", QColor("#ff0000"))
+    window.dino_class_table.get_class_configs()[0]["name"] == "cell"
+    window.dino_class_table.cellWidget(0, 1).setValue(0.42)  # a non-default thr
+
+    monkeypatch.setattr(
+        QInputDialog, "getText", staticmethod(lambda *a, **k: ("hole", True))
+    )
+    window.class_controller.rename_class(_first_item(window))
+
+    configs = window.dino_class_table.get_class_configs()
+    assert [c["name"] for c in configs] == ["hole"]
+    assert configs[0]["box_thr"] == pytest.approx(0.42), (
+        "remove+add would have reset the thresholds to the defaults"
+    )
+    assert window.dino_phrase_panel.get_phrases_for("hole") == ["hole"]
+    assert "cell" not in window.dino_phrase_panel.get_all_phrases()
+
+
+def test_rename_leaves_a_hand_written_phrase_alone(window, monkeypatch):
+    """Only the auto-seeded class-name phrase follows the rename. A phrase the
+    user deliberately wrote is not a stale copy of the class name."""
+    from PyQt6.QtWidgets import QInputDialog
+
+    window.add_class("cell", QColor("#ff0000"))
+    window.dino_phrase_panel.set_phrases({"cell": ["cell", "small green blob"]})
+
+    monkeypatch.setattr(
+        QInputDialog, "getText", staticmethod(lambda *a, **k: ("hole", True))
+    )
+    window.class_controller.rename_class(_first_item(window))
+
+    assert window.dino_phrase_panel.get_phrases_for("hole") == [
+        "hole",
+        "small green blob",
+    ]
+
+
+def test_rename_does_not_orphan_the_visibility_entry(window, monkeypatch):
+    """``class_visibility`` is keyed by class name, so a rename used to leave a
+    dead entry behind under the old one -- which then got saved into the .iap.
+
+    Hiding goes through the checkbox, and ``item.setText`` re-fires
+    ``itemChanged``, so the *visible* behaviour was already correct; what leaked
+    was the stale key.
+    """
+    from PyQt6.QtWidgets import QInputDialog
+
+    window.add_class("cell", QColor("#ff0000"))
+    _first_item(window).setCheckState(Qt.CheckState.Unchecked)
+    assert window.image_label.class_visibility["cell"] is False
+
+    monkeypatch.setattr(
+        QInputDialog, "getText", staticmethod(lambda *a, **k: ("hole", True))
+    )
+    window.class_controller.rename_class(_first_item(window))
+
+    assert window.image_label.class_visibility.get("hole") is False
+    assert "cell" not in window.image_label.class_visibility
+
+
 def test_delete_class_removes_annotations(window):
     window.add_class("cell", QColor("#ff0000"))
     window.all_annotations["a.png"] = {

@@ -205,6 +205,7 @@ class ImageAnnotator(QMainWindow):
             self.onion_opacity,
             self.onion_offset,
             self.onion_mode,
+            self.onion_content,
         ) = load_onion_prefs()
 
         # Default annotations sorting

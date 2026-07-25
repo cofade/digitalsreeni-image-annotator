@@ -626,14 +626,39 @@ none.
 
 ## Onion-Skinning and the Slice LRU (issue #67)
 
+### Ghost the annotations, not the pixels
+
+There are **two** ghosts, chosen by the `content` setting, and which one is the default matters
+more than any other decision here.
+
+The raster ghost — the animator's onion skin, the neighbouring slice blended over the current one
+— shipped first and was the first thing the feature got complained about. On an opaque
+photographic slice it does not read as "here is where that object was"; it reads as *this image is
+out of focus*. Two cels differ only where the drawing moved, so a blend is legible; two adjacent
+microscopy slices or video frames differ **everywhere**, so the blend is just noise.
+
+The question actually worth answering while stepping through a stack is *what did I label on the
+neighbouring slice, and does this one line up with it?* So `CONTENT_ANNOTATIONS` is the default:
+the neighbour's committed shapes, dashed and unfilled in their class colour. The current slice's
+own masks are filled, so an unfilled ghost stays distinguishable from exactly the thing it exists
+to be compared against. Hidden classes are skipped — a ghost that ignores the visibility checkbox
+is a ghost you cannot turn off.
+
+The annotation ghost is also the **cheap** one: a dict lookup per neighbour in `all_annotations`,
+no decode and no LRU traffic. `onion.wants_image()` gates the expensive half, so the default
+costs nothing beyond the lookup.
+
+### Layering and resolution
+
 The ghost is drawn **after** the current image and **before** every annotation layer. The issue
 asked for "underneath the current image", which cannot work: unlike an animation cel, an image
 slice is a fully opaque raster, so anything painted beneath it is invisible. The chosen order
-delivers what the requirement actually wanted — a visible ghost with annotations legible on top.
+delivers what the requirement actually wanted — a visible ghost with the current slice's
+annotations legible on top.
 
 Neighbours are resolved in `display_image`, the single funnel where the canvas image changes,
 **never in `paintEvent`**: a cache lookup (and on a miss, a full decode) per repaint would put
-decoding in the pan and zoom path. They go through `LazySliceList.get` like every other consumer,
+decoding in the pan and zoom path. Pixels go through `LazySliceList.get` like every other consumer,
 so the shared bounded LRU (ADR-036) stays the only owner of decoded pixels. The default
 single-neighbour mode costs one extra live decode; "both" costs two, which is why the capacity of
 8 was left alone rather than quietly raised.

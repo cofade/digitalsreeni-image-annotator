@@ -753,8 +753,12 @@ diagnostic channel, dialogs are the user channel; the two are independent
 > | SAM 3 video tracking | `"sam3"` | ADR-040, **uncertain** frames only; confident frames bypass review and commit directly as `source: "sam3-track"` |
 > | Segment Everything | `"sam-everything"` | issue #69, unprompted; additionally carries `assigned_class`, which is `None` until the user clicks the proposal |
 >
-> Every `source ==` check reads the shared `REVIEW_SOURCES` tuple rather than
-> its own literal list, so a producer cannot be half-registered. All four share
+> The **review gate** (`DINOReviewEventFilter`) reads the shared
+> `REVIEW_SOURCES` tuple, so a producer cannot be half-registered *there*. Note
+> that `source` carries other meanings elsewhere with their own literals —
+> slice-list colouring in `image_controller` and the scoring exclusion in
+> `core/disagreement` both test `"sam3-track"` directly — so a new producer
+> still has to be checked against those by hand. All four share
 > the SAME `dino_batch_results` dict, so the single-field re-sync rule below
 > applies to all of them unchanged — which is precisely why Segment Everything
 > parks its proposals there rather than living only in `temp_annotations`:
@@ -763,8 +767,9 @@ diagnostic channel, dialogs are the user channel; the two are independent
 >
 > **Known limit**: one image key holds one producer's entries. Two producers
 > parking for the same image means the last writer wins, silently. In practice
-> the runs are sequential and `stage_proposals` refuses to start while a review
-> is pending, but there is no structural guard.
+> the runs are sequential and `SegmentEverythingController.run()` refuses to
+> start while a review is pending — but `stage_proposals`, the entry point the
+> tests use, has no such guard, and neither does anything structural.
 
 `ImageLabel.temp_annotations` is a **single list on the image_label**,
 not a per-image cache. It holds the pending DINO+SAM masks shown as

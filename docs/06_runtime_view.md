@@ -132,7 +132,9 @@ One shape selected → handles are grab targets (hover shows resize/move cursors
     └─> Esc during drag → restore original geometry, cancel
 ```
 
-Polygon vertex edits (double-click) are likewise clamped into the image on Enter.
+Polygon vertex edits (double-click) are likewise clamped into the image on Enter
+— and, since #68, on an image or slice switch too, because leaving edit mode by
+navigating away used to skip the clamp entirely.
 See ADR-023 (shape editing) and ADR-024 (bounds enforcement).
 
 ## Placing a Keypoint / Pose Instance (issue #35, ADR-029)

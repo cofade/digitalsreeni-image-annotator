@@ -7,9 +7,17 @@ and the dialog promised "a single Ctrl+Z".
 
 The rule engine has thorough unit tests, but they exercise pure functions. The
 bug lived in the controller, between the engine and ``AnnotationHistory``, and
-nothing covered that seam. These tests do, using the real
-``AnnotationController`` and the real per-image history rather than a double —
-because the mechanism under test *is* the per-image keying.
+nothing covered that seam. These tests do, using the real ``QCController`` and
+the real ``AnnotationHistory`` rather than a double — because the mechanism
+under test *is* the per-image keying.
+
+**Scope, stated honestly**: these cover the *store* level — that a snapshot
+exists for each touched image and predates its mutation. They do not drive the
+user-visible ``AnnotationController.undo()``, which needs a real canvas
+(``_undo_blocked`` reads ``image_label.editing_polygon``) and, crucially, acts
+on whichever image is currently open. That last property is exactly why the
+dialog now tells the user to open each affected image rather than to press
+Ctrl+Z N times.
 """
 
 import pytest
@@ -153,7 +161,7 @@ def test_repairs_are_applied_across_every_image(window):
     repaired, images = window.qc_controller.fix_findings(_findings(window))
 
     assert repaired == 3
-    assert images == 3
+    assert images == ["a.png", "b.png", "c.png"]
     assert _findings(window) == [], "the geometry should now be valid"
 
 
@@ -191,17 +199,19 @@ def test_one_snapshot_per_image_not_one_per_finding(window):
     repaired, images = window.qc_controller.fix_findings(_findings(window))
 
     assert repaired == 2
-    assert images == 1
+    assert images == ["a.png"]
 
 
-def test_fix_findings_returns_a_pair(window):
-    """The dialog unpacks two values to word the confirmation truthfully."""
-    result = window.qc_controller.fix_findings(_findings(window))
-    assert isinstance(result, tuple) and len(result) == 2
+def test_fix_findings_returns_the_image_NAMES_not_a_count(window):
+    """The dialog needs to tell the user WHICH images to open, because undo
+    acts on whichever one is current. A count cannot be acted on."""
+    _repaired, images = window.qc_controller.fix_findings(_findings(window))
+    assert images == sorted(images), "named and stably ordered"
+    assert all(isinstance(name, str) for name in images)
 
 
 def test_an_empty_finding_list_is_a_no_op(window):
-    assert window.qc_controller.fix_findings([]) == (0, 0)
+    assert window.qc_controller.fix_findings([]) == (0, [])
 
 
 def test_nothing_is_recorded_during_a_project_load(window):
@@ -227,4 +237,4 @@ def test_a_finding_naming_a_vanished_image_is_skipped(window):
     repaired, images = window.qc_controller.fix_findings(findings)
 
     assert repaired == 2
-    assert images == 2
+    assert images == ["a.png", "c.png"]

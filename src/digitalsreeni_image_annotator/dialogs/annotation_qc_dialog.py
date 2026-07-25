@@ -96,8 +96,8 @@ class AnnotationQCDialog(QDialog):
         self.fix_button.setEnabled(fixable > 0)
         self.fix_button.setToolTip(
             f"Repair the {fixable} unambiguous finding(s). Undo is per image "
-            "(ADR-026), so a sweep across several images takes one Ctrl+Z each. "
-            "Ambiguous findings are never auto-fixed."
+            "(ADR-026): to revert a repair, open that image and press Ctrl+Z "
+            "there. Ambiguous findings are never auto-fixed."
         )
         self.fix_button.clicked.connect(self._fix_all)
         buttons_row.addWidget(self.fix_button)
@@ -167,13 +167,21 @@ class AnnotationQCDialog(QDialog):
         repaired, images = self.mw.qc_controller.fix_findings(
             [f for f in self.findings if f.fixable]
         )
-        # Undo is keyed by image (ADR-026), so a sweep across several images
-        # takes one Ctrl+Z each. Say so rather than implying a single undo.
-        undo_note = (
-            "Ctrl+Z undoes them."
-            if images <= 1
-            else f"They span {images} images; Ctrl+Z undoes one image at a time."
-        )
+        # Undo is keyed by image AND `undo()` acts on whichever image is
+        # currently open (ADR-026). "Press Ctrl+Z once per image" is therefore
+        # not an instruction a user can follow from here -- they have to open
+        # each affected image first. Name them, so the instruction is
+        # actionable rather than merely accurate.
+        if len(images) <= 1:
+            undo_note = "Ctrl+Z undoes them."
+        else:
+            listed = ", ".join(images[:5])
+            if len(images) > 5:
+                listed += f", and {len(images) - 5} more"
+            undo_note = (
+                f"They span {len(images)} images ({listed}). Undo is per image: "
+                "open each one and press Ctrl+Z there."
+            )
         QMessageBox.information(
             self, "Repairs applied", f"{repaired} finding(s) repaired. {undo_note}"
         )

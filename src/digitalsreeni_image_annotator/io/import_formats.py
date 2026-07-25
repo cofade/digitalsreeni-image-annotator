@@ -557,14 +557,22 @@ def _voc_object_bbox(obj, xml_name):
     box = obj.find("bndbox")
     if box is None:
         return None
-    try:
-        xmin = float(box.findtext("xmin", "0"))
-        ymin = float(box.findtext("ymin", "0"))
-        xmax = float(box.findtext("xmax", "0"))
-        ymax = float(box.findtext("ymax", "0"))
-    except (TypeError, ValueError):
-        logger.warning("unreadable bndbox in %s", xml_name)
-        return None
+    corners = []
+    for tag in ("xmin", "ymin", "xmax", "ymax"):
+        text = box.findtext(tag)
+        if text is None:
+            # A missing corner must yield None, not a default of 0. Returning
+            # [0, 0, 0, 0] is truthy, so it would suppress the polygon-derived
+            # fallback and import a bogus zero box next to a perfectly good
+            # outline.
+            logger.warning("bndbox missing <%s> in %s", tag, xml_name)
+            return None
+        try:
+            corners.append(float(text))
+        except ValueError:
+            logger.warning("unreadable bndbox <%s> in %s", tag, xml_name)
+            return None
+    xmin, ymin, xmax, ymax = corners
     return [xmin, ymin, max(0.0, xmax - xmin), max(0.0, ymax - ymin)]
 
 

@@ -428,6 +428,47 @@ def test_enter_and_the_session_switch_push_the_same_baseline(qtbot, label):
     assert controller.pending is None
 
 
+def test_leaving_edit_mode_on_a_switch_still_pushes_the_baseline(qtbot, label):
+    """``exit_editing_mode`` is called on every image and slice switch.
+
+    It used to just clear the state, which reopened the lost-baseline hole from
+    the other side: the insert is already persisted by
+    ``sync_polygon_geometry``, so exiting without emitting
+    ``polygonEditCommitted`` left a saved edit with no history entry.
+    """
+    annotation = square(20, 20, 40)
+    label.annotations = {"cell": [annotation]}
+    controller = _wire(label)
+
+    qtbot.mouseDClick(label, Qt.MouseButton.LeftButton, pos=QPoint(40, 40))
+    assert label.insert_editing_vertex((40, 20)) is True
+
+    label.exit_editing_mode()
+
+    assert controller.pushed == ["initial"]
+    assert label.editing_polygon is None
+
+
+def test_leaving_edit_mode_clamps_the_polygon(qtbot, label):
+    """The switch path used to skip clamp_segmentation, so a vertex dragged out
+    of bounds at the moment of a switch was persisted unclamped (ADR-024)."""
+    annotation = square(20, 20, 40)
+    label.annotations = {"cell": [annotation]}
+    _wire(label)
+
+    qtbot.mouseDClick(label, Qt.MouseButton.LeftButton, pos=QPoint(40, 40))
+    label.editing_polygon["segmentation"][0] = 5000  # drag a vertex far right
+    label.exit_editing_mode()
+
+    assert max(annotation["segmentation"][0::2]) <= 200
+
+
+def test_leaving_edit_mode_without_a_session_is_a_no_op(label):
+    controller = _wire(label)
+    label.exit_editing_mode()
+    assert controller.pushed == []
+
+
 # --- P2 fixes from the senior review ----------------------------------------
 
 
@@ -438,6 +479,20 @@ def test_double_clicking_a_vertex_does_not_plant_a_duplicate(qtbot, label):
     _enter_edit(qtbot, label, annotation, (80, 80))
 
     assert label.insert_editing_vertex((40, 40)) is False
+    assert len(annotation["segmentation"]) // 2 == 4
+
+
+def test_double_clicking_a_vertex_does_not_end_the_session(qtbot, label):
+    """Through the real event, not the helper: the refused insert must return
+    early rather than fall through to finish-and-restart. A vertex sits on the
+    polygon boundary where point_in_polygon is unreliable, so falling through
+    could end the session outright on what the user meant as a no-op."""
+    annotation = square(40, 40, 80)
+    _enter_edit(qtbot, label, annotation, (80, 80))
+
+    qtbot.mouseDClick(label, Qt.MouseButton.LeftButton, pos=QPoint(40, 40))
+
+    assert label.editing_polygon is annotation
     assert len(annotation["segmentation"]) // 2 == 4
 
 

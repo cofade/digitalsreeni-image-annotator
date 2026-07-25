@@ -113,11 +113,13 @@ class QCController(QObject):
         per affected image. That is the honest cost of a per-image undo model
         (ADR-026); claiming otherwise was the bug.
 
-        Returns ``(repaired_count, images_touched)`` so the caller can word the
-        confirmation truthfully.
+        Returns ``(repaired_count, image_names)`` — the **names**, not a count,
+        so the caller can tell the user which images to visit. Undo is keyed by
+        image and ``undo()`` acts on whichever image is current, so "press
+        Ctrl+Z N times" is not an instruction anyone can follow.
         """
         if not findings:
-            return 0, 0
+            return 0, []
         sizes = self.collect_image_sizes()
         current = self.mw.current_slice or self.mw.image_file_name
 
@@ -152,7 +154,7 @@ class QCController(QObject):
         logger.info(
             "QC repaired %d finding(s) across %d image(s)", repaired, len(snapshotted)
         )
-        return repaired, len(snapshotted)
+        return repaired, sorted(snapshotted)
 
     def _resolve(self, finding):
         """The live annotation a finding refers to, or None.

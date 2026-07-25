@@ -417,7 +417,11 @@ class ImageLabel(QLabel):
         self._scaled_onion_zoom = None
 
     def set_onion_annotations(self, ghosts):
-        """Replace the ghosted neighbour shapes (``[(class_name, ann), ...]``).
+        """Replace the ghosted neighbour shapes.
+
+        ``[(class_name, [annotation, ...]), ...]`` -- grouped by class so the
+        renderer resolves visibility and colour once per class rather than once
+        per shape, inside ``paintEvent``.
 
         No scaled cache to invalidate: these are drawn under the painter's own
         zoom transform, so there is nothing pre-rendered to go stale.

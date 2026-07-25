@@ -139,6 +139,77 @@ def test_rename_leaves_a_hand_written_phrase_alone(window, monkeypatch):
     ]
 
 
+def test_undo_after_a_rename_does_not_resurrect_the_old_class(window, monkeypatch):
+    """Undo snapshots are per-image ``{class_name: [...]}`` dicts, so they are
+    as name-keyed as ``class_mapping``.
+
+    Skipping them made Ctrl+Z restore the annotations under the OLD name: no
+    mapping, no colour, no class-list row, so ``draw_annotations`` skipped them
+    and they vanished from the canvas -- while still being written into the
+    ``.iap`` under a class that is not in ``classes[]``.
+    """
+    from PyQt6.QtWidgets import QInputDialog
+
+    window.add_class("cell", QColor("#ff0000"))
+    window.image_file_name = "a.png"
+    window.all_annotations["a.png"] = {
+        "cell": [{"segmentation": [1.0, 1.0, 10.0, 1.0, 10.0, 8.0],
+                  "category_name": "cell"}]
+    }
+    # One recorded edit, so there is something to undo.
+    window.annotation_controller.record_history("a.png")
+    window.all_annotations["a.png"]["cell"].append(
+        {"segmentation": [2.0, 2.0, 9.0, 2.0, 9.0, 7.0], "category_name": "cell"}
+    )
+
+    monkeypatch.setattr(
+        QInputDialog, "getText", staticmethod(lambda *a, **k: ("hole", True))
+    )
+    window.class_controller.rename_class(_first_item(window))
+
+    window.annotation_controller.undo()
+
+    restored = window.all_annotations["a.png"]
+    assert "cell" not in restored, "undo resurrected the pre-rename class name"
+    assert "hole" in restored
+    assert all(a["category_name"] == "hole" for a in restored["hole"])
+
+
+def test_undo_after_a_delete_does_not_resurrect_the_class(window):
+    """An undo that brings back a deleted class is worse than no undo: it
+    returns unmapped, uncoloured and absent from the class list."""
+    window.add_class("cell", QColor("#ff0000"))
+    window.image_file_name = "a.png"
+    window.all_annotations["a.png"] = {
+        "cell": [{"segmentation": [1.0, 1.0, 10.0, 1.0, 10.0, 8.0],
+                  "category_name": "cell"}]
+    }
+    window.annotation_controller.record_history("a.png")
+
+    window.class_controller.delete_class(_first_item(window))
+    window.annotation_controller.undo()
+
+    assert "cell" not in window.all_annotations.get("a.png", {})
+
+
+def test_rename_bails_cleanly_when_the_colour_entry_is_missing(window, monkeypatch):
+    """The two preconditions used to sit each after its own mutation, so a
+    class in ``class_mapping`` but not in ``class_colors`` got its mapping
+    re-keyed and then the rename returned -- leaving it half-renamed."""
+    from PyQt6.QtWidgets import QInputDialog
+
+    window.add_class("cell", QColor("#ff0000"))
+    window.image_label.class_colors.pop("cell")
+
+    monkeypatch.setattr(
+        QInputDialog, "getText", staticmethod(lambda *a, **k: ("hole", True))
+    )
+    window.class_controller.rename_class(_first_item(window))
+
+    assert "cell" in window.class_mapping
+    assert "hole" not in window.class_mapping
+
+
 def test_rename_does_not_orphan_the_visibility_entry(window, monkeypatch):
     """``class_visibility`` is keyed by class name, so a rename used to leave a
     dead entry behind under the old one -- which then got saved into the .iap.

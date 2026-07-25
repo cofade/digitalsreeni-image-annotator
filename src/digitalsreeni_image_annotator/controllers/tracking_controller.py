@@ -218,6 +218,18 @@ class TrackingController(QObject):
             run_id, len(committed_frames), uncertain,
         )
 
+        # A run that tracked frames and committed none of them is a silent
+        # failure -- the only reachable cause is the class having gone away
+        # between the seed and the commit, and the log line alone is exactly
+        # the reporting gap this was fixed for elsewhere.
+        if results and not committed_frames and not uncertain:
+            QMessageBox.warning(
+                self.mw, "Nothing Tracked",
+                f"Tracking produced results but committed none of them: the "
+                f"class '{class_name}' no longer exists in this project.",
+            )
+            return
+
         if uncertain:
             reply = QMessageBox.question(
                 self.mw, "Review Uncertain Frames",
@@ -242,7 +254,7 @@ class TrackingController(QObject):
         # Shared "the project has no such class" policy (resolve_category_id),
         # so all three commit loops -- auto-accept, review-accept, tracking --
         # drop for the same reason. Tracking's class comes from the selected
-        # annotation, so this is near-unreachable here; the caller already
+        # annotation, so reaching this means it was deleted mid-run; the caller
         # reports a run that committed nothing.
         category_id = resolve_category_id(self.mw.class_mapping, class_name)
         if category_id is None:

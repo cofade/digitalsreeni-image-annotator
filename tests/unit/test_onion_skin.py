@@ -301,7 +301,7 @@ def test_ghost_is_not_hit_testable(label):
 
 def test_clearing_the_canvas_drops_the_ghost(label):
     label.set_onion_pixmaps([_ghost()])
-    label.set_onion_annotations([("cell", square(10, 10, 40))])
+    label.set_onion_annotations([("cell", [square(10, 10, 40)])])
     label.clear()
     assert label.onion_pixmaps == []
     assert label.scaled_onion_pixmaps() == []
@@ -318,7 +318,7 @@ def test_clearing_the_canvas_drops_the_ghost(label):
 def _ghosted(label, class_name="cell", annotation=None, colour="#1F77B4"):
     label.class_colors = {class_name: QColor(colour)}
     label.onion_annotations = [
-        (class_name, annotation if annotation is not None else square(10, 10, 40))
+        (class_name, [annotation if annotation is not None else square(10, 10, 40)])
     ]
     painter = RecordingPainter()
     label.renderer.draw_onion_skin(painter)
@@ -382,6 +382,37 @@ def test_a_degenerate_ghost_shape_draws_nothing_rather_than_crashing(label):
     assert painter.count("drawRect") == 0
 
 
+def test_visibility_is_resolved_once_per_class_not_once_per_shape(qtbot):
+    """``is_class_visible`` is a linear scan of the class-list widget and this
+    runs inside ``paintEvent``. Per-shape would put hundreds of widget scans
+    per repaint into the pan and zoom path."""
+    asked = []
+
+    class CountingContext(FakeCanvasContext):
+        def is_class_visible(self, name):
+            asked.append(name)
+            return True
+
+    label = make_label(qtbot, ctx=CountingContext())
+    label.class_colors = {"cell": QColor("#1F77B4")}
+    label.onion_annotations = [
+        ("cell", [square(10 * i, 10, 8) for i in range(20)])
+    ]
+
+    painter = RecordingPainter()
+    label.renderer.draw_onion_skin(painter)
+
+    assert painter.count("drawPolygon") == 20
+    assert asked == ["cell"]
+
+
+def test_the_default_opacity_suits_an_outline_not_a_wash():
+    """0.35 was tuned for a blended raster. The default content is now a 2 px
+    dashed outline, which at that value is too faint to line anything up
+    against. Pinned so the constant cannot drift back without a decision."""
+    assert onion.DEFAULT_OPACITY >= 0.5
+
+
 # --- content gating in the controller --------------------------------------
 
 
@@ -429,9 +460,25 @@ def test_annotations_content_never_decodes_a_neighbouring_slice(label):
     controller.refresh_onion_skin()
 
     assert slices.decoded == [], "decoded pixels nothing was going to draw"
-    assert len(label.onion_annotations) == 1
-    assert label.onion_annotations[0][0] == "cell"
+    assert label.onion_annotations == [("cell", [square(10, 10, 40)])]
     assert label.onion_pixmaps == []
+
+
+def test_temp_classes_are_never_ghosted(label):
+    """``save_current_annotations`` copies the label's annotations wholesale
+    into ``all_annotations``, so un-reviewed YOLO predictions live there too.
+    Ghosting them would show proposals nobody accepted as if they were labels."""
+    controller, _ = _controller(
+        label,
+        onion.CONTENT_ANNOTATIONS,
+        {"stack_Z2": {
+            "Temp-cell": [square(10, 10, 40)],
+            "cell": [square(60, 60, 40)],
+        }},
+    )
+    controller.refresh_onion_skin()
+
+    assert [name for name, _ in label.onion_annotations] == ["cell"]
 
 
 def test_image_content_decodes_but_ghosts_no_annotations(label):

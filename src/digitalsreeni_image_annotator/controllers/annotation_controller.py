@@ -316,6 +316,19 @@ class AnnotationController(QObject):
         self._detail_coalesce_key = None
         self._pending_baseline = None
 
+    def rename_class_in_history(self, old_name, new_name):
+        """Follow a class rename into the undo/redo snapshots (ADR-026).
+
+        Snapshots are whole per-image annotation dicts keyed by class name, so
+        they are just as name-keyed as ``class_mapping`` -- and just as much a
+        part of the rename fan-out.
+        """
+        self.history.rename_class(old_name, new_name)
+
+    def drop_class_from_history(self, class_name):
+        """Forget a deleted class in the undo/redo snapshots (ADR-026)."""
+        self.history.drop_class(class_name)
+
     def capture_edit_baseline(self):
         """Remember the pre-gesture state at the *start* of a bbox drag or
         paint stroke. The commit notification arrives only after ImageLabel

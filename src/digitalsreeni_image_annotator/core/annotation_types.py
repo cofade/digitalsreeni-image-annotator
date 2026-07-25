@@ -45,17 +45,14 @@ def resolve_category_id(
 ) -> int | None:
     """Category id for ``class_name``, or ``None`` if the project has no such class.
 
-    The single home for the "a detection names a class that does not exist"
-    policy. Three commit loops need it -- DINO auto-accept, the review accept,
-    and SAM 3 tracking -- and while each carried its own copy, two of them made
-    the decision *silently*: the annotation was dropped with a `logger.warning`
-    and the run still reported success, so a total failure looked exactly like
-    a total success.
+    Shared by the three commit loops (DINO auto-accept, review accept, SAM 3
+    tracking). Passing a ``Counter`` as ``skipped`` tallies the losses by class
+    name so the caller can report them -- two of the three used to drop the
+    annotation with only a ``logger.warning`` and still report success.
 
-    Dropping is the right call; there is nowhere to file the annotation and
-    inventing the class would be worse. What matters is that the caller can say
-    so. Pass a ``Counter`` as ``skipped`` and the losses are tallied by class
-    name, ready to report.
+    The loops themselves stay separate: they differ in shape, and
+    ``accept_dino_results`` must NOT pre-assign ``number`` because
+    ``add_annotation_to_list`` derives it after the append.
     """
     category_id = class_mapping.get(class_name)
     if category_id is None and skipped is not None:

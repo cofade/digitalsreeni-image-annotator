@@ -95,18 +95,20 @@ class CanvasRenderer:
         painter.scale(self.label.zoom_factor, self.label.zoom_factor)
         painter.setOpacity(self.label.onion_opacity)
         painter.setBrush(QBrush(Qt.BrushStyle.NoBrush))
-        for class_name, annotation in ghosts:
+        for class_name, annotations in ghosts:
             # The same visibility question every other layer asks, asked the
             # same way (ADR-018). The shadow `class_visibility` dict disagrees
             # for a class missing from the list, so a second idiom here would
-            # be a second answer.
+            # be a second answer. Asked once per CLASS -- it is a linear scan
+            # of the class-list widget, and this runs inside paintEvent.
             if not self.label._ctx.is_class_visible(class_name):
                 continue
             color = QColor(
                 self.label.class_colors.get(class_name, QColor(Qt.GlobalColor.white))
             )
             painter.setPen(QPen(color, self._pen_w(2), Qt.PenStyle.DashLine))
-            self._draw_onion_shape(painter, annotation)
+            for annotation in annotations:
+                self._draw_onion_shape(painter, annotation)
         painter.setOpacity(1.0)
         painter.restore()
 

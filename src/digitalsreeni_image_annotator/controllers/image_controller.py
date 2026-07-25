@@ -1529,21 +1529,33 @@ class ImageController(QObject):
         label.set_onion_pixmaps(pixmaps)
 
     def _onion_annotations_for(self, names):
-        """Flatten the committed annotations of the neighbour slices.
+        """Committed annotations of the neighbour slices, grouped by class.
 
-        ``[(class_name, annotation), ...]``, read from ``all_annotations`` --
-        the project-level cache, which holds every slice except the one on
-        screen (that one lives on the label until ``save_current_annotations``
-        writes it back). Since a neighbour is by definition not the current
-        slice, that cache is the right and only source here.
+        ``[(class_name, [annotation, ...]), ...]``, read from
+        ``all_annotations`` -- the project-level cache, which holds every slice
+        except the one on screen (that one lives on the label until
+        ``save_current_annotations`` writes it back). A neighbour is by
+        definition not the current slice, so that cache is the right source.
+
+        **Grouped, not flattened**, because the renderer asks
+        ``is_class_visible`` once per entry and that routes through a linear
+        ``findItems`` scan of the class-list widget. Once per class is cheap;
+        once per shape would put hundreds of widget scans per repaint into the
+        pan and zoom path the ghost is otherwise careful to stay out of.
+
+        ``Temp-*`` classes are excluded: ``save_current_annotations`` copies
+        ``image_label.annotations`` wholesale into ``all_annotations``, so
+        un-reviewed YOLO predictions live there too, and ghosting them would
+        present proposals nobody has accepted as if they were labels.
         """
-        ghosts = []
+        grouped = {}
         for name in names:
             by_class = self.mw.all_annotations.get(name) or {}
             for class_name, annotations in by_class.items():
-                for annotation in annotations:
-                    ghosts.append((class_name, annotation))
-        return ghosts
+                if class_name.startswith("Temp-"):
+                    continue
+                grouped.setdefault(class_name, []).extend(annotations)
+        return list(grouped.items())
 
     def set_onion_enabled(self, enabled):
         self.mw.onion_enabled = bool(enabled)

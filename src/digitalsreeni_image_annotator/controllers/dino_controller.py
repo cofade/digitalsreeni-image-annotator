@@ -755,9 +755,8 @@ class DINOController(QObject):
             self.mw,
             "Detections Discarded",
             f"{saved}{dropped} detection(s) were discarded: {names}.\n\n"
-            "Those names appear in the detection phrase table but not in the "
-            "class list, so there was nowhere to file the results. Correct the "
-            "names in the phrase table and run the detection again.",
+            "The project has no such class, so there was nowhere to file "
+            "them. Re-add the class and run the detection again.",
         )
 
     def _store_dino_batch_results(self, image_name, dino_results, sam_results):
@@ -869,6 +868,7 @@ class DINOController(QObject):
         self.mw.annotation_controller.record_history(image_name)
 
         unassigned = 0
+        committed = 0
         skipped = Counter()
         for ann in self.mw.image_label.temp_annotations:
             # An unprompted Segment Everything proposal (issue #69) commits
@@ -897,10 +897,16 @@ class DINOController(QObject):
             }
             self.mw.image_label.annotations.setdefault(class_name, []).append(new_ann)
             self.mw.add_annotation_to_list(new_ann)
+            committed += 1
 
         self.mw.image_label.temp_annotations = []
         self._drop_auto_temp_class()
         self.mw.dino_batch_results.pop(image_name, None)
+        # Report BEFORE advancing the review. _show_dino_batch_review navigates
+        # to the next pending image, so a warning raised after it would name
+        # classes dropped from an image the user is no longer looking at.
+        if skipped:
+            self._warn_unknown_classes(skipped, committed)
         if self.mw.dino_batch_results:
             self._show_dino_batch_review()
         self.mw.save_current_annotations()
@@ -916,13 +922,6 @@ class DINOController(QObject):
             )
             logger.info("discarded %d unassigned proposal(s)", unassigned)
         self.mw.lbl_dino_status.setText(status)
-        # An unassigned proposal is the user declining to classify it, so the
-        # status line is proportionate. A proposal whose CLASS has vanished is
-        # not a decision the user made -- it is work being thrown away -- and
-        # this path is the dropdown default, so it gets the same dialog the
-        # auto-accept path does.
-        if skipped:
-            self._warn_unknown_classes(skipped)
         logger.info("DINO results accepted.")
 
     def rename_class_in_pending(self, old_name, new_name):
@@ -966,6 +965,14 @@ class DINOController(QObject):
         self.mw.image_label.temp_annotations = self._detach_class(
             self.mw.image_label.temp_annotations, class_name
         )
+        # Deleting a class can empty the review that is on screen while other
+        # images still have pending results. Without this the overlay silently
+        # vanishes, the status line keeps advertising the review that is gone,
+        # and the remaining images are never offered -- so they survive only
+        # until the app closes. Mirrors what reject_dino_results does.
+        if not self.mw.image_label.temp_annotations and self.mw.dino_batch_results:
+            self._show_dino_batch_review()
+        self.mw.image_label.update()
 
     @staticmethod
     def _detach_class(results, class_name):

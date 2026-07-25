@@ -419,21 +419,22 @@ class ClassController(QObject):
             self.mw, "Rename Class", "Enter new class name:", text=old_name
         )
         if ok and new_name and new_name != old_name:
-            if old_name in self.mw.class_mapping:
-                old_id = self.mw.class_mapping[old_name]
-                self.mw.class_mapping[new_name] = old_id
-                del self.mw.class_mapping[old_name]
-            else:
+            # Validate BOTH preconditions before touching anything. These were
+            # two guards each sitting after its own mutation, so a class
+            # present in class_mapping but missing from class_colors got its
+            # mapping re-keyed and then the rename bailed, leaving the project
+            # half-renamed. Every mutation below this point is unconditional.
+            if old_name not in self.mw.class_mapping:
                 logger.warning(f"Class '{old_name}' not found in class_mapping")
                 return
-
-            if old_name in self.mw.image_label.class_colors:
-                self.mw.image_label.class_colors[new_name] = (
-                    self.mw.image_label.class_colors.pop(old_name)
-                )
-            else:
+            if old_name not in self.mw.image_label.class_colors:
                 logger.warning(f"Class '{old_name}' not found in class_colors")
                 return
+
+            self.mw.class_mapping[new_name] = self.mw.class_mapping.pop(old_name)
+            self.mw.image_label.class_colors[new_name] = (
+                self.mw.image_label.class_colors.pop(old_name)
+            )
 
             # Keypoint schema follows the class name (issue #35).
             if old_name in self.mw.keypoint_schemas:
@@ -441,14 +442,11 @@ class ClassController(QObject):
                     self.mw.keypoint_schemas.pop(old_name)
                 )
 
-            # Visibility is keyed by class name too. The visible behaviour was
-            # already right (hiding goes through the checkbox, and the
-            # setText below re-fires itemChanged), but the entry under the old
-            # name was left behind to be saved into the .iap.
-            if old_name in self.mw.image_label.class_visibility:
-                self.mw.image_label.class_visibility[new_name] = (
-                    self.mw.image_label.class_visibility.pop(old_name)
-                )
+            # Only the removal does work: the setText below re-fires
+            # itemChanged, which writes the new name's entry from the
+            # checkbox. What was left behind was a dead entry under the old
+            # name, bound for the .iap.
+            self.mw.image_label.class_visibility.pop(old_name, None)
 
             # The DINO threshold row and the phrase list are keyed by class
             # name as well. add_class and delete_class have always kept both in
@@ -464,6 +462,14 @@ class ClassController(QObject):
             # so they need re-keying too -- otherwise a rename mid-review
             # leaves proposals that can only ever be discarded on accept.
             self.mw.dino_controller.rename_class_in_pending(old_name, new_name)
+            # Undo snapshots are per-image {class_name: [...]} dicts, so they
+            # are as name-keyed as anything else here. Skipping them made
+            # Ctrl+Z after a rename restore the annotations under the OLD
+            # name -- unmapped, uncoloured, absent from the class list, hence
+            # invisible on canvas but still written to the .iap.
+            self.mw.annotation_controller.rename_class_in_history(
+                old_name, new_name
+            )
 
             for image_name, image_annotations in self.mw.all_annotations.items():
                 if old_name in image_annotations:
@@ -538,6 +544,7 @@ class ClassController(QObject):
             self.mw.dino_class_table.remove_class(class_name)
             self.mw.dino_phrase_panel.on_class_removed(class_name)
             self.mw.dino_controller.drop_class_from_pending(class_name)
+            self.mw.annotation_controller.drop_class_from_history(class_name)
 
             self.mw.update_annotation_list()
 

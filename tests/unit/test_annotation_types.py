@@ -14,8 +14,15 @@ import os
 import shutil
 import subprocess
 import sys
-import tomllib
 from pathlib import Path
+
+# tomllib is stdlib only from 3.12; the project floor is 3.10, so fall back to
+# the `tomli` backport (a dev dependency on those versions). Without this the
+# whole module fails to import on 3.10/3.11 and takes the suite down with it.
+try:
+    import tomllib
+except ModuleNotFoundError:  # pragma: no cover - version-dependent
+    import tomli as tomllib
 
 import pytest
 

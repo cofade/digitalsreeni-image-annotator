@@ -55,6 +55,9 @@ dev = [
     "pytest-xvfb>=3.0.0; sys_platform == 'linux'",
     "ruff>=0.6",                                    # lint (issue #78)
     "mypy>=1.11",                                   # type check (issue #78)
+    # tomllib is stdlib from 3.12; the tests that read the mypy config back out
+    # of pyproject.toml need the backport on the supported floor versions.
+    "tomli>=2.0; python_version < '3.12'",
 ]
 
 [project.urls]
@@ -105,13 +108,20 @@ warn_unused_configs = true
 # as upstreams ship stubs.
 #
 # follow_imports = "skip" matters as much as the ignore: several of these ship
-# source written for a newer Python than our floor, and mypy parsing them under
-# python_version = "3.10" fails on syntax we neither own nor call. Skipping
-# means we type-check against `Any` at those boundaries, which is the honest
-# description of an untyped dependency anyway.
+# source (or stubs) written for a newer Python than our floor, and mypy parsing
+# them under python_version = "3.10" fails on syntax we neither own nor call.
+# Skipping means we type-check against `Any` at those boundaries, which is the
+# honest description of an untyped dependency anyway.
+#
+# numpy is here for that second reason only -- it IS typed, but on Python 3.14
+# its __init__.pyi uses 3.12+ `type` statements, which mypy rejects while
+# targeting 3.10. Keeping python_version pinned to the floor is worth more than
+# following numpy's stubs: the floor is what we promise to support, and a
+# 3.10-incompatible construct in our own code has to fail the check on every
+# matrix entry, not only the oldest one.
 [[tool.mypy.overrides]]
 module = [
-    "cv2.*", "czifile.*", "mlflow.*", "plotly.*", "pystackreg.*",
+    "cv2.*", "czifile.*", "mlflow.*", "numpy.*", "plotly.*", "pystackreg.*",
     "pydicom.*", "shapely.*", "skimage.*", "tifffile.*",
     "transformers.*", "ultralytics.*", "yaml.*", "PIL.*",
 ]

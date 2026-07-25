@@ -103,8 +103,9 @@ class SegmentEverythingController(QObject):
             # so ``close()`` sets ``wasCanceled()`` all by itself. Checking it
             # afterwards reported "cancelled" on every single run and threw
             # away every proposal SAM had just spent seconds producing, with
-            # one log line to show for it. Verified on Qt 6.7: after close() it
-            # is True; after hide() or reset() it is False.
+            # one log line to show for it. After close() the flag it
+            # is True; after hide() or reset() it is False. (Verified on Qt
+            # 6.11.1 / PyQt6 6.11.0, the versions actually in this venv.)
             cancelled = progress.wasCanceled()
             progress.close()
 

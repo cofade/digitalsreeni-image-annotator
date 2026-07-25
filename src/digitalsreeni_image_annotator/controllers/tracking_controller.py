@@ -43,6 +43,7 @@ from PyQt6.QtWidgets import (
     QProgressDialog,
 )
 
+from ..core.annotation_types import resolve_category_id
 from ..core.video_handler import frame_key, parse_frame_index
 from ..inference.sam_utils import InferenceBusyError
 
@@ -238,7 +239,13 @@ class TrackingController(QObject):
         ``source == "sam3-track"`` + the shared ``track_run`` id so
         :meth:`undo_last_track` can find and remove the whole run.
         """
-        if class_name not in self.mw.class_mapping:
+        # Shared "the project has no such class" policy (resolve_category_id),
+        # so all three commit loops -- auto-accept, review-accept, tracking --
+        # drop for the same reason. Tracking's class comes from the selected
+        # annotation, so this is near-unreachable here; the caller already
+        # reports a run that committed nothing.
+        category_id = resolve_category_id(self.mw.class_mapping, class_name)
+        if category_id is None:
             logger.warning("track: unknown class '%s'; skipping commit", class_name)
             return False
 
@@ -262,7 +269,7 @@ class TrackingController(QObject):
         # tag that lets undo_last_track find the whole run.
         ann = {
             "segmentation": polygon,
-            "category_id": self.mw.class_mapping[class_name],
+            "category_id": category_id,
             "category_name": class_name,
             "score": score,
             "source": "sam3-track",

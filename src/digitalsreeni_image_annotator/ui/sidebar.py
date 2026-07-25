@@ -448,6 +448,9 @@ def _build_onion_controls(window):
     window.onion_checkbox.toggled.connect(window.image_controller.set_onion_enabled)
     layout.addWidget(window.onion_checkbox)
 
+    # Labelled, because this combo and the neighbour-mode one next to it both
+    # offer an option spelled "Both" and are otherwise indistinguishable.
+    layout.addWidget(QLabel("Ghost:"))
     # WHAT to ghost. Annotations first because it is the default and the
     # reason the feature earns its screen space: ghosting the neighbouring
     # *pixels* over an opaque photographic slice mostly just makes the current

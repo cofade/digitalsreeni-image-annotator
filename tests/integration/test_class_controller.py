@@ -103,7 +103,7 @@ def test_rename_carries_the_dino_row_and_phrases_across(window, monkeypatch):
     from PyQt6.QtWidgets import QInputDialog
 
     window.add_class("cell", QColor("#ff0000"))
-    window.dino_class_table.get_class_configs()[0]["name"] == "cell"
+    assert [c["name"] for c in window.dino_class_table.get_class_configs()] == ["cell"]
     window.dino_class_table.cellWidget(0, 1).setValue(0.42)  # a non-default thr
 
     monkeypatch.setattr(

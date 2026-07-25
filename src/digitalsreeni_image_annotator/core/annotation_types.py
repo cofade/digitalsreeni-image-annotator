@@ -16,6 +16,7 @@ checker.
 Qt-free, so both the GUI and the CLI can import them.
 """
 
+from collections import Counter
 from typing import TypedDict
 
 # --- aliases for the recurring shapes --------------------------------------
@@ -35,6 +36,31 @@ Keypoints = list[float]
 
 #: ``{class_name: class_id}``.
 ClassMapping = dict[str, int]
+
+
+def resolve_category_id(
+    class_mapping: ClassMapping,
+    class_name: str,
+    skipped: Counter | None = None,
+) -> int | None:
+    """Category id for ``class_name``, or ``None`` if the project has no such class.
+
+    The single home for the "a detection names a class that does not exist"
+    policy. Three commit loops need it -- DINO auto-accept, the review accept,
+    and SAM 3 tracking -- and while each carried its own copy, two of them made
+    the decision *silently*: the annotation was dropped with a `logger.warning`
+    and the run still reported success, so a total failure looked exactly like
+    a total success.
+
+    Dropping is the right call; there is nowhere to file the annotation and
+    inventing the class would be worse. What matters is that the caller can say
+    so. Pass a ``Counter`` as ``skipped`` and the losses are tallied by class
+    name, ready to report.
+    """
+    category_id = class_mapping.get(class_name)
+    if category_id is None and skipped is not None:
+        skipped[class_name] += 1
+    return category_id
 
 
 class KeypointSchema(TypedDict, total=False):

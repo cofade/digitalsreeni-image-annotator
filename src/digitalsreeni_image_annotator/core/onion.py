@@ -34,7 +34,11 @@ MODES = (MODE_PREVIOUS, MODE_NEXT, MODE_BOTH)
 
 DEFAULT_MODE = MODE_PREVIOUS
 DEFAULT_OFFSET = 1
-DEFAULT_OPACITY = 0.35
+# Tuned for the DEFAULT content, which is a 2 px dashed outline rather than a
+# blended raster: 0.35 was chosen for the wash and leaves an outline too faint
+# to line anything up against. The slider still spans 0.05..0.95 for whoever
+# turns the image ghost on.
+DEFAULT_OPACITY = 0.55
 
 # WHAT gets ghosted, which turns out to matter more than which neighbour does.
 # Ghosting the neighbour's *pixels* is the animator's onion skin, and on an

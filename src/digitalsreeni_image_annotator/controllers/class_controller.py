@@ -460,6 +460,10 @@ class ClassController(QObject):
             # them.
             self.mw.dino_class_table.rename_class(old_name, new_name)
             self.mw.dino_phrase_panel.on_class_renamed(old_name, new_name)
+            # Pending review results capture the class name at detection time,
+            # so they need re-keying too -- otherwise a rename mid-review
+            # leaves proposals that can only ever be discarded on accept.
+            self.mw.dino_controller.rename_class_in_pending(old_name, new_name)
 
             for image_name, image_annotations in self.mw.all_annotations.items():
                 if old_name in image_annotations:
@@ -481,6 +485,10 @@ class ClassController(QObject):
 
             item.setText(new_name)
 
+            # The onion ghosts hold (class_name, annotation) pairs resolved at
+            # navigation time, so without this they keep drawing the old name
+            # -- in the white fallback colour -- until the next slice change.
+            self.mw.image_controller.refresh_onion_skin()
             self.mw.image_label.update()
             self.mw.auto_save()
 
@@ -529,6 +537,7 @@ class ClassController(QObject):
 
             self.mw.dino_class_table.remove_class(class_name)
             self.mw.dino_phrase_panel.on_class_removed(class_name)
+            self.mw.dino_controller.drop_class_from_pending(class_name)
 
             self.mw.update_annotation_list()
 
@@ -544,6 +553,7 @@ class ClassController(QObject):
                 else:
                     self.mw.disable_annotation_tools()
 
+            self.mw.image_controller.refresh_onion_skin()
             self.mw.image_label.update()
 
             QMessageBox.information(

@@ -36,6 +36,7 @@ from PyQt6.QtWidgets import (
     QProgressDialog,
 )
 
+from ..core.annotation_types import resolve_category_id
 from ..core.constants import default_class_color
 from ..core.keypoint_schema import schema_k
 from ..core.mask_filters import SAM_EVERYTHING_SOURCE
@@ -117,6 +118,11 @@ class DINOController(QObject):
     def _on_dino_model_changed(self, text):
         """Selection → ready state. Downloads happen lazily on first Detect."""
         self.mw.dino_browse_row.setVisible(text == "Custom / fine-tuned (browse)")
+        # Clear here rather than on the one branch that sets it: the status
+        # label is shared by every model, so a tooltip left attached from the
+        # SAM 3 "weights not found" branch would still be hanging off
+        # "Ready: grounding-dino-base" three selections later.
+        self.mw.lbl_dino_status.setToolTip("")
 
         if text == SAM3_MODEL_LABEL:
             self._on_sam3_selected()
@@ -189,7 +195,6 @@ class DINOController(QObject):
             self.mw.btn_detect_batch.setEnabled(False)
             return
 
-        self.mw.lbl_dino_status.setToolTip("")
         self.mw.lbl_dino_status.setText("Loading SAM 3 ...")
         QApplication.processEvents()
         try:
@@ -466,7 +471,7 @@ class DINOController(QObject):
             except Exception:
                 logger.exception("_commit_dino_results failed")
             if skipped:
-                self._warn_unknown_classes(skipped)
+                self._warn_unknown_classes(skipped, n_committed)
             self.mw.image_label.temp_annotations = []
             self.mw.image_label.update()
             self.mw.update_annotation_list()
@@ -697,15 +702,17 @@ class DINOController(QObject):
             if "error" in s:
                 continue
             class_name = r["class_name"]
-            if class_name not in self.mw.class_mapping:
+            category_id = resolve_category_id(
+                self.mw.class_mapping, class_name, skipped
+            )
+            if category_id is None:
                 logger.warning(f"Skipping DINO result for unknown class '{class_name}'")
-                skipped[class_name] += 1
                 continue
             existing = target.get(class_name, [])
             number = max((a.get("number", 0) for a in existing), default=0) + 1
             ann = {
                 "segmentation": s["segmentation"],
-                "category_id": self.mw.class_mapping[class_name],
+                "category_id": category_id,
                 "category_name": class_name,
                 "score": r["score"],
                 "source": r.get("source", "dino"),
@@ -728,11 +735,13 @@ class DINOController(QObject):
         when every last one had been discarded -- a total failure and a total
         success looked identical from the UI.
 
-        The usual cause was renaming a class: the detection phrase table kept
-        the old name and kept prompting with it. ``ClassController.rename_class``
-        now renames the table row too, so this should be rare -- but a project
-        saved before that fix still carries the mismatch, and it must not fail
-        quietly a second time.
+        The cause was renaming a class: the detection phrase table kept the old
+        name and kept prompting with it. ``ClassController.rename_class`` now
+        re-keys the table, the phrases and any pending review results, and
+        ``delete_class`` drops the pending results outright -- so the remaining
+        way to reach this is a class disappearing between a detection running
+        and its results being accepted. Rare, but it must not fail quietly a
+        second time.
         """
         dropped = sum(skipped.values())
         names = ", ".join(
@@ -860,6 +869,7 @@ class DINOController(QObject):
         self.mw.annotation_controller.record_history(image_name)
 
         unassigned = 0
+        skipped = Counter()
         for ann in self.mw.image_label.temp_annotations:
             # An unprompted Segment Everything proposal (issue #69) commits
             # under the class the user assigned by clicking it. One that was
@@ -872,12 +882,15 @@ class DINOController(QObject):
             ):
                 unassigned += 1
                 continue
-            if class_name not in self.mw.class_mapping:
+            category_id = resolve_category_id(
+                self.mw.class_mapping, class_name, skipped
+            )
+            if category_id is None:
                 logger.warning(f"Skipping DINO result for unknown class '{class_name}'")
                 continue
             new_ann = {
                 "segmentation": ann["segmentation"],
-                "category_id": self.mw.class_mapping[class_name],
+                "category_id": category_id,
                 "category_name": class_name,
                 "score": ann.get("score", 0.0),
                 "source": ann.get("source", "dino"),
@@ -903,7 +916,67 @@ class DINOController(QObject):
             )
             logger.info("discarded %d unassigned proposal(s)", unassigned)
         self.mw.lbl_dino_status.setText(status)
+        # An unassigned proposal is the user declining to classify it, so the
+        # status line is proportionate. A proposal whose CLASS has vanished is
+        # not a decision the user made -- it is work being thrown away -- and
+        # this path is the dropdown default, so it gets the same dialog the
+        # auto-accept path does.
+        if skipped:
+            self._warn_unknown_classes(skipped)
         logger.info("DINO results accepted.")
+
+    def rename_class_in_pending(self, old_name, new_name):
+        """Follow a class rename through the pending review results.
+
+        ``dino_batch_results`` and ``image_label.temp_annotations`` capture
+        ``category_name`` at DETECTION time, so a rename mid-review otherwise
+        leaves every pending proposal tagged with a name the project no longer
+        has: they draw in the fallback colour and are then discarded on accept.
+
+        Re-keyed rather than cleared -- renaming a class should not destroy a
+        review the user is halfway through.
+        """
+        pending = list(self.mw.dino_batch_results.values())
+        pending.append(self.mw.image_label.temp_annotations)
+        for results in pending:
+            for ann in results:
+                if ann.get("category_name") == old_name:
+                    ann["category_name"] = new_name
+                # Segment Everything proposals stay under Temp-Auto and carry
+                # the user's choice in `assigned_class` instead (#69).
+                if ann.get("assigned_class") == old_name:
+                    ann["assigned_class"] = new_name
+
+    def drop_class_from_pending(self, class_name):
+        """Detach a deleted class from the pending review results.
+
+        Unlike a rename there is nowhere for these to go. A prompted proposal
+        (DINO / SAM 3) named that class and is removed; an unprompted one only
+        had it *assigned*, so it goes back to unassigned and stays reviewable.
+        Leaving either in place parks work that can now only be discarded.
+        """
+        for image_name in list(self.mw.dino_batch_results):
+            kept = self._detach_class(
+                self.mw.dino_batch_results[image_name], class_name
+            )
+            if kept:
+                self.mw.dino_batch_results[image_name] = kept
+            else:
+                del self.mw.dino_batch_results[image_name]
+        self.mw.image_label.temp_annotations = self._detach_class(
+            self.mw.image_label.temp_annotations, class_name
+        )
+
+    @staticmethod
+    def _detach_class(results, class_name):
+        kept = []
+        for ann in results:
+            if ann.get("assigned_class") == class_name:
+                ann["assigned_class"] = None
+            if ann.get("category_name") == class_name:
+                continue
+            kept.append(ann)
+        return kept
 
     def _drop_auto_temp_class(self):
         """Remove the placeholder colour entry Segment Everything registered.

@@ -96,7 +96,11 @@ class CanvasRenderer:
         painter.setOpacity(self.label.onion_opacity)
         painter.setBrush(QBrush(Qt.BrushStyle.NoBrush))
         for class_name, annotation in ghosts:
-            if not self.label.class_visibility.get(class_name, True):
+            # The same visibility question every other layer asks, asked the
+            # same way (ADR-018). The shadow `class_visibility` dict disagrees
+            # for a class missing from the list, so a second idiom here would
+            # be a second answer.
+            if not self.label._ctx.is_class_visible(class_name):
                 continue
             color = QColor(
                 self.label.class_colors.get(class_name, QColor(Qt.GlobalColor.white))

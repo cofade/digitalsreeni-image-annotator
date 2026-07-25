@@ -18,7 +18,12 @@ from PyQt6.QtGui import QColor, QPixmap
 
 from src.digitalsreeni_image_annotator import app_settings
 from src.digitalsreeni_image_annotator.core import onion
-from tests.canvas_fixtures import RecordingPainter, make_label, square
+from tests.canvas_fixtures import (
+    FakeCanvasContext,
+    RecordingPainter,
+    make_label,
+    square,
+)
 
 NAMES = [f"stack_Z{i}" for i in range(1, 6)]  # Z1..Z5
 
@@ -96,7 +101,7 @@ def test_is_available_needs_more_than_one_slice():
 
 @pytest.mark.parametrize(
     "raw,expected",
-    [(0.0, 0.05), (1.0, 0.95), (-5, 0.05), (0.4, 0.4), ("nonsense", 0.35)],
+    [(0.0, 0.05), (1.0, 0.95), (-5, 0.05), (0.4, 0.4), ("nonsense", 0.55)],
 )
 def test_opacity_is_clamped_away_from_both_extremes(raw, expected):
     """Never 0 (invisible ghost, decode cost still paid) and never 1 (the ghost
@@ -341,11 +346,11 @@ def test_the_annotation_ghost_keeps_its_class_colour(label):
     assert pen.color().name().lower() == "#1f77b4"
 
 
-def test_a_hidden_class_is_not_ghosted(label):
+def test_a_hidden_class_is_not_ghosted(qtbot):
     """A ghost that ignores the visibility checkbox is a ghost you cannot turn
-    off."""
-    label.class_visibility = {"cell": False}
-    painter = _ghosted(label)
+    off. Asked through the CanvasContext, like every other layer (ADR-018)."""
+    hidden = make_label(qtbot, ctx=FakeCanvasContext(hidden={"cell"}))
+    painter = _ghosted(hidden)
     assert painter.count("drawPolygon") == 0
 
 

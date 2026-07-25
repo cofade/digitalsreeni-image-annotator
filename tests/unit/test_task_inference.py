@@ -212,17 +212,30 @@ def test_a_video_with_loaded_frames_does_not_block_training():
     assert ti.unresolvable_stack_blockers(images, loaded_stack_bases=["clip"]) == []
 
 
-def test_a_stack_with_no_loaded_slices_blocks_training():
-    """The genuine failure: no materialised slices means no pixels to write,
-    and the exporter would skip it with nothing but a log line."""
+def test_an_annotated_stack_with_no_loaded_slices_blocks_training():
+    """The genuine failure: annotations exist but there are no pixels to write,
+    so the exporter would drop them with nothing but a log line -- training on
+    less data than the user believes."""
     images = [
         {"file_name": "flat.png"},
         {"file_name": "stack.tif", "is_multi_slice": True},
     ]
-    blockers = ti.unresolvable_stack_blockers(images, loaded_stack_bases=[])
+    blockers = ti.unresolvable_stack_blockers(
+        images, loaded_stack_bases=[], annotated_names=["stack_Z1", "flat.png"]
+    )
     assert len(blockers) == 1
     assert "stack.tif" in blockers[0]
     assert "flat.png" not in blockers[0]
+
+
+def test_an_unannotated_stack_does_not_block():
+    """It contributes no keys to the export, so it cannot break anything.
+    Refusing to train because a 4 GB CZI sits unopened in the project would be
+    a refusal with no failure behind it."""
+    images = [{"file_name": "big.czi", "is_multi_slice": True}]
+    assert ti.unresolvable_stack_blockers(
+        images, loaded_stack_bases=[], annotated_names=["flat.png"]
+    ) == []
 
 
 def test_plain_images_do_not_block():
@@ -234,7 +247,11 @@ def test_the_blocker_list_is_truncated_for_readability():
     images = [
         {"file_name": f"stack{i}.tif", "is_multi_slice": True} for i in range(12)
     ]
-    blockers = ti.unresolvable_stack_blockers(images, loaded_stack_bases=[])
+    blockers = ti.unresolvable_stack_blockers(
+        images,
+        loaded_stack_bases=[],
+        annotated_names=[f"stack{i}_Z1" for i in range(12)],
+    )
     assert "and 7 more" in blockers[0]
 
 
@@ -260,7 +277,7 @@ def test_a_stack_whose_slices_are_unknown_contributes_nothing():
     assert ti.trainable_image_names(images, {}) == []
 
 
-def test_the_summary_counts_annotated_frames(): 
+def test_the_summary_counts_annotated_frames():
     """End to end for the Data row: frames annotated, frames total."""
     images = [{"file_name": "clip.mp4", "is_multi_slice": True, "is_video": True}]
     by_base = {"clip": [f"clip_F{i:05d}" for i in range(4)]}
@@ -332,9 +349,9 @@ def test_the_dialog_refuses_a_mixed_k_pose_project(dialog_factory):
     assert "one keypoint count" in dialog.blocker_label.text()
 
 
-def test_the_dialog_refuses_a_stack_with_no_loaded_slices(dialog_factory):
+def test_the_dialog_refuses_an_annotated_stack_with_no_loaded_slices(dialog_factory):
     dialog = dialog_factory(
-        _project(cell=[_polygon()]),
+        {"stack_Z1": {"cell": [_polygon()]}},
         [{"file_name": "stack.tif", "is_multi_slice": True}],
     )
     assert dialog.train_button.isEnabled() is False
@@ -358,7 +375,7 @@ def test_switching_to_sam_lifts_the_yolo_only_blockers(dialog_factory):
     """SAM fine-tuning has neither the pose nor the multi-dimensional
     constraint, so the dialog must not carry YOLO's refusals across."""
     dialog = dialog_factory(
-        _project(cell=[_polygon()]),
+        {"stack_Z1": {"cell": [_polygon()]}},
         [{"file_name": "stack.tif", "is_multi_slice": True}],
     )
     assert dialog.train_button.isEnabled() is False

@@ -188,7 +188,9 @@ def trainable_image_names(all_images, slice_names_by_base=None):
     return names
 
 
-def unresolvable_stack_blockers(all_images, loaded_stack_bases=()):
+def unresolvable_stack_blockers(
+    all_images, loaded_stack_bases=(), annotated_names=()
+):
     """Stacks or videos whose slices cannot be resolved to pixels.
 
     **Not** "stacks and videos are unsupported". They are supported: a video's
@@ -202,23 +204,38 @@ def unresolvable_stack_blockers(all_images, loaded_stack_bases=()):
     perfectly good datasets: 368 polygons across a video's frames, and training
     was unavailable with a message claiming videos cannot be used.
 
-    What genuinely cannot be exported is a stack whose slices were never
-    materialised in this session -- there are no pixels to write, and the
-    exporter would skip it with nothing but a log line.
+    What genuinely cannot be exported is a stack that **has annotations** but
+    whose slices were never materialised -- the exporter would skip those
+    annotations with nothing but a log line, silently training on less data
+    than the user believes.
+
+    An unannotated stack contributes no keys to the export and so cannot break
+    anything: refusing to train because a 4 GB CZI is sitting unopened in the
+    project would be a refusal with no failure behind it.
     """
     loaded = set(loaded_stack_bases or ())
-    blocked = [
-        info.get("file_name")
-        for info in all_images or []
-        if (info.get("is_multi_slice") or info.get("is_video"))
-        and _base_name(info.get("file_name")) not in loaded
-    ]
+    annotated = set(annotated_names or ())
+
+    blocked = []
+    for info in all_images or []:
+        if not (info.get("is_multi_slice") or info.get("is_video")):
+            continue
+        base = _base_name(info.get("file_name"))
+        if base in loaded:
+            continue
+        prefix = base + "_"
+        if not any(key == base or key.startswith(prefix) for key in annotated):
+            continue
+        blocked.append(info.get("file_name"))
+
     if not blocked:
         return []
     listed = ", ".join(str(name) for name in blocked[:5])
     if len(blocked) > 5:
         listed += f", and {len(blocked) - 5} more"
     return [
-        f"{len(blocked)} stack(s)/video(s) have no loaded slices, so there are "
-        f"no pixels to export: {listed}. Open each one once, then train."
+        f"{len(blocked)} annotated stack(s)/video(s) have no loaded slices, so "
+        f"their annotations cannot be exported: {listed}. Re-open the "
+        "project, or check the file is still where it was and that its "
+        "dimensions were confirmed."
     ]

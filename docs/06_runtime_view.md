@@ -847,9 +847,13 @@ Model → Train Model…
   ├─ TrainDialog reads the project
   │    • task inferred from the annotations (core/task_inference)
   │    • live data summary, incl. how many images have no labels
+  │    • stacks and videos count as their SLICES, not as one entry
+  │      (task_inference.trainable_image_names) — annotated video frames
+  │      train like any other image, via image_slices (#45/#47)
   │    • pre-flight blockers disable Train with the specific reason:
   │        - mixed-K pose / pose + non-pose (YOLO-pose has ONE global kpt_shape)
-  │        - multi-dimensional images or videos (unsupported for YOLO training)
+  │        - an ANNOTATED stack/video whose slices were never materialised
+  │          (no pixels to export, so its labels would be silently dropped)
   │
   └─ Train pressed → TrainingController
        1. load the base model          ← BEFORE prepare, so train_model's

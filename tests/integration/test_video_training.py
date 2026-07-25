@@ -22,7 +22,7 @@ import pytest
 from PyQt6.QtCore import Qt
 from PyQt6.QtGui import QColor
 
-from src.digitalsreeni_image_annotator.io.export_formats import export_yolo_v5plus
+from digitalsreeni_image_annotator.io.export_formats import export_yolo_v5plus
 
 
 @pytest.fixture
@@ -90,6 +90,26 @@ def test_arrow_keys_walk_further_than_one_frame(video_window, qtbot):
     assert window.current_slice == window.slice_list.item(3).text()
 
 
+def test_a_timeline_scrub_keeps_the_row_in_sync(video_window, qtbot):
+    """Scrub to frame 4, press Down, land on frame 5 -- not frame 1.
+
+    ``on_timeline_frame_selected`` used to switch the canvas without moving the
+    row, and the arrow keys step from the row. Before the list drove navigation
+    that desync was invisible (Down was inert); afterwards it teleports.
+    """
+    window, _ = video_window
+    window.on_timeline_frame_selected(4)
+
+    assert window.slice_list.currentRow() == 4
+    assert window.current_slice == window.slice_list.item(4).text()
+
+    window.slice_list.setFocus()
+    qtbot.keyClick(window.slice_list, Qt.Key.Key_Down)
+
+    assert window.slice_list.currentRow() == 5
+    assert window.current_slice == window.slice_list.item(5).text()
+
+
 def test_reselecting_the_current_frame_is_a_no_op(video_window):
     """The guard that lets currentRowChanged drive navigation without
     blockSignals at a dozen programmatic-selection call sites."""
@@ -100,6 +120,44 @@ def test_reselecting_the_current_frame_is_a_no_op(video_window):
     window.image_controller.switch_slice(window.slice_list.currentItem())
 
     assert saves == []
+
+
+def test_switching_videos_does_not_bleed_annotations_across_them(
+    window, make_test_video, tmp_path
+):
+    """The hazard the already-current guard actually prevents.
+
+    ``update_slice_list`` re-selects the current slice *after* ``switch_image``
+    has already repointed ``current_slice`` at the incoming video's first
+    frame. Without the guard that re-selection re-enters ``switch_slice``,
+    which saves the outgoing frame's annotations under the INCOMING frame's
+    key -- the same polygon silently lands in two different videos.
+
+    The previous test pokes the guard directly and so passes for the wrong
+    reason; this one fails if the guard is deleted.
+    """
+    first = make_test_video(tmp_path, name="aaa.avi", frames=4)
+    second = make_test_video(tmp_path, name="bbb.avi", frames=4)
+    window.add_images_to_list([first, second])
+    window.add_class("bee", QColor("#ffa500"))
+
+    # Land on the first video and annotate a frame that is not its first.
+    window.image_list.setCurrentRow(0)
+    window.image_controller.switch_image(window.image_list.item(0))
+    window.slice_list.setCurrentRow(2)
+    annotated = window.current_slice
+    assert annotated.startswith("aaa")
+    window.image_label.annotations = {"bee": [_polygon()]}
+
+    window.image_controller.switch_image(window.image_list.item(1))
+
+    bled = [
+        name
+        for name, by_class in window.all_annotations.items()
+        if by_class and name.startswith("bbb")
+    ]
+    assert bled == [], f"annotations leaked into the second video: {bled}"
+    assert window.all_annotations.get(annotated, {}).get("bee")
 
 
 # --- training on a video's frames ------------------------------------------
@@ -147,6 +205,46 @@ def test_video_frames_are_written_by_the_yolo_export(video_window, tmp_path):
     assert sorted(labels) == sorted(f"{name}.txt" for name in frames)
     for label in labels:
         assert (out / "labels" / "train" / label).read_text().strip()
+
+    # And they are the RIGHT frames. make_test_video ramps the red channel by
+    # frame index precisely so a mis-resolution is detectable; asserting only
+    # on filenames would pass while writing frame 0 four times.
+    from PIL import Image
+
+    from digitalsreeni_image_annotator.core.video_handler import parse_frame_index
+
+    for name in frames:
+        pixel = Image.open(out / "images" / "train" / f"{name}.png").convert("RGB")
+        red = pixel.getpixel((1, 1))[0]
+        assert abs(red - 10 * parse_frame_index(name)) <= 2, (
+            f"{name} carries frame {red / 10:.0f}'s pixels"
+        )
+
+
+def test_a_frame_of_a_non_active_video_still_exports(
+    window, make_test_video, tmp_path
+):
+    """The semantic widening in the export change: resolution now spans every
+    collection in ``image_slices``, not just the active one. Annotate video A,
+    switch to video B, export -- A's frame must still be written."""
+    first = make_test_video(tmp_path, name="aaa.avi", frames=4)
+    second = make_test_video(tmp_path, name="bbb.avi", frames=4)
+    window.add_images_to_list([first, second])
+    window.add_class("bee", QColor("#ffa500"))
+
+    window.image_controller.switch_image(window.image_list.item(0))
+    frame = window.slice_list.item(1).text()
+    window.all_annotations[frame] = {"bee": [_polygon()]}
+    window.image_controller.switch_image(window.image_list.item(1))
+    assert window.slices is not window.image_slices["aaa"], "A is still active"
+
+    out = tmp_path / "ds"
+    export_yolo_v5plus(
+        window.all_annotations, {"bee": 1}, window.image_paths,
+        window.slices, window.image_slices, str(out), val_split=0,
+    )
+
+    assert os.listdir(out / "images" / "train") == [f"{frame}.png"]
 
 
 def test_the_export_does_not_materialise_every_frame(video_window, tmp_path):

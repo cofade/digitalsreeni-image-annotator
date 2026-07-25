@@ -2188,9 +2188,14 @@ make.
   pre-flight if the loaded model's `.task` disagrees. A dialog announcing one task while the
   trainer decides another would be a bug by construction, so both derive from one place.
 - **Pre-flight refusals before the run**: mixed-K pose and pose-plus-non-pose projects cannot be
-  expressed in YOLO-pose's single dataset-global `kpt_shape`, and multi-dimensional images and
-  videos are unsupported for YOLO training. Both previously surfaced late — the first deep inside
-  Ultralytics, the second during dataset preparation.
+  expressed in YOLO-pose's single dataset-global `kpt_shape`, and an *annotated* stack or video
+  whose slices were never materialised has no pixels to export. Both previously surfaced late —
+  the first deep inside Ultralytics, the second during dataset preparation.
+  **Amended**: the second refusal originally blocked every stack and video outright, inherited
+  from a note that predated slice-aware export. It is wrong: a video's `image_slices[base]` is an
+  ordinary `LazySliceList` and the exporters resolve slice pixels through it (#45/#47), so
+  annotated frames train like any other image. Refusing them rejected valid datasets — and made
+  SAM 3 tracking (#51), whose entire purpose is generating training data from video, a dead end.
 - **Advanced options collapsed, not removed.** ADR-028 deliberately kept `lr0`/`cos_lr`/
   `patience` off the main surface; they stay reachable.
 - **Advanced menu entries demoted, not deleted.** Preparing a dataset for external use and

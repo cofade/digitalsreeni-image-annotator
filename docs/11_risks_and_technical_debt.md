@@ -363,15 +363,24 @@ pytest
 
 ## Known Issues
 
-### YOLO Training Not Supported for Multi-dimensional Images
+### YOLO Training Needs a Stack's Slices to Be Loaded
 
-**Status**: Known Limitation
+**Status**: Resolved for the common case
 
-**Description**: YOLO training only works with single images, not TIFF/CZI slices
+**Description**: This entry previously read "YOLO training only works with single images, not
+TIFF/CZI slices", with "export slices as individual images first" as the workaround. That was
+wrong by the time it was written down: the exporters resolve slice pixels through `image_slices`
+(#45/#47), so stack slices and video frames export like any other image. The training dialog's
+pre-flight nonetheless refused every stack and video, which rejected valid datasets — including
+the one SAM 3 tracking (#51) exists to produce.
 
-**Workaround**: Export slices as individual images first
+What remains is narrower: a stack or video contributes **no pixels** until its slices have been
+materialised in this session. Project load and `add_images_to_list` both do that eagerly, so the
+reachable causes are a cancelled dimension dialog, an unreadable codec, or a moved file. The
+dialog blocks only when such a stack **has annotations**, since an unopened but unannotated stack
+cannot affect the export at all.
 
-**Priority**: Low (niche use case)
+**Priority**: Low (narrow residual case, reported explicitly rather than silently dropped)
 
 ---
 

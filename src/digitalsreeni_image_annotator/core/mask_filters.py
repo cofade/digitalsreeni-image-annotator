@@ -27,7 +27,10 @@ DEFAULT_MAX_AREA_FRACTION = 0.5  # a mask over half the image is the background
 # away perfectly good ones purely for being 101st by score. Everything that
 # survives the area and overlap filters is a real object the user asked for,
 # so the only job left here is to stop a degenerate run (fine texture, thousands
-# of fragments) from freezing the canvas.
+# of fragments) from freezing the canvas. There is no UI for it: the controller
+# reads it once at construction, so it is a constant with a rationale rather
+# than something the user can turn -- worth exposing if the value ever needs
+# arguing about again.
 DEFAULT_MAX_CANDIDATES = 500
 DEFAULT_OVERLAP_IOU = 0.5        # already-annotated regions are not proposals
 

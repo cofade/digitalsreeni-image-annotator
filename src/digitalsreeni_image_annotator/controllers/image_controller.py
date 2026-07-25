@@ -13,9 +13,9 @@ State (`current_image`, `current_slice`, `slices`, `image_paths`,
 `image_slices`, `image_dimensions`, `image_shapes`, `all_images`,
 `image_file_name`, etc.) still lives on the main window and is read here
 via `self.mw`. A future phase may migrate ownership of selected
-attributes to the controller — for now this is pure method relocation.
+attributes to the controller â€” for now this is pure method relocation.
 
-The `DimensionDialog` widget lives here too — it is only used by
+The `DimensionDialog` widget lives here too â€” it is only used by
 `process_multidimensional_image`.
 """
 
@@ -116,7 +116,7 @@ class ImageController(QObject):
         """Populate image_list in alphabetical order (upstream issue #60).
 
         Sorts the model (`all_images`) and the view together so the
-        `all_images[i]` ↔ `image_list.item(i)` positional invariant holds
+        `all_images[i]` â†” `image_list.item(i)` positional invariant holds
         (relied on by COCO import reconciliation). `setSortingEnabled` is
         deliberately NOT used: `currentRowChanged` is wired to
         `switch_image`, so a live re-sort would fire spurious image
@@ -148,7 +148,7 @@ class ImageController(QObject):
             group = info.get("group")
             if group:
                 # Item TEXT stays the bare file name (many consumers read
-                # item(i).text() as a filename — DINO batch nav, COCO
+                # item(i).text() as a filename â€” DINO batch nav, COCO
                 # import). The group shows only in the tooltip. See #43.
                 item.setToolTip(f"{info['file_name']}  [{group}]")
             self.mw.image_list.addItem(item)
@@ -174,7 +174,7 @@ class ImageController(QObject):
         """Repaint the list so review-score badges appear or disappear (#71).
 
         Only a repaint: the scores are read live by the delegate, so there is
-        nothing to copy into the items — which is what keeps the item text a
+        nothing to copy into the items â€” which is what keeps the item text a
         pure file name.
         """
         self.mw.image_list.viewport().update()
@@ -183,9 +183,9 @@ class ImageController(QObject):
         """Reorder the list by review score, highest first (issue #71).
 
         Sorts ``all_images`` and rebuilds, exactly like
-        :meth:`sort_image_list`, so the ``all_images[i]`` ↔ ``item(i)``
+        :meth:`sort_image_list`, so the ``all_images[i]`` â†” ``item(i)``
         positional invariant other code relies on is preserved. Unscored
-        images sink to the bottom rather than being hidden — the point of the
+        images sink to the bottom rather than being hidden â€” the point of the
         ranking is where to start, not what to ignore.
         """
         review = getattr(self.mw, "review_controller", None)
@@ -238,17 +238,17 @@ class ImageController(QObject):
             base_name = os.path.splitext(file_name)[0]
             slices = self.mw.image_slices.get(base_name)
             if slices:
-                # Name-only scan (slice_names) — never materialise QImages
+                # Name-only scan (slice_names) â€” never materialise QImages
                 # just to check annotation status (issue #45).
                 return any(
                     _non_empty(self.mw.all_annotations.get(slice_name, {}))
                     for slice_name in slice_names(slices)
                 )
-            # Slices not extracted yet (e.g. load cancelled) — slice keys
+            # Slices not extracted yet (e.g. load cancelled) â€” slice keys
             # are f"{base_name}_T1_Z5_..." so a "{base_name}_" prefix match
             # is exact enough; a bare substring match would not be. Caveat:
             # this also matches "{base_name}_8bit" artifact keys, which
-            # redefine_dimensions deliberately excludes — acceptable here
+            # redefine_dimensions deliberately excludes â€” acceptable here
             # since an _8bit key with annotations still means "this image
             # has annotations".
             prefix = base_name + "_"
@@ -269,7 +269,7 @@ class ImageController(QObject):
         trigger a spurious switch_image.
 
         A non-matching row is hidden even when it is the current
-        selection — hiding does not change `current_image`, so the canvas
+        selection â€” hiding does not change `current_image`, so the canvas
         keeps showing the worked-on image while its row leaves the list
         (e.g. the image just gained its first annotation under the
         "Without annotations" filter). Keyboard nav skips hidden rows.
@@ -288,7 +288,7 @@ class ImageController(QObject):
             active_group = group_combo.currentText()
 
         if mode == 0 and active_group is None:
-            # Default case runs on every update_slice_list_colors — skip the
+            # Default case runs on every update_slice_list_colors â€” skip the
             # per-row hide computation (nothing is filtered) but still refresh
             # the status badges, which necessarily scan annotation state per
             # row (unavoidable: badges must stay current after every mutation).
@@ -318,7 +318,7 @@ class ImageController(QObject):
 
         Filled green dot = the image (or, for a multi-dim stack, any of
         its slices) has annotations; hollow gray dot = none. Both states
-        are derived — nothing is stored. Icons are cached per (annotated,
+        are derived â€” nothing is stored. Icons are cached per (annotated,
         dark_mode) and painted once; the colours are theme-tuned (brighter
         on the dark sidebar), so on_theme_changed clears the cache on a
         dark-mode flip to force a repaint at the new theme's colours.
@@ -390,7 +390,7 @@ class ImageController(QObject):
 
         group: a name (whitespace stripped) or None/empty to remove the
         image from any group. Re-sorts the list so grouped images cluster,
-        then auto-saves — but never during project load (CLAUDE.md guard,
+        then auto-saves â€” but never during project load (CLAUDE.md guard,
         matching add_images_to_list).
         """
         info = next(
@@ -416,7 +416,7 @@ class ImageController(QObject):
     def _populate_group_combo(self):
         """Repopulate image_group_combo from the derived group set (#43).
 
-        Signals are blocked (repopulating fires currentIndexChanged →
+        Signals are blocked (repopulating fires currentIndexChanged â†’
         apply_image_filter otherwise) and the current selection is
         preserved by text, falling back to "All groups" if its group is
         gone.
@@ -469,7 +469,7 @@ class ImageController(QObject):
             # the session. Mirrors clear_all (issue #45).
             get_shared_lru().clear()
             self.mw.image_slices.clear()
-            # Video handlers own an open cv2.VideoCapture each — release them
+            # Video handlers own an open cv2.VideoCapture each â€” release them
             # before the dict is wiped so no file handle leaks (issue #47).
             for handler in self.mw.video_handlers.values():
                 handler.release()
@@ -495,7 +495,7 @@ class ImageController(QObject):
                         f"An image named "
                         f"'{os.path.splitext(base_name)[0]}' is already loaded "
                         "from a different file. Rename one of the files and "
-                        "reopen it — slices and annotations are keyed by this "
+                        "reopen it â€” slices and annotations are keyed by this "
                         "base name.",
                     )
                     continue
@@ -547,7 +547,7 @@ class ImageController(QObject):
                         )
                 elif is_video(file_name):
                     # Video frames become lazy slices (issue #47). Read the
-                    # probe from the handler's metadata — do NOT force a frame
+                    # probe from the handler's metadata â€” do NOT force a frame
                     # decode just to fill height/width. `dimensions`/`shape`
                     # are omitted (a video has none).
                     self.load_video(file_name)
@@ -584,7 +584,7 @@ class ImageController(QObject):
     @staticmethod
     def _is_missing_codec_error(exc):
         """True if a tifffile read failed because the imagecodecs package
-        is unavailable for the TIFF's compression — e.g. LZW (#56).
+        is unavailable for the TIFF's compression â€” e.g. LZW (#56).
 
         Matches only the reliable 'imagecodecs' token: tifffile names the
         package in every such message. A broader 'compression' match would
@@ -665,7 +665,7 @@ class ImageController(QObject):
         A frame is annotated if ``all_annotations[frame_key]`` is non-empty and
         holds at least one non-empty class list. Prefix-match ``base + "_F"``
         and parse the exact index (a bare ``base + "_"`` would also swallow
-        multi-dim slice keys) — see issue #48.
+        multi-dim slice keys) â€” see issue #48.
         """
         prefix = base_name + "_F"
         out = set()
@@ -680,7 +680,7 @@ class ImageController(QObject):
         """``(base_name, handler, info)`` if the active image is a loaded video,
         else ``None`` (issue #48).
 
-        Single source of truth for the ``currentItem → is_video → handler``
+        Single source of truth for the ``currentItem â†’ is_video â†’ handler``
         resolution shared by the timeline sync, Home/End nav and frame export,
         so those three call sites can't drift.
         """
@@ -705,7 +705,7 @@ class ImageController(QObject):
         Also refreshes the onion-skin control row (issue #67): both are
         per-image navigation chrome whose visibility depends on what kind of
         image is active, and every navigation path already funnels through here
-        — hooking the second one on separately is how the two drift apart.
+        â€” hooking the second one on separately is how the two drift apart.
 
         Shows + configures the timeline when the active image is a video,
         otherwise hides it. The timeline is a pure VIEW: it never changes the
@@ -778,13 +778,19 @@ class ImageController(QObject):
     def switch_slice(self, item):
         if item is None:
             return
-        # Already showing it -> nothing to do. This is what lets
-        # `currentRowChanged` drive navigation without blockSignals at a dozen
-        # call sites: every programmatic selection in this file selects the
-        # slice it has just made current, so each one lands here as a no-op,
-        # and the two paths that set the row and THEN call switch_slice
-        # explicitly (Home/End, DINO review navigation) do the work on the
-        # signal and no-op on the explicit call.
+        # Already showing it -> nothing to do.
+        #
+        # This is load-bearing, not an optimisation. `currentRowChanged` drives
+        # navigation, so it fires for PROGRAMMATIC selections too, and the
+        # invariant every caller must honour is: **select the row for the slice
+        # you have just made current**. Callers that do are no-ops here; the
+        # ones that select a different row get the switch performed for them.
+        #
+        # Without it, `update_slice_list`'s re-selection re-enters switch_slice
+        # *after* switch_image has already repointed `current_slice` at the new
+        # image's first slice -- so the outgoing slice's annotations get saved
+        # under the incoming slice's key, silently duplicating them across two
+        # different images. See test_switching_videos_does_not_bleed_annotations.
         if item.text() == self.mw.current_slice:
             return
         # check_unsaved_changes prompts the user and commits/discards
@@ -956,7 +962,7 @@ class ImageController(QObject):
                     mapped = [axis_map.get(a) for a in series_axes]
                     if all(a is not None for a in mapped):
                         axes_hint = mapped
-                        logger.debug(f"TIFF series axes: {series_axes} → dimension hint: {axes_hint}")
+                        logger.debug(f"TIFF series axes: {series_axes} â†’ dimension hint: {axes_hint}")
                     else:
                         unknown = [a for a in series_axes if axis_map.get(a) is None]
                         logger.debug(f"TIFF series axes had unknown labels {unknown}, no hint applied")
@@ -1070,8 +1076,8 @@ class ImageController(QObject):
 
         if dimensions is None or force_dimension_dialog:
             if image_array.ndim > 2:
-                # ndim≥5 had a `[-ndim:]` slice bug that produced 2560 wrong
-                # slices on a 5D TZCYX file — see arc42.
+                # ndimâ‰¥5 had a `[-ndim:]` slice bug that produced 2560 wrong
+                # slices on a 5D TZCYX file â€” see arc42.
                 if axes_hint and len(axes_hint) == image_array.ndim:
                     default_dimensions = list(axes_hint)
                     logger.debug(f"Applying axes hint as default dims: {default_dimensions}")
@@ -1163,7 +1169,7 @@ class ImageController(QObject):
         logger.debug(f"Image array shape: {image_array.shape}")
 
         # Reloading a stack under the same base_name (redefine dims, project
-        # reload) drops the previous LazySliceList — evict its cached QImages
+        # reload) drops the previous LazySliceList â€” evict its cached QImages
         # first so a recycled provider id() can't alias stale entries. The old
         # object stays referenced until the reassignment below, so the new
         # provider is guaranteed a distinct id() (issue #45).
@@ -1179,7 +1185,7 @@ class ImageController(QObject):
         for slice_name in lazy.names:
             self.add_slice_to_list(slice_name)
 
-        # mw.image_slices[base] and mw.slices MUST be the same object — several
+        # mw.image_slices[base] and mw.slices MUST be the same object â€” several
         # paths compare/assign them (issue #45 guardrail).
         self.mw.image_slices[base_name] = lazy
         self.mw.slices = lazy
@@ -1244,7 +1250,7 @@ class ImageController(QObject):
 
     def update_slice_list(self):
         self.mw.slice_list.clear()
-        # Name-only (slice_names) — rebuilding the list must not decode pixels
+        # Name-only (slice_names) â€” rebuilding the list must not decode pixels
         # (issue #45).
         for slice_name in slice_names(self.mw.slices):
             item = QListWidgetItem(slice_name)
@@ -1492,7 +1498,7 @@ class ImageController(QObject):
 
     def onion_available(self) -> bool:
         """True when the active image has enough slices for a ghost to mean
-        anything — a multi-slice stack or a video, never a plain image."""
+        anything â€” a multi-slice stack or a video, never a plain image."""
         return onion.is_available(slice_names(self.mw.slices))
 
     def refresh_onion_skin(self):

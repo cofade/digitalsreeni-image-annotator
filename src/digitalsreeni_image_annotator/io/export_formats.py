@@ -6,6 +6,8 @@ import json
 # objects, which needs no import.
 from ..core.image_size import image_dimensions
 from ..core.keypoint_schema import schema_k
+from ..core.slice_index import resolve_slice_image as _resolve_slice_image
+from ..core.slice_index import slice_index as _slice_index
 from ..utils import calculate_area, calculate_bbox
 import yaml
 import hashlib
@@ -67,7 +69,7 @@ def export_coco_json(all_annotations, class_mapping, image_paths, slices, image_
     annotation_id = 1
     image_id = 1
     # Create a mapping of slice names to their QImage objects
-    slice_map = {slice_name: qimage for slice_name, qimage in slices}
+    slice_index = _slice_index(slices, image_slices)
     
     # Handle all images and slices
     for image_name, annotations in all_annotations.items():
@@ -75,27 +77,15 @@ def export_coco_json(all_annotations, class_mapping, image_paths, slices, image_
         if not annotations:
             continue
 
-        # Check if it's a slice (either in slice_map or has underscores and no file extension)
-        is_slice = image_name in slice_map or ('_' in image_name and '.' not in image_name)
+        # A stack slice or a video frame (known name, or the name shape a
+        # slice key has: underscores and no file extension).
+        is_slice = image_name in slice_index or ('_' in image_name and '.' not in image_name)
         
         if is_slice:
-            qimage = slice_map.get(image_name)
+            qimage = _resolve_slice_image(slice_index, image_name)
             if qimage is None:
-                # If the slice is not in slice_map, it might be a CZI slice or a TIFF slice
-                # Find the corresponding QImage in slices or image_slices
-                matching_slices = [s for s in slices if s[0] == image_name]
-                if matching_slices:
-                    qimage = matching_slices[0][1]
-                else:
-                    # Check in image_slices
-                    for stack_slices in image_slices.values():
-                        matching_slices = [s for s in stack_slices if s[0] == image_name]
-                        if matching_slices:
-                            qimage = matching_slices[0][1]
-                            break
-                if qimage is None:
-                    logger.warning(f"No image data found for slice {image_name}, skipping")
-                    continue
+                logger.warning(f"No image data found for slice {image_name}, skipping")
+                continue
             file_name_img = f"{image_name}.png"
             # Save the QImage as a file
             save_path = os.path.join(images_dir, file_name_img)
@@ -219,7 +209,7 @@ def export_yolo_v4(all_annotations, class_mapping, image_paths, slices, image_sl
     class_to_index = {name: i for i, name in enumerate(class_mapping.keys())}
 
     # Create a mapping of slice names to their QImage objects
-    slice_map = {slice_name: qimage for slice_name, qimage in slices}
+    slice_index = _slice_index(slices, image_slices)
 
     # Deterministically split the annotated images into train/val.
     annotated = [name for name, ann in all_annotations.items() if ann]
@@ -236,14 +226,9 @@ def export_yolo_v4(all_annotations, class_mapping, image_paths, slices, image_sl
         labels_dir = os.path.join(split_dir, 'labels')
 
         # Handle image saving (similar to before, but adjusted for new directory structure)
-        if image_name in slice_map or ('_' in image_name and '.' not in image_name):
+        if image_name in slice_index or ('_' in image_name and '.' not in image_name):
             # Handle slice images
-            qimage = slice_map.get(image_name) or next((s[1] for s in slices if s[0] == image_name), None)
-            if qimage is None:
-                for stack_slices in image_slices.values():
-                    qimage = next((s[1] for s in stack_slices if s[0] == image_name), None)
-                    if qimage:
-                        break
+            qimage = _resolve_slice_image(slice_index, image_name)
             if qimage is None:
                 logger.warning(f"No image data found for slice {image_name}, skipping")
                 continue
@@ -374,46 +359,6 @@ def _pose_export_check(all_annotations, class_mapping, keypoint_schemas):
             flip_idx = list(schema["flip_idx"])
             break
     return k, (flip_idx or list(range(k)))
-
-
-def _slice_index(slices, image_slices):
-    """``{slice_name: collection}`` for every known slice, decoding nothing.
-
-    Built from names only, so constructing it is free. Resolution then goes
-    through :func:`_resolve_slice_image`, which uses the collection's own
-    ``get`` -- the LRU-backed single-slice path.
-
-    The alternative spelling, ``{name: qimage for name, qimage in slices}``,
-    materialises the WHOLE collection at once: on a 191-frame video that is
-    every frame decoded and held simultaneously, which is precisely what the
-    bounded lazy cache (issue #45) exists to prevent. Its fallback then rescans
-    ``image_slices`` linearly per miss, decoding as it goes -- O(n^2) decodes
-    over a stack.
-    """
-    index = {}
-    for collection in (slices, *(image_slices or {}).values()):
-        if not collection:
-            continue
-        # `.names` on a LazySliceList; plain [(name, qimage), ...] otherwise.
-        # Deliberately not importing core.slice_cache.slice_names: this module
-        # must stay Qt-free at import time (ADR-041) and that one reaches Qt.
-        names = getattr(collection, "names", None)
-        if names is None:
-            names = [name for name, _ in collection]
-        for name in names:
-            index.setdefault(name, collection)
-    return index
-
-
-def _resolve_slice_image(index, name):
-    """The QImage for a slice name, or None. One decode at most."""
-    collection = index.get(name)
-    if collection is None:
-        return None
-    getter = getattr(collection, "get", None)
-    if getter is not None:
-        return getter(name)
-    return next((image for n, image in collection if n == name), None)
 
 
 def export_yolo_v5plus(all_annotations, class_mapping, image_paths, slices, image_slices, output_dir, val_split=0, keypoint_schemas=None):
@@ -594,7 +539,7 @@ def export_sam_dataset(all_annotations, class_mapping, image_paths, slices, imag
     """
     images_dir = os.path.join(output_dir, 'images')
     os.makedirs(images_dir, exist_ok=True)
-    slice_map = {slice_name: qimage for slice_name, qimage in slices}
+    slice_index = _slice_index(slices, image_slices)
 
     manifest = {"classes": list(class_mapping.keys()), "images": []}
     for image_name, annotations in all_annotations.items():
@@ -602,13 +547,8 @@ def export_sam_dataset(all_annotations, class_mapping, image_paths, slices, imag
             continue
 
         # Resolve + save the image (same branching as export_yolo_v5plus).
-        if image_name in slice_map or ('_' in image_name and '.' not in image_name):
-            qimage = slice_map.get(image_name)
-            if qimage is None:
-                for stack_slices in image_slices.values():
-                    qimage = next((s[1] for s in stack_slices if s[0] == image_name), None)
-                    if qimage is not None:
-                        break
+        if image_name in slice_index or ('_' in image_name and '.' not in image_name):
+            qimage = _resolve_slice_image(slice_index, image_name)
             if qimage is None:
                 continue
             # basename guards against a separator in an image/slice key
@@ -668,33 +608,22 @@ def export_labeled_images(all_annotations, class_mapping, image_paths, slices, i
         os.makedirs(os.path.join(labeled_images_dir, class_name), exist_ok=True)
 
     # Create a mapping of slice names to their QImage objects
-    slice_map = {slice_name: qimage for slice_name, qimage in slices}
+    slice_index = _slice_index(slices, image_slices)
 
     for image_name, annotations in all_annotations.items():
         # Skip if there are no annotations for this image/slice
         if not annotations:
             continue
 
-        # Check if it's a slice (either in slice_map or has underscores and no file extension)
-        is_slice = image_name in slice_map or ('_' in image_name and '.' not in image_name)
+        # A stack slice or a video frame (known name, or the name shape a
+        # slice key has: underscores and no file extension).
+        is_slice = image_name in slice_index or ('_' in image_name and '.' not in image_name)
         
         if is_slice:
-            qimage = slice_map.get(image_name)
+            qimage = _resolve_slice_image(slice_index, image_name)
             if qimage is None:
-                # If the slice is not in slice_map, it might be a CZI slice or a TIFF slice
-                matching_slices = [s for s in slices if s[0] == image_name]
-                if matching_slices:
-                    qimage = matching_slices[0][1]
-                else:
-                    # Check in image_slices
-                    for stack_slices in image_slices.values():
-                        matching_slices = [s for s in stack_slices if s[0] == image_name]
-                        if matching_slices:
-                            qimage = matching_slices[0][1]
-                            break
-                if qimage is None:
-                    logger.warning(f"No image data found for slice {image_name}, skipping")
-                    continue
+                logger.warning(f"No image data found for slice {image_name}, skipping")
+                continue
             file_name_img = f"{image_name}.png"
             # Save the QImage as a file
             save_path = os.path.join(images_dir, file_name_img)
@@ -773,33 +702,22 @@ def export_semantic_labels(all_annotations, class_mapping, image_paths, slices, 
     class_to_pixel = {name: i+1 for i, name in enumerate(sorted(class_mapping.keys()))}
 
     # Create a mapping of slice names to their QImage objects
-    slice_map = {slice_name: qimage for slice_name, qimage in slices}
+    slice_index = _slice_index(slices, image_slices)
 
     for image_name, annotations in all_annotations.items():
         # Skip if there are no annotations for this image/slice
         if not annotations:
             continue
 
-        # Check if it's a slice (either in slice_map or has underscores and no file extension)
-        is_slice = image_name in slice_map or ('_' in image_name and '.' not in image_name)
+        # A stack slice or a video frame (known name, or the name shape a
+        # slice key has: underscores and no file extension).
+        is_slice = image_name in slice_index or ('_' in image_name and '.' not in image_name)
         
         if is_slice:
-            qimage = slice_map.get(image_name)
+            qimage = _resolve_slice_image(slice_index, image_name)
             if qimage is None:
-                # If the slice is not in slice_map, it might be a CZI slice or a TIFF slice
-                matching_slices = [s for s in slices if s[0] == image_name]
-                if matching_slices:
-                    qimage = matching_slices[0][1]
-                else:
-                    # Check in image_slices
-                    for stack_slices in image_slices.values():
-                        matching_slices = [s for s in stack_slices if s[0] == image_name]
-                        if matching_slices:
-                            qimage = matching_slices[0][1]
-                            break
-                if qimage is None:
-                    logger.warning(f"No image data found for slice {image_name}, skipping")
-                    continue
+                logger.warning(f"No image data found for slice {image_name}, skipping")
+                continue
             file_name_img = f"{image_name}.png"
             # Save the QImage as a file
             save_path = os.path.join(images_dir, file_name_img)
@@ -866,33 +784,22 @@ def export_pascal_voc_bbox(all_annotations, class_mapping, image_paths, slices, 
     os.makedirs(annotations_dir, exist_ok=True)
 
     # Create a mapping of slice names to their QImage objects
-    slice_map = {slice_name: qimage for slice_name, qimage in slices}
+    slice_index = _slice_index(slices, image_slices)
 
     for image_name, annotations in all_annotations.items():
         # Skip if there are no annotations for this image/slice
         if not annotations:
             continue
 
-        # Check if it's a slice (either in slice_map or has underscores and no file extension)
-        is_slice = image_name in slice_map or ('_' in image_name and '.' not in image_name)
+        # A stack slice or a video frame (known name, or the name shape a
+        # slice key has: underscores and no file extension).
+        is_slice = image_name in slice_index or ('_' in image_name and '.' not in image_name)
         
         if is_slice:
-            qimage = slice_map.get(image_name)
+            qimage = _resolve_slice_image(slice_index, image_name)
             if qimage is None:
-                # If the slice is not in slice_map, it might be a CZI slice or a TIFF slice
-                matching_slices = [s for s in slices if s[0] == image_name]
-                if matching_slices:
-                    qimage = matching_slices[0][1]
-                else:
-                    # Check in image_slices
-                    for stack_slices in image_slices.values():
-                        matching_slices = [s for s in stack_slices if s[0] == image_name]
-                        if matching_slices:
-                            qimage = matching_slices[0][1]
-                            break
-                if qimage is None:
-                    logger.warning(f"No image data found for slice {image_name}, skipping")
-                    continue
+                logger.warning(f"No image data found for slice {image_name}, skipping")
+                continue
             file_name_img = f"{image_name}.png"
             # Save the QImage as a file
             save_path = os.path.join(images_dir, file_name_img)
@@ -974,33 +881,22 @@ def export_pascal_voc_both(all_annotations, class_mapping, image_paths, slices, 
     os.makedirs(annotations_dir, exist_ok=True)
 
     # Create a mapping of slice names to their QImage objects
-    slice_map = {slice_name: qimage for slice_name, qimage in slices}
+    slice_index = _slice_index(slices, image_slices)
 
     for image_name, annotations in all_annotations.items():
         # Skip if there are no annotations for this image/slice
         if not annotations:
             continue
 
-        # Check if it's a slice (either in slice_map or has underscores and no file extension)
-        is_slice = image_name in slice_map or ('_' in image_name and '.' not in image_name)
+        # A stack slice or a video frame (known name, or the name shape a
+        # slice key has: underscores and no file extension).
+        is_slice = image_name in slice_index or ('_' in image_name and '.' not in image_name)
         
         if is_slice:
-            qimage = slice_map.get(image_name)
+            qimage = _resolve_slice_image(slice_index, image_name)
             if qimage is None:
-                # If the slice is not in slice_map, it might be a CZI slice or a TIFF slice
-                matching_slices = [s for s in slices if s[0] == image_name]
-                if matching_slices:
-                    qimage = matching_slices[0][1]
-                else:
-                    # Check in image_slices
-                    for stack_slices in image_slices.values():
-                        matching_slices = [s for s in stack_slices if s[0] == image_name]
-                        if matching_slices:
-                            qimage = matching_slices[0][1]
-                            break
-                if qimage is None:
-                    logger.warning(f"No image data found for slice {image_name}, skipping")
-                    continue
+                logger.warning(f"No image data found for slice {image_name}, skipping")
+                continue
             file_name_img = f"{image_name}.png"
             # Save the QImage as a file
             save_path = os.path.join(images_dir, file_name_img)

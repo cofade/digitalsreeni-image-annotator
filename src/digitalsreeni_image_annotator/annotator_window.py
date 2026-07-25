@@ -76,7 +76,7 @@ class ImageAnnotator(QMainWindow):
         self.setWindowTitle("Image Annotator")
         self.setGeometry(100, 100, 1400, 800)
 
-        # Initialize image_label early — setup_ui's sidebar/image-area
+        # Initialize image_label early â€” setup_ui's sidebar/image-area
         # builders expect it to exist.
         self.image_label = ImageLabel()
 
@@ -128,7 +128,7 @@ class ImageAnnotator(QMainWindow):
 
         # SAM 3 text-prompt producer (issue #50, ADR-038). Plugs into the
         # DINO review pipeline as an alternative to the two-stage
-        # DINO→SAM path; selected via the DINO model dropdown.
+        # DINOâ†’SAM path; selected via the DINO model dropdown.
         self.sam3_utils = SAM3Utils()
 
         # Debounce timer for SAM points: wait 1s after last click before inference
@@ -136,7 +136,7 @@ class ImageAnnotator(QMainWindow):
         self.sam_inference_timer.setSingleShot(True)
         self.sam_inference_timer.timeout.connect(self.apply_sam_prediction)
 
-        # Guards against re-entrant `apply_sam_prediction` calls — the
+        # Guards against re-entrant `apply_sam_prediction` calls â€” the
         # debounce timer can fire while an earlier inference is still
         # pumping inside _run_sync. See apply_sam_prediction().
         self._sam_inference_in_flight = False
@@ -172,7 +172,7 @@ class ImageAnnotator(QMainWindow):
         # with a sidecar, report, and offer a one-click try.
         self.model_registry_controller = ModelRegistryController(self)
         # Embedding-based near-duplicate detection (issue #72). Recommends
-        # only — it has no delete path at all, by design.
+        # only â€” it has no delete path at all, by design.
         self.curation_controller = CurationController(self)
 
         # CanvasContext gives ImageLabel a narrow read view of main-window
@@ -183,7 +183,7 @@ class ImageAnnotator(QMainWindow):
 
         # Font size control. Presets are named entry points into the
         # continuous 8-24pt range; `ui_font_pt` (int) is the single
-        # source of truth — see theme.set_font_pt.
+        # source of truth â€” see theme.set_font_pt.
         self.font_sizes = {
             "Small": 8,
             "Medium": 10,
@@ -193,9 +193,9 @@ class ImageAnnotator(QMainWindow):
         }  # When adding a new option here, also add it to the Font Size submenu in ui/menu_bar.build_menu_bar.
 
         # UI prefs persist app-globally via QSettings (not in the .iap
-        # project file). Dark mode defaults on — matches the look most
+        # project file). Dark mode defaults on â€” matches the look most
         # users expect from a 2025-era desktop annotation tool; toggle
-        # with Settings → Toggle Dark Mode (Ctrl+D).
+        # with Settings â†’ Toggle Dark Mode (Ctrl+D).
         self.ui_font_pt, self.dark_mode = load_ui_prefs()
 
         # Onion-skinning (issue #67). A viewing preference, persisted app-wide
@@ -244,7 +244,7 @@ class ImageAnnotator(QMainWindow):
 
     def _connect_image_label_signals(self):
         """Wire ImageLabel events to controller slots. ImageLabel does not
-        hold a main_window reference any more — every write path is a
+        hold a main_window reference any more â€” every write path is a
         Qt signal connected here."""
         il = self.image_label
         ac = self.annotation_controller
@@ -461,13 +461,18 @@ class ImageAnnotator(QMainWindow):
     def on_timeline_frame_selected(self, idx):
         """Route a video-timeline scrub to the matching frame (issue #48).
 
-        Slice-list rows are in frame order, so ``idx`` maps 1:1 to a row. Go
-        through ``switch_slice`` (never set ``current_image`` directly) so the
-        unsaved-change check, annotation save, edit-mode exit and DINO temp
-        re-sync all run.
+        Slice-list rows are in frame order, so ``idx`` maps 1:1 to a row.
+
+        Move the **row**, and let ``currentRowChanged`` perform the switch.
+        Calling ``switch_slice`` directly would leave the row pointing at the
+        frame you scrubbed away from, and since that row is what the arrow keys
+        step from, the next Down would teleport: scrub to frame 5, press Down,
+        land on frame 1. Routing through the row also keeps the unsaved-change
+        check, annotation save, edit-mode exit and DINO temp re-sync (all in
+        ``switch_slice``) exactly where they were.
         """
         if 0 <= idx < self.slice_list.count():
-            self.switch_slice(self.slice_list.item(idx))
+            self.slice_list.setCurrentRow(idx)
 
     def update_video_timeline(self):
         return self.image_controller.update_video_timeline()
@@ -567,19 +572,20 @@ class ImageAnnotator(QMainWindow):
         # stayed put. Slice navigation is driven by the slice list's
         # `currentRowChanged` signal instead (see setup_slice_list).
         elif event.key() == Qt.Key.Key_Home or event.key() == Qt.Key.Key_End:
-            # First / last frame jump for videos (issue #48). Gated on the
-            # active image being a video AND focus on the slice list or the
-            # canvas — QLineEdit/QTextEdit are already spared by the early
-            # return at the top, so this can't steal Home/End from text cursors.
-            # Routes through switch_slice (never sets current_image directly).
-            if self._current_image_is_video() and (
-                self.slice_list.hasFocus() or self.image_label.hasFocus()
-            ):
+            # First / last frame jump for videos (issue #48), for Home/End
+            # pressed while the CANVAS has focus. The slice-list case is
+            # deliberately absent: a focused QListWidget handles Home/End
+            # itself, and since currentRowChanged now drives navigation it
+            # already jumps the canvas with it -- for stacks as well as videos,
+            # which is a widening of #48's video-only gate and a welcome one.
+            # QLineEdit/QTextEdit are spared by the early return at the top, so
+            # this cannot steal Home/End from a text cursor.
+            if self._current_image_is_video() and self.image_label.hasFocus():
                 count = self.slice_list.count()
                 if count > 0:
                     row = 0 if event.key() == Qt.Key.Key_Home else count - 1
+                    # The row change performs the switch (see setup_slice_list).
                     self.slice_list.setCurrentRow(row)
-                    self.switch_slice(self.slice_list.item(row))
             else:
                 super().keyPressEvent(event)
         elif event.key() == Qt.Key.Key_Return or event.key() == Qt.Key.Key_Enter:
@@ -797,7 +803,7 @@ class ImageAnnotator(QMainWindow):
         if not self.image_controller.sort_image_list_by_score():
             self.show_info(
                 "Sort by score",
-                "No review scores yet. Run “Review with model” first.",
+                "No review scores yet. Run â€œReview with modelâ€ first.",
             )
 
     def show_annotation_statistics(self):
@@ -1008,7 +1014,7 @@ class ImageAnnotator(QMainWindow):
                 "Remove Video" if is_video(file_name) else "Remove Image"
             )
 
-            # YOLO single-image predict is for plain 2D images only — not
+            # YOLO single-image predict is for plain 2D images only â€” not
             # multi-dim stacks and NOT videos (predicting a video would run
             # Ultralytics over the whole clip on the GUI thread, #47).
             can_predict = not self.is_multi_dimensional(file_name) and not is_video(
@@ -1021,7 +1027,7 @@ class ImageAnnotator(QMainWindow):
                 redefine_dimensions_action = menu.addAction("Redefine Dimensions")
 
             menu.addSeparator()
-            move_to_group_action = menu.addAction("Move to group…")
+            move_to_group_action = menu.addAction("Move to groupâ€¦")
             remove_from_group_action = menu.addAction("Remove from group")
 
             action = menu.exec(self.image_list.mapToGlobal(position))
@@ -1216,7 +1222,7 @@ class ImageAnnotator(QMainWindow):
         }
 
         # A pose class admits only the keypoint tool. Block activating any shape
-        # tool on it (gate activation only — unchecking falls through, same
+        # tool on it (gate activation only â€” unchecking falls through, same
         # discipline as the keypoint guard below). SAM buttons are guarded in
         # SAMController.toggle_sam_*. (#44)
         if (
@@ -1228,14 +1234,14 @@ class ImageAnnotator(QMainWindow):
             QMessageBox.warning(
                 self,
                 "Pose Class",
-                f"'{self.current_class}' is a pose class — only the Keypoint "
+                f"'{self.current_class}' is a pose class â€” only the Keypoint "
                 "tool can annotate it.",
             )
             sender.setChecked(False)
             return
 
         # The keypoint tool needs a pose schema on the current class (#35). Only
-        # gate activation — unchecking must always fall through to deactivate, or
+        # gate activation â€” unchecking must always fall through to deactivate, or
         # button state and current_tool would drift on a schemaless class.
         if (
             sender is self.keypoint_button
@@ -1246,7 +1252,7 @@ class ImageAnnotator(QMainWindow):
                 self,
                 "No Keypoint Schema",
                 "Define a keypoint schema for this class first "
-                "(right-click the class → Define Keypoint Schema).",
+                "(right-click the class â†’ Define Keypoint Schema).",
             )
             sender.setChecked(False)
             return

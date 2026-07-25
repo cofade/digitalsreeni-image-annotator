@@ -235,6 +235,7 @@ class TrainDialog(QDialog):
         reasons += task_inference.unresolvable_stack_blockers(
             getattr(self.mw, "all_images", []),
             getattr(self.mw, "image_slices", {}).keys(),
+            [name for name, ann in self.mw.all_annotations.items() if ann],
         )
         if self.task is None:
             reasons.append("There are no annotations to train on.")

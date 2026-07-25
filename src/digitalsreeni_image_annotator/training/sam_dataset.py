@@ -16,6 +16,8 @@ import os
 from PyQt6.QtGui import QImage
 
 from .sam_trainer import SampleGroup
+from ..core.slice_index import resolve_slice_image as _resolve_slice_image
+from ..core.slice_index import slice_index as _slice_index
 from ..inference.sam_utils import _qimage_to_numpy
 
 from ..core.logging_config import get_logger
@@ -42,7 +44,7 @@ def build_groups_from_project(all_annotations, image_paths, slices, image_slices
     Images load lazily (one at a time during training) to bound memory; in-RAM
     slice QImages are reused directly.
     """
-    slice_map = {name: qimage for name, qimage in slices}
+    slice_index = _slice_index(slices, image_slices)
     groups = []
 
     for image_name, image_annotations in all_annotations.items():
@@ -50,13 +52,8 @@ def build_groups_from_project(all_annotations, image_paths, slices, image_slices
         if not specs:
             continue
 
-        if image_name in slice_map or ("_" in image_name and "." not in image_name):
-            qimage = slice_map.get(image_name)
-            if qimage is None:
-                for stack_slices in image_slices.values():
-                    qimage = next((s[1] for s in stack_slices if s[0] == image_name), None)
-                    if qimage is not None:
-                        break
+        if image_name in slice_index or ("_" in image_name and "." not in image_name):
+            qimage = _resolve_slice_image(slice_index, image_name)
             if qimage is None:
                 logger.warning(f"skip slice {image_name!r}: no image data")
                 continue

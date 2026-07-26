@@ -23,6 +23,9 @@ import os
 import cv2
 import numpy as np
 from PyQt6.QtCore import QObject, QThread, pyqtSignal
+
+from ..core.image_size import image_dimensions
+from ..core.slice_index import resolve_slice_image, slice_index
 from PyQt6.QtGui import QAction
 from PyQt6.QtWidgets import (
     QCheckBox,
@@ -669,8 +672,12 @@ class YOLOController(QObject):
         layout = QVBoxLayout()
 
         image_list = QListWidget()
-        for image_name in self.mw.image_paths.keys():
-            image_list.addItem(image_name)
+        # Only names that resolve to pixels. image_paths holds an entry for
+        # every file including stacks and videos, whose parent entry has no
+        # single frame to predict on -- offering them was offering a no-op.
+        for image_name in self.mw.image_paths:
+            if self._prediction_source(image_name) is not None:
+                image_list.addItem(image_name)
         layout.addWidget(QLabel("Select images for prediction:"))
         layout.addWidget(image_list)
 
@@ -697,20 +704,77 @@ class YOLOController(QObject):
             self.mw.yolo_trainer.set_conf_threshold(conf)
             self.run_predictions(selected_images)
 
-    def run_predictions(self, selected_images):
-        for image_name in selected_images:
-            image_path = self.mw.image_paths[image_name]
-            results = self.mw.yolo_trainer.predict(image_path)
-            self.process_yolo_results(results, image_name)
+    def _prediction_source(self, file_name):
+        """Resolve a name to something the trainer can predict on.
 
-    def predict_single_image(self, file_name):
+        Returns ``(source, width, height)``, or ``None`` when the name has no
+        pixels behind it.
+
+        A plain image resolves to its **path**; a stack slice or a video frame
+        has no path -- its pixels live in the lazy slice collections (#45/#47)
+        -- and resolves to an **array**, which ``YOLOTrainer.predict`` accepts
+        equally. Reading ``image_paths[file_name]`` unconditionally is what
+        crashed "Try it on the current image" straight after training on a
+        video: the current image was a FRAME, and a frame is not a key in
+        ``image_paths``. The KeyError escaped a Qt slot and took the app down.
+
+        Every refusal lives here rather than at the call sites, so the single
+        and batch paths cannot disagree about what is predictable -- they did,
+        and the batch one had no guard at all.
+
+        Note the path branch measures with Pillow while Ultralytics reads with
+        cv2. They agree except on EXIF-rotated JPEGs, where cv2 applies the
+        rotation and Pillow does not; such images were already mis-annotated
+        (predictions land in rotated space, the canvas is not), and Pillow at
+        least matches the QImage space the canvas uses.
+        """
         from ..core.video_handler import is_video
 
-        # Plain 2D images only: stacks have no single frame, and a video would
-        # run Ultralytics over the whole clip on the GUI thread then fail in
-        # cv2.imread (#47). The context menu already hides this for both.
+        # A stack or video PARENT entry: no single frame to predict on, and
+        # handing Ultralytics a video path runs it over the whole clip on the
+        # GUI thread (#47). Extension checks, so a slice/frame name -- which
+        # has no extension -- passes through to the array branch below.
         if self.mw.is_multi_dimensional(file_name) or is_video(file_name):
-            return
+            return None
+
+        path = self.mw.image_paths.get(file_name)
+        if path:
+            width, height = image_dimensions(path)
+            # image_dimensions reports (0, 0) for anything it cannot read, and
+            # zero would silently multiply every predicted coordinate to the
+            # origin. This replaces the `cv2.imread(...) is None` bail that
+            # used to sit in process_yolo_results.
+            if not width or not height:
+                return None
+            return path, width, height
+
+        qimage = resolve_slice_image(
+            slice_index(self.mw.slices, self.mw.image_slices), file_name
+        )
+        if qimage is None:
+            return None
+
+        from ..inference.sam_utils import qimage_to_numpy
+
+        # Ultralytics treats a numpy source as HWC **BGR** and flips it to RGB
+        # in its own preprocess; qimage_to_numpy yields RGB. Without the
+        # reversal every prediction runs on colour-swapped pixels -- plausible,
+        # quietly worse results, no error. ascontiguousarray because the
+        # reversal leaves a negative stride that torch refuses.
+        array = np.ascontiguousarray(qimage_to_numpy(qimage)[:, :, ::-1])
+        return array, qimage.width(), qimage.height()
+
+    def run_predictions(self, selected_images):
+        for image_name in selected_images:
+            resolved = self._prediction_source(image_name)
+            if resolved is None:
+                logger.warning("skipping %r: nothing to predict on", image_name)
+                continue
+            source, width, height = resolved
+            results = self.mw.yolo_trainer.predict(source)
+            self.process_yolo_results(results, image_name, (width, height))
+
+    def predict_single_image(self, file_name):
 
         if not self.mw.yolo_trainer or not self.mw.yolo_trainer.model:
             QMessageBox.warning(
@@ -722,10 +786,21 @@ class YOLOController(QObject):
 
         self.mw.deactivate_sam_tools()
 
-        image_path = self.mw.image_paths[file_name]
+        resolved = self._prediction_source(file_name)
+        if resolved is None:
+            QMessageBox.warning(
+                self.mw,
+                "Nothing to Predict On",
+                f"'{file_name}' has no image data to predict on.\n\n"
+                "A stack or a video has to be predicted on a slice or frame "
+                "rather than as a whole; if this IS one, open its stack or "
+                "video once so the slices are loaded, then try again.",
+            )
+            return
+        source, width, height = resolved
         try:
-            results = self.mw.yolo_trainer.predict(image_path)
-            self.process_yolo_results(results, file_name)
+            results = self.mw.yolo_trainer.predict(source)
+            self.process_yolo_results(results, file_name, (width, height))
         except Exception as e:
             QMessageBox.warning(
                 self.mw,
@@ -735,13 +810,17 @@ class YOLOController(QObject):
                 "Please check that the YAML file corresponds to the loaded model.",
             )
 
-    def process_yolo_results(self, results, image_name):
-        image_path = self.mw.image_paths[image_name]
-        image = cv2.imread(image_path)
-        if image is None:
-            QMessageBox.warning(self.mw, "Error", f"Failed to load image: {image_name}")
-            return
-        original_height, original_width = image.shape[:2]
+    def process_yolo_results(self, results, image_name, image_size):
+        """Turn raw YOLO results into review-overlay temp annotations.
+
+        ``image_size`` is the ``(width, height)`` of the source that was
+        predicted on, and is **required**: a slice or a frame has no file to
+        re-read, and re-reading a plain image decodes something
+        :meth:`_prediction_source` has already measured. Resolving it there
+        also means the "unreadable image" refusal happens before inference
+        rather than after.
+        """
+        original_width, original_height = image_size
 
         temp_annotations = {}
 

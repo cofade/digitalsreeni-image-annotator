@@ -69,7 +69,26 @@ MODEL_FILES = {
 SAM_MODELS_DIR = os.path.join(models_base_dir(), "sam")
 
 
-def _qimage_to_numpy(qimage: QImage) -> np.ndarray:
+def _rows(qimage: QImage, channels: int) -> np.ndarray:
+    """``(height, width, channels)`` view of ``qimage``, honouring its stride.
+
+    Qt aligns every scanline to a 32-bit boundary, so ``bytesPerLine()`` is not
+    always ``width * channels``: a 34-px-wide RGB888 image holds 102 bytes of
+    pixels in a 104-byte row. Reshaping on the width instead of the stride
+    shifts each row two bytes further left than the one above it -- a
+    progressive horizontal shear with the colour channels rotating down the
+    image. Widths that are a multiple of 4 hide it entirely, which is why it
+    went unnoticed: 640, 1024 and every test fixture are clean.
+    """
+    width = qimage.width()
+    height = qimage.height()
+    stride = qimage.bytesPerLine()
+    buffer = qimage.constBits().asarray(height * stride)
+    raw = np.frombuffer(buffer, np.uint8).reshape((height, stride))
+    return raw[:, : width * channels].reshape((height, width, channels))
+
+
+def qimage_to_numpy(qimage: QImage) -> np.ndarray:
     """QImage → RGB numpy array. Returned array is a fresh copy.
 
     The naive ``np.frombuffer(qimage.constBits().asarray(N))`` aliases
@@ -79,14 +98,14 @@ def _qimage_to_numpy(qimage: QImage) -> np.ndarray:
     inference worker, where Qt's threading rules make any read from
     the QImage memory dicey. Always ``.copy()`` so the worker thread
     owns its own buffer for the duration of the call.
+
+    Row addressing goes through :func:`_rows`, which respects the scanline
+    padding Qt inserts — see its docstring for the shear that results otherwise.
     """
-    width = qimage.width()
-    height = qimage.height()
     fmt = qimage.format()
 
     if fmt == QImage.Format.Format_Grayscale8:
-        buffer = qimage.constBits().asarray(height * width)
-        img = np.frombuffer(buffer, np.uint8).reshape((height, width))
+        img = _rows(qimage, 1)[:, :, 0]
         return np.stack((img,) * 3, -1)  # np.stack already returns a copy
 
     if fmt in (
@@ -94,22 +113,22 @@ def _qimage_to_numpy(qimage: QImage) -> np.ndarray:
         QImage.Format.Format_ARGB32,
         QImage.Format.Format_ARGB32_Premultiplied,
     ):
-        buffer = qimage.constBits().asarray(height * width * 4)
-        img = np.frombuffer(buffer, np.uint8).reshape((height, width, 4))
-        return img[:, :, :3].copy()
+        return _rows(qimage, 4)[:, :, :3].copy()
 
     if fmt == QImage.Format.Format_RGB888:
-        buffer = qimage.constBits().asarray(height * width * 3)
-        img = np.frombuffer(buffer, np.uint8).reshape((height, width, 3))
-        return img.copy()
+        return _rows(qimage, 3).copy()
 
     # Fallback: convert via Qt. ``converted`` is a local QImage that
     # goes out of scope at function return, so we MUST copy before
     # the buffer is freed.
     converted = qimage.convertToFormat(QImage.Format.Format_RGB32)
-    buffer = converted.constBits().asarray(height * width * 4)
-    img = np.frombuffer(buffer, np.uint8).reshape((height, width, 4))
-    return img[:, :, :3].copy()
+    return _rows(converted, 4)[:, :, :3].copy()
+
+
+# The name six modules already import. Kept as an alias rather than renamed
+# across all nineteen call sites in a bug-fix change; new code should use the
+# public spelling.
+_qimage_to_numpy = qimage_to_numpy
 
 
 # ── geometry helpers ────────────────────────────────────────────────────────

@@ -76,7 +76,7 @@ class ImageAnnotator(QMainWindow):
         self.setWindowTitle("Image Annotator")
         self.setGeometry(100, 100, 1400, 800)
 
-        # Initialize image_label early â€” setup_ui's sidebar/image-area
+        # Initialize image_label early — setup_ui's sidebar/image-area
         # builders expect it to exist.
         self.image_label = ImageLabel()
 
@@ -128,7 +128,7 @@ class ImageAnnotator(QMainWindow):
 
         # SAM 3 text-prompt producer (issue #50, ADR-038). Plugs into the
         # DINO review pipeline as an alternative to the two-stage
-        # DINOâ†’SAM path; selected via the DINO model dropdown.
+        # DINO→SAM path; selected via the DINO model dropdown.
         self.sam3_utils = SAM3Utils()
 
         # Debounce timer for SAM points: wait 1s after last click before inference
@@ -136,7 +136,7 @@ class ImageAnnotator(QMainWindow):
         self.sam_inference_timer.setSingleShot(True)
         self.sam_inference_timer.timeout.connect(self.apply_sam_prediction)
 
-        # Guards against re-entrant `apply_sam_prediction` calls â€” the
+        # Guards against re-entrant `apply_sam_prediction` calls — the
         # debounce timer can fire while an earlier inference is still
         # pumping inside _run_sync. See apply_sam_prediction().
         self._sam_inference_in_flight = False
@@ -172,7 +172,7 @@ class ImageAnnotator(QMainWindow):
         # with a sidecar, report, and offer a one-click try.
         self.model_registry_controller = ModelRegistryController(self)
         # Embedding-based near-duplicate detection (issue #72). Recommends
-        # only â€” it has no delete path at all, by design.
+        # only — it has no delete path at all, by design.
         self.curation_controller = CurationController(self)
 
         # CanvasContext gives ImageLabel a narrow read view of main-window
@@ -183,7 +183,7 @@ class ImageAnnotator(QMainWindow):
 
         # Font size control. Presets are named entry points into the
         # continuous 8-24pt range; `ui_font_pt` (int) is the single
-        # source of truth â€” see theme.set_font_pt.
+        # source of truth — see theme.set_font_pt.
         self.font_sizes = {
             "Small": 8,
             "Medium": 10,
@@ -193,9 +193,9 @@ class ImageAnnotator(QMainWindow):
         }  # When adding a new option here, also add it to the Font Size submenu in ui/menu_bar.build_menu_bar.
 
         # UI prefs persist app-globally via QSettings (not in the .iap
-        # project file). Dark mode defaults on â€” matches the look most
+        # project file). Dark mode defaults on — matches the look most
         # users expect from a 2025-era desktop annotation tool; toggle
-        # with Settings â†’ Toggle Dark Mode (Ctrl+D).
+        # with Settings → Toggle Dark Mode (Ctrl+D).
         self.ui_font_pt, self.dark_mode = load_ui_prefs()
 
         # Onion-skinning (issue #67). A viewing preference, persisted app-wide
@@ -244,7 +244,7 @@ class ImageAnnotator(QMainWindow):
 
     def _connect_image_label_signals(self):
         """Wire ImageLabel events to controller slots. ImageLabel does not
-        hold a main_window reference any more â€” every write path is a
+        hold a main_window reference any more — every write path is a
         Qt signal connected here."""
         il = self.image_label
         ac = self.annotation_controller
@@ -803,7 +803,7 @@ class ImageAnnotator(QMainWindow):
         if not self.image_controller.sort_image_list_by_score():
             self.show_info(
                 "Sort by score",
-                "No review scores yet. Run â€œReview with modelâ€ first.",
+                "No review scores yet. Run “Review with model” first.",
             )
 
     def show_annotation_statistics(self):
@@ -1014,7 +1014,7 @@ class ImageAnnotator(QMainWindow):
                 "Remove Video" if is_video(file_name) else "Remove Image"
             )
 
-            # YOLO single-image predict is for plain 2D images only â€” not
+            # YOLO single-image predict is for plain 2D images only — not
             # multi-dim stacks and NOT videos (predicting a video would run
             # Ultralytics over the whole clip on the GUI thread, #47).
             can_predict = not self.is_multi_dimensional(file_name) and not is_video(
@@ -1027,7 +1027,7 @@ class ImageAnnotator(QMainWindow):
                 redefine_dimensions_action = menu.addAction("Redefine Dimensions")
 
             menu.addSeparator()
-            move_to_group_action = menu.addAction("Move to groupâ€¦")
+            move_to_group_action = menu.addAction("Move to group…")
             remove_from_group_action = menu.addAction("Remove from group")
 
             action = menu.exec(self.image_list.mapToGlobal(position))
@@ -1222,7 +1222,7 @@ class ImageAnnotator(QMainWindow):
         }
 
         # A pose class admits only the keypoint tool. Block activating any shape
-        # tool on it (gate activation only â€” unchecking falls through, same
+        # tool on it (gate activation only — unchecking falls through, same
         # discipline as the keypoint guard below). SAM buttons are guarded in
         # SAMController.toggle_sam_*. (#44)
         if (
@@ -1234,14 +1234,14 @@ class ImageAnnotator(QMainWindow):
             QMessageBox.warning(
                 self,
                 "Pose Class",
-                f"'{self.current_class}' is a pose class â€” only the Keypoint "
+                f"'{self.current_class}' is a pose class — only the Keypoint "
                 "tool can annotate it.",
             )
             sender.setChecked(False)
             return
 
         # The keypoint tool needs a pose schema on the current class (#35). Only
-        # gate activation â€” unchecking must always fall through to deactivate, or
+        # gate activation — unchecking must always fall through to deactivate, or
         # button state and current_tool would drift on a schemaless class.
         if (
             sender is self.keypoint_button
@@ -1252,7 +1252,7 @@ class ImageAnnotator(QMainWindow):
                 self,
                 "No Keypoint Schema",
                 "Define a keypoint schema for this class first "
-                "(right-click the class â†’ Define Keypoint Schema).",
+                "(right-click the class → Define Keypoint Schema).",
             )
             sender.setChecked(False)
             return
@@ -1416,8 +1416,10 @@ class ImageAnnotator(QMainWindow):
     def run_predictions(self, selected_images):
         return self.yolo_controller.run_predictions(selected_images)
 
-    def process_yolo_results(self, results, image_name):
-        return self.yolo_controller.process_yolo_results(results, image_name)
+    def process_yolo_results(self, results, image_name, image_size):
+        return self.yolo_controller.process_yolo_results(
+            results, image_name, image_size
+        )
 
     def add_temp_classes(self, temp_annotations):
         return self.dino_controller.add_temp_classes(temp_annotations)

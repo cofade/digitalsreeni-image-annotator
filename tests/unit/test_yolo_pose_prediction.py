@@ -131,7 +131,7 @@ def test_pose_branch_builds_keypoint_temp_annotations(tmp_path, qapp):
     fake_results = ([fake_result], orig_shape, orig_shape)
 
     controller = YOLOController(mw)
-    controller.process_yolo_results(fake_results, "test_image.png")
+    controller.process_yolo_results(fake_results, "test_image.png", (width, height))
 
     assert mw.added_temp_classes is not None
     assert "Temp-person" in mw.added_temp_classes
@@ -182,7 +182,7 @@ def test_segment_branch_unchanged(tmp_path, qapp):
     fake_results = ([fake_result], orig_shape, orig_shape)
 
     controller = YOLOController(mw)
-    controller.process_yolo_results(fake_results, "test_image.png")
+    controller.process_yolo_results(fake_results, "test_image.png", (width, height))
 
     assert mw.added_temp_classes is not None
     assert "Temp-cell" in mw.added_temp_classes

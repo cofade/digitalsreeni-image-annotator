@@ -18,6 +18,7 @@ machinery and something that assumed a plain image.
 
 import os
 
+import numpy as np
 import pytest
 from PyQt6.QtCore import Qt
 from PyQt6.QtGui import QColor
@@ -158,6 +159,180 @@ def test_switching_videos_does_not_bleed_annotations_across_them(
     ]
     assert bled == [], f"annotations leaked into the second video: {bled}"
     assert window.all_annotations.get(annotated, {}).get("bee")
+
+
+# --- predicting on a video's frames ----------------------------------------
+
+
+class _FakeTensor:
+    def __init__(self, value):
+        self._value = value
+
+    def cpu(self):
+        return self
+
+    def numpy(self):
+        return self._value
+
+
+class _FakeBox:
+    cls = 0
+    conf = 0.9
+
+
+class _FakeMask:
+    """One filled rectangle, so the polygon that comes out has coordinates
+    worth asserting on. Half the frame wide, a quarter of it tall."""
+
+    def __init__(self, width, height):
+        mask = np.zeros((height, width), dtype=np.float32)
+        mask[: height // 4, : width // 2] = 1.0
+        self.data = _FakeTensor(mask[None, ...])
+
+
+class _FakeResult:
+    def __init__(self, width=None, height=None):
+        if width is None:
+            self.boxes, self.masks = [], None
+        else:
+            self.boxes = [_FakeBox()]
+            self.masks = [_FakeMask(width, height)]
+        self.keypoints = None
+
+
+class _FakeTrainer:
+    """Reports the size it was actually handed, rather than a hardcoded 640.
+
+    That matters: process_yolo_results divides the size the caller passes by
+    the size in the results, so a trainer that always claims 640x640 would let
+    a (height, width) transposition through unnoticed.
+    """
+
+    def __init__(self, with_mask=False):
+        self.model = object()
+        self.class_names = ["bee"]
+        self.prediction_keypoint_schema = None
+        self.with_mask = with_mask
+        self.sources = []
+
+    def predict(self, source):
+        self.sources.append(source)
+        height, width = source.shape[:2]
+        result = _FakeResult(width, height) if self.with_mask else _FakeResult()
+        return [result], (height, width), (height, width)
+
+
+def test_predicting_on_a_video_frame_does_not_crash(video_window, monkeypatch):
+    """The crash: "Try it on the current image" straight after training on a
+    video did ``image_paths[file_name]`` with a FRAME name and raised KeyError
+    out of a Qt slot, taking the app down.
+
+    A frame has no path; its pixels live in the lazy slice collection, so the
+    frame must resolve to an array instead.
+    """
+    from PyQt6.QtWidgets import QMessageBox
+
+    window, _ = video_window
+    window.add_class("bee", QColor("#ffa500"))
+    window.slice_list.setCurrentRow(2)
+    frame = window.current_slice
+    assert frame not in window.image_paths, "a frame is not a path key"
+
+    trainer = _FakeTrainer()
+    window.yolo_trainer = trainer
+    monkeypatch.setattr(QMessageBox, "information", staticmethod(lambda *a, **k: None))
+
+    window.yolo_controller.predict_single_image(frame)
+
+    assert len(trainer.sources) == 1
+    source = trainer.sources[0]
+    assert not isinstance(source, str), "a frame must be predicted on as pixels"
+    assert source.shape[2] == 3
+    assert source.flags["C_CONTIGUOUS"], "torch refuses a negative-stride view"
+
+
+@pytest.mark.parametrize("width", [32, 34])
+def test_a_frame_predicts_at_its_own_dimensions(
+    window, make_test_video, tmp_path, monkeypatch, width
+):
+    """The scaling half, which the resolution tests never touch.
+
+    Width 34 is not a multiple of 4, so Qt pads each RGB888 scanline by two
+    bytes. Reading rows on the width instead of the stride shears the image
+    progressively -- and 32, like 640 and 1024, hides it completely.
+    """
+    from PyQt6.QtWidgets import QMessageBox
+
+    path = make_test_video(tmp_path, name=f"w{width}.avi", frames=4, width=width,
+                           height=24)
+    window.add_images_to_list([path])
+    window.add_class("bee", QColor("#ffa500"))
+    window.slice_list.setCurrentRow(2)
+
+    trainer = _FakeTrainer(with_mask=True)
+    window.yolo_trainer = trainer
+    captured = {}
+    monkeypatch.setattr(QMessageBox, "information", staticmethod(lambda *a, **k: None))
+    monkeypatch.setattr(
+        window, "add_temp_classes", lambda temp: captured.update(temp)
+    )
+
+    window.yolo_controller.predict_single_image(window.current_slice)
+
+    source = trainer.sources[0]
+    assert source.shape[:2] == (24, width), "predicted at the wrong size"
+
+    polygon = captured["Temp-bee"][0]["segmentation"]
+    xs, ys = polygon[0::2], polygon[1::2]
+    # The mask fills the left half and top quarter, and scale is 1:1 because
+    # the trainer reports the size it was given.
+    assert max(xs) == pytest.approx(width / 2, abs=2)
+    assert max(ys) == pytest.approx(24 / 4, abs=2)
+
+    # Uniform frame: every row must carry the same colour. A stride bug makes
+    # the lower rows drift.
+    assert (source[0] == source[-1]).all(), "scanline padding sheared the frame"
+
+
+def test_a_frame_is_predicted_in_bgr(video_window, monkeypatch):
+    """Ultralytics treats a numpy source as BGR and flips it internally.
+    Handing it RGB produces plausible, quietly worse predictions rather than an
+    error -- so the channel order is worth pinning. make_test_video ramps the
+    RED channel, so BGR puts that ramp in index 2."""
+    from PyQt6.QtWidgets import QMessageBox
+
+    window, _ = video_window
+    window.add_class("bee", QColor("#ffa500"))
+    window.slice_list.setCurrentRow(3)
+
+    trainer = _FakeTrainer()
+    window.yolo_trainer = trainer
+    monkeypatch.setattr(QMessageBox, "information", staticmethod(lambda *a, **k: None))
+
+    window.yolo_controller.predict_single_image(window.current_slice)
+
+    blue, green, red = trainer.sources[0][1, 1]
+    assert red > blue and red > green, (
+        f"channels look swapped: got B={blue} G={green} R={red}"
+    )
+
+
+def test_predicting_on_a_name_with_no_pixels_reports_rather_than_raises(
+    video_window, monkeypatch
+):
+    from PyQt6.QtWidgets import QMessageBox
+
+    window, _ = video_window
+    window.yolo_trainer = _FakeTrainer()
+    warnings = []
+    monkeypatch.setattr(
+        QMessageBox, "warning",
+        staticmethod(lambda *a, **k: warnings.append(" ".join(map(str, a)))),
+    )
+
+    window.yolo_controller.predict_single_image("nowhere_F00001")
+
+    assert warnings and "nowhere_F00001" in warnings[0]
 
 
 # --- training on a video's frames ------------------------------------------

@@ -586,6 +586,11 @@ class YOLOTrainer(QObject):
                 logger.warning("Trained YOLO checkpoint not found; skipping registration.")
                 return
             names = self.model.names  # {idx: name} from the trained model
+            # The model is the active prediction model from here on, so its
+            # names are the prediction names too. Without this, class_names
+            # stays None until someone *loads* a model through the yaml path,
+            # and the very next prediction dies on `class_names[class_id]`.
+            self.class_names = names
             # Names-only on purpose: load_prediction_model reads `names` only,
             # and this yaml describes a *trained model*, not a dataset — it must
             # NOT carry train/val/path pointers (they'd be stale the moment the
@@ -822,6 +827,29 @@ class YOLOTrainer(QObject):
         input_size = results[0].orig_shape
         original_size = results[0].orig_img.shape[:2]
         return results, input_size, original_size
+
+    def class_name_for(self, index):
+        """Name for a predicted class index.
+
+        Prefers the names loaded alongside a prediction model and falls back to
+        the model's own ``names``, which is always populated -- including right
+        after training, where nothing has been *loaded* so ``class_names`` was
+        still None. Indexing it there raised "'NoneType' object is not
+        subscriptable", surfaced behind a dialog blaming a YAML/model class
+        mismatch: the one explanation that was certainly wrong, since there was
+        no YAML in play at all.
+
+        Raises ``IndexError`` for an unknown index -- including for the dict
+        form, whose native ``KeyError`` the callers do not catch -- because a
+        genuine class mismatch is what they already report on.
+        """
+        names = self.class_names or getattr(self.model, "names", None)
+        if not names:
+            raise IndexError(f"no class names available (index {index})")
+        try:
+            return names[index]
+        except KeyError as exc:
+            raise IndexError(index) from exc
 
     def set_conf_threshold(self, conf):
         self.conf_threshold = conf

@@ -28,14 +28,15 @@ from PyQt6.QtWidgets import (
     QDoubleSpinBox,
     QFileDialog,
     QFormLayout,
-    QGroupBox,
     QHBoxLayout,
     QLabel,
     QPushButton,
     QRadioButton,
     QSlider,
     QSpinBox,
+    QToolButton,
     QVBoxLayout,
+    QWidget,
 )
 
 from ..core import task_inference
@@ -166,10 +167,34 @@ class TrainDialog(QDialog):
         # --- advanced, collapsed ---
         # ADR-028 deliberately kept these off the main surface; they stay
         # available rather than removed, which is what "collapsed" buys.
-        self.advanced_box = QGroupBox("Advanced")
-        self.advanced_box.setCheckable(True)
-        self.advanced_box.setChecked(False)
+        #
+        # A disclosure ARROW, not a checkbox. This was a checkable QGroupBox,
+        # and Qt disables a checkable group's children when it is unchecked --
+        # so the settings looked switched off while `get_config` went on
+        # sending them regardless. Early stopping appeared disabled and ran
+        # anyway, which is exactly the impression a checkbox creates and this
+        # panel must not: the values are the defaults, always in force, and
+        # expanding only lets you see and change them.
+        self.advanced_toggle = QToolButton()
+        self.advanced_toggle.setText("Advanced")
+        self.advanced_toggle.setCheckable(True)
+        self.advanced_toggle.setChecked(False)
+        self.advanced_toggle.setAutoRaise(True)
+        self.advanced_toggle.setArrowType(Qt.ArrowType.RightArrow)
+        self.advanced_toggle.setToolButtonStyle(
+            Qt.ToolButtonStyle.ToolButtonTextBesideIcon
+        )
+        self.advanced_toggle.setToolTip(
+            "Show the learning-rate and early-stopping settings. They are in "
+            "effect either way — expanding only lets you change them."
+        )
+        self.advanced_toggle.toggled.connect(self._on_advanced_toggled)
+        layout.addWidget(self.advanced_toggle)
+
+        self.advanced_box = QWidget()
+        self.advanced_box.setVisible(False)
         advanced_form = QFormLayout(self.advanced_box)
+        advanced_form.setContentsMargins(16, 0, 0, 0)
 
         self.cos_lr_check = QCheckBox("Warmup → cosine LR schedule")
         self.cos_lr_check.setChecked(True)
@@ -281,7 +306,8 @@ class TrainDialog(QDialog):
             self.base_row_widget, self.split_row_widget, self.run_row_widget
         ):
             self.form.setRowVisible(widget, is_yolo)
-        self.advanced_box.setVisible(is_yolo)
+        self.advanced_toggle.setVisible(is_yolo)
+        self.advanced_box.setVisible(is_yolo and self.advanced_toggle.isChecked())
 
         self.base_combo.clear()
         self.custom_base_path = None
@@ -304,6 +330,13 @@ class TrainDialog(QDialog):
 
         self._refresh_summary()
         self._refresh_blockers()
+
+    def _on_advanced_toggled(self, expanded):
+        self.advanced_toggle.setArrowType(
+            Qt.ArrowType.DownArrow if expanded else Qt.ArrowType.RightArrow
+        )
+        self.advanced_box.setVisible(expanded)
+        self.adjustSize()
 
     def _refresh_summary(self):
         summary = self.summary

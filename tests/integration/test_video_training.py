@@ -221,6 +221,9 @@ class _FakeTrainer:
         result = _FakeResult(width, height) if self.with_mask else _FakeResult()
         return [result], (height, width), (height, width)
 
+    def class_name_for(self, index):
+        return self.class_names[index]
+
 
 def test_predicting_on_a_video_frame_does_not_crash(video_window, monkeypatch):
     """The crash: "Try it on the current image" straight after training on a

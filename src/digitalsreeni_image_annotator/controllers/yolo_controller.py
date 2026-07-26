@@ -846,7 +846,7 @@ class YOLOController(QObject):
                     for kpts, box in zip(keypoints, result.boxes):
                         try:
                             class_id = int(box.cls)
-                            class_name = self.mw.yolo_trainer.class_names[class_id]
+                            class_name = self.mw.yolo_trainer.class_name_for(class_id)
                             score = float(box.conf)
 
                             xy = kpts.xy.cpu().numpy()[0]  # (K, 2) pixel coords, Ultralytics orig_img space
@@ -902,7 +902,7 @@ class YOLOController(QObject):
                 for mask, box in zip(masks, boxes):
                     try:
                         class_id = int(box.cls)
-                        class_name = self.mw.yolo_trainer.class_names[class_id]
+                        class_name = self.mw.yolo_trainer.class_name_for(class_id)
                         score = float(box.conf)
 
                         mask_array = mask.data.cpu().numpy()[0]

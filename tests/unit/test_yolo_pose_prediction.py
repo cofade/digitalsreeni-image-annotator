@@ -66,6 +66,15 @@ class _StubYoloTrainer:
         self.class_names = class_names
         self.prediction_keypoint_schema = prediction_keypoint_schema
 
+    def class_name_for(self, index):
+        names = self.class_names or getattr(self.model, "names", None)
+        if not names:
+            raise IndexError(f"no class names available (index {index})")
+        try:
+            return names[index]
+        except KeyError as exc:
+            raise IndexError(index) from exc
+
 
 class _StubMainWindow(QObject):
     """Subclasses QObject only because YOLOController.__init__ passes the

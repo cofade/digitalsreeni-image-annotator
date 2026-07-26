@@ -349,6 +349,37 @@ def test_the_dialog_refuses_a_mixed_k_pose_project(dialog_factory):
     assert "one keypoint count" in dialog.blocker_label.text()
 
 
+def test_advanced_settings_apply_whether_or_not_they_are_expanded(dialog_factory):
+    """Collapsed is a *disclosure*, not an off switch.
+
+    This was a checkable QGroupBox, and Qt disables a checkable group's
+    children when it is unchecked -- so the settings looked switched off while
+    get_config sent them anyway. Early stopping appeared disabled and ran.
+    """
+    dialog = dialog_factory(_project(cell=[_polygon()]), [{"file_name": "i.png"}])
+
+    assert dialog.advanced_toggle.isChecked() is False
+    assert dialog.advanced_box.isVisible() is False
+    collapsed = dialog.get_config()
+
+    dialog.advanced_toggle.setChecked(True)
+    assert dialog.advanced_box.isVisibleTo(dialog) is True
+
+    assert dialog.get_config() == collapsed
+    assert collapsed["patience"] == 20, "early stopping is on while collapsed"
+    assert collapsed["cos_lr"] is True
+
+
+def test_an_edited_advanced_value_survives_re_collapsing(dialog_factory):
+    dialog = dialog_factory(_project(cell=[_polygon()]), [{"file_name": "i.png"}])
+
+    dialog.advanced_toggle.setChecked(True)
+    dialog.patience_spin.setValue(5)
+    dialog.advanced_toggle.setChecked(False)
+
+    assert dialog.get_config()["patience"] == 5
+
+
 def test_the_dialog_refuses_an_annotated_stack_with_no_loaded_slices(dialog_factory):
     dialog = dialog_factory(
         {"stack_Z1": {"cell": [_polygon()]}},

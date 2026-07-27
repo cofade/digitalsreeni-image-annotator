@@ -97,6 +97,7 @@ def import_annotations(mw):
             return
 
         logger.debug(f"Selected file: {file_name}")
+        source = file_name
         json_dir = os.path.dirname(file_name)
         images_dir = os.path.join(json_dir, "images")
         try:
@@ -114,9 +115,17 @@ def import_annotations(mw):
             return
 
         logger.debug(f"Selected YAML file: {yaml_file}")
+        source = yaml_file
         try:
             imported_annotations, image_info, recovered_schemas = process_import_format(
-                import_format, yaml_file, mw.class_mapping
+                import_format, yaml_file, mw.class_mapping,
+                # The importer stays Qt-free (issue #76); the GUI supplies the
+                # prompt it used to raise itself.
+                confirm=lambda message: QMessageBox.question(
+                    mw, "Import Issues", message,
+                    QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
+                    QMessageBox.StandardButton.No,
+                ) == QMessageBox.StandardButton.Yes,
             )
             yaml_dir = os.path.dirname(yaml_file)
             if import_format == "YOLO (v4 and earlier)":
@@ -127,6 +136,36 @@ def import_annotations(mw):
             QMessageBox.warning(mw, "Import Error", str(e))
             return
 
+    elif import_format == "Pascal VOC":
+        # A directory, not a file: VOC is one XML per image, so there is no
+        # single manifest to point at (issue #75).
+        voc_dir = QFileDialog.getExistingDirectory(
+            mw, "Select the Pascal VOC dataset directory"
+        )
+        if not voc_dir:
+            logger.debug("No VOC directory selected, returning")
+            return
+
+        logger.debug(f"Selected VOC directory: {voc_dir}")
+        source = voc_dir
+        try:
+            imported_annotations, image_info, recovered_schemas = process_import_format(
+                import_format, voc_dir, mw.class_mapping
+            )
+        except ValueError as e:
+            QMessageBox.warning(mw, "Import Error", str(e))
+            return
+        # export_pascal_voc_bbox writes images/ next to Annotations/. When the
+        # user picked Annotations/ itself, step up one level to find them.
+        root_dir = voc_dir
+        if os.path.basename(os.path.normpath(voc_dir)) == "Annotations":
+            root_dir = os.path.dirname(os.path.normpath(voc_dir))
+        images_dir = os.path.join(root_dir, "images")
+        if not os.path.isdir(images_dir):
+            images_dir = os.path.join(root_dir, "JPEGImages")  # the VOC-spec name
+        if not os.path.isdir(images_dir):
+            images_dir = root_dir
+
     else:
         QMessageBox.warning(
             mw,
@@ -135,9 +174,6 @@ def import_annotations(mw):
         )
         return
 
-    logger.debug(
-        f"JSON/YOLO directory: {json_dir if import_format == 'COCO JSON' else os.path.dirname(yaml_file)}"
-    )
     logger.debug(f"Images directory: {images_dir}")
     logger.debug(f"Imported annotations count: {len(imported_annotations)}")
     logger.debug(f"Image info count: {len(image_info)}")
@@ -237,9 +273,12 @@ def import_annotations(mw):
 
     mw.image_label.update()
 
+    # `source` is set by every branch above. The previous form picked between
+    # `file_name` and `yaml_file` inline, which raised UnboundLocalError on any
+    # branch that set neither -- Pascal VOC (issue #75) crashed here AFTER
+    # doing the whole import, so the user saw a traceback instead of a result.
     message = (
-        f"Annotations have been imported successfully from "
-        f"{file_name if import_format == 'COCO JSON' else yaml_file}.\n"
+        f"Annotations have been imported successfully from {source}.\n"
     )
     message += f"{images_loaded} images were loaded from the 'images' directory.\n"
     if images_not_found:

@@ -101,32 +101,57 @@ lazy read) is a documented follow-up; the live-QImage count is now bounded.
 
 ### Low Test Coverage of Interactive Paths
 
-**Debt Level**: Medium
+**Status**: ✅ Largely resolved for the canvas layer (issue #77)
 
-**Description**: A pytest + pytest-qt suite of 94 tests now exists
-(boot smoke, coordinate conversions, export-format round-trips,
-utility functions). Coverage is ~15% by line — the gap is the
-canvas event flow (mouse events → tool handler → signal emission →
-controller slot) and the SAM/DINO/YOLO inference paths.
+**Debt Level**: Low (was Medium)
 
-**Impact**:
-- Phase 6/7/8 refactors had to lean on manual QA checklists for the
-  canvas flow because no automated test exercises it end-to-end.
-- Inference paths are exercised only via the smoke boot, not under
-  real model loads (those would slow CI prohibitively).
+**Description (historical)**: The canvas event flow — mouse event → tool
+handler → signal emission → controller slot — had no automated coverage. The
+per-tool handlers sat at 22–27 % by line and `canvas_renderer.py` at 49 %,
+which meant every canvas refactor leaned on a manual QA checklist.
 
-**Effort to Resolve**: Medium
+**Resolution**: Issue #77 added three layers of coverage, built on the shared
+doubles in `tests/canvas_fixtures.py` (`FakeCanvasContext`, `FakeMouseEvent`,
+`RecordingPainter`):
 
-**Priority**: Medium
+1. `tests/unit/test_tool_handlers.py` — every `ToolHandler` subclass driven
+   through press / move / release / Enter / Escape and its `paint_overlay`,
+   asserting the **emitted signal and payload** rather than internal state.
+   Includes the right-button (occluded keypoint) path that the left-only press
+   dispatch would otherwise hide (ADR-029).
+2. `tests/ui/test_canvas_gestures.py` — real `qtbot` mouse events through
+   `mousePressEvent`, so the dispatch *priority order* is covered as well as
+   the gesture logic: handle resize anchoring, drag-gated move, rubber-band
+   selection, double-click into vertex-edit mode, and the ADR-026 rule that an
+   Esc-aborted gesture leaves no history entry.
+3. `tests/unit/test_canvas_renderer_contract.py` — `CanvasRenderer` against a
+   recording painter, pinning draw order (selection overlay last, temp
+   annotations on top) and class-visibility filtering. This is the harness
+   onion-skinning (#67) inserts a layer into.
 
-**Plan**:
-1. Per-tool unit tests under `widgets/tools/` — each handler can be
-   tested by instantiating with a stub `label` carrying signals
-   and a fake `CanvasContext`, then feeding `QMouseEvent`s.
-2. Integration test that loads a tiny project, draws a polygon,
-   asserts the `.iap` round-trip restores state.
-3. Mock SAMUtils / DINOUtils inference returns to exercise the
-   controller signal paths without needing model weights.
+Plus `tests/unit/test_coordinate_conversion.py` for the screen↔image funnel
+every gesture passes through.
+
+**Measured effect** (full suite, `--cov`):
+
+| Module | Before | After |
+|--------|--------|-------|
+| `widgets/tools/eraser_tool.py` | 22 % | 75 % |
+| `widgets/tools/paint_tool.py` | 26 % | 79 % |
+| `widgets/tools/polygon_tool.py` | 26 % | 76 % |
+| `widgets/tools/rectangle_tool.py` | 27 % | 85 % |
+| `widgets/tools/keypoint_tool.py` | 65 % | 92 % |
+| `widgets/canvas_renderer.py` | 49 % | 69 % |
+| `widgets/image_label.py` | 59 % | 69 % |
+
+A `--cov-fail-under` floor is now configured in `pytest.ini` so the number
+cannot quietly slide back. The floor is set at the level actually reached, not
+an aspirational one — a gate that fails on day one gets disabled on day two.
+
+**Remaining gap**: the SAM/DINO/YOLO inference paths are still exercised only
+via the smoke boot and mocked controller tests, never under real model loads
+(those would slow CI prohibitively). That is a deliberate limit, not an
+oversight.
 
 ---
 
@@ -239,20 +264,84 @@ the orchestrator wires each to the matching controller slot.
 
 ### No Type Hints
 
-**Debt Level**: Medium
+**Status**: Partially resolved — the Qt-free core is typed and checked (#78)
 
-**Description**: Python code lacks type hints
+**Debt Level**: Low for `core/`, unchanged elsewhere
 
-**Impact**:
-- No static type checking
-- Harder to understand function contracts
-- More runtime errors
+**Description (historical)**: The codebase was essentially untyped, with no
+configuration and no checking step. The cost showed up most in the structures
+carrying the most meaning: an annotation is a dict whose valid shapes were
+documented in prose, and a pose instance is distinguished from a polygon by the
+**absence** of a key (ADR-029) — a rule only a comment protected.
 
-**Effort to Resolve**: High (add gradually)
+**What is now covered**
 
-**Priority**: Low
+`core/annotation_types.py` defines the annotation shapes as `TypedDict`s:
+`PolygonAnnotation`, `BBoxAnnotation`, `PoseAnnotation`, plus `KeypointSchema`
+and aliases for the recurring shapes (`Polygon`, `BBox`, `Keypoints`,
+`AnnotationsByImage`). **`PoseAnnotation` declares no `segmentation` key at
+all** — the type definition expresses the discriminator, because declaring one
+even as optional would legitimise writing it, and writing it breaks every
+existence-only `"segmentation" in ann` check. `is_pose` / `is_polygon` /
+`is_bbox_only` express the test once.
 
-**Plan**: Add type hints to new code, gradually backfill
+Every `TypedDict` is `total=False`, deliberately: the annotation dict
+legitimately gains keys at runtime (`segmentation_raw` lazily, ADR-025;
+`source` and `track_run` on tracked results, ADR-040; `assigned_class` on
+unprompted proposals, #69). Forcing a rigid schema onto genuinely open data
+would produce false errors and teach people to ignore the checker.
+
+mypy is configured in `pyproject.toml` with **global `ignore_errors = true` and
+a per-module opt-in**. That direction matters: the boundary of what is actually
+checked stays visible, whereas checking everything and suppressing failures
+would hide it. Currently opted in: `annotation_types`, `annotation_qc`,
+`constants`, `disagreement`, `image_size`, `mask_filters`, `model_sidecar`,
+`onion`, `project_io`, `similarity`, `task_inference`.
+
+Untyped third-party packages are listed **individually** rather than behind a
+global `ignore_missing_imports`, so the list stays visible and shrinks as
+upstreams ship stubs. Several of them ship source written for a newer Python
+than the project's 3.10 floor, so the override also sets
+`follow_imports = "skip"`.
+
+**Deliberately out of scope**: widget internals and dialogs. The PyQt6 stubs are
+incomplete, so annotating them produces noise rather than safety — which is
+exactly why an `mypy --strict` sweep over the whole tree is a different project.
+
+**The gate is verified to be non-vacuous.**
+`tests/unit/test_annotation_types.py` copies the tree, injects a deliberately
+wrong return type into an in-scope module, and asserts the real gate fails. A
+type-check step that checks nothing is worse than none: it reports success
+forever while teaching everyone to trust it.
+
+**Remaining**: `io/`, `utils.py` and the controller signatures are annotated
+only where they already were. Extending the opt-in list module by module is the
+intended path.
+
+---
+
+### No Linting
+
+**Status**: Resolved (issue #78)
+
+**Description**: The project had no linter at all.
+
+**Resolution**: `ruff` is configured in `pyproject.toml` with a **deliberately
+narrow** rule set — `E4`, `E7`, `E9`, `F`. The codebase predates any linter, so a
+broad selection would produce hundreds of findings nobody reads and the gate
+would be switched off within a week. These rules catch real defects (unused
+names, shadowed builtins, ambiguous identifiers, syntax-level errors) rather
+than style preferences. It found and fixed 17 pre-existing issues on first run;
+the tree is clean.
+
+Run both gates separately from the tests, so a type error is distinguishable
+from a test failure:
+
+```bash
+python -m ruff check src tests
+python -m mypy
+pytest
+```
 
 ---
 
@@ -274,15 +363,24 @@ the orchestrator wires each to the matching controller slot.
 
 ## Known Issues
 
-### YOLO Training Not Supported for Multi-dimensional Images
+### YOLO Training Needs a Stack's Slices to Be Loaded
 
-**Status**: Known Limitation
+**Status**: Resolved for the common case
 
-**Description**: YOLO training only works with single images, not TIFF/CZI slices
+**Description**: This entry previously read "YOLO training only works with single images, not
+TIFF/CZI slices", with "export slices as individual images first" as the workaround. That was
+wrong by the time it was written down: the exporters resolve slice pixels through `image_slices`
+(#45/#47), so stack slices and video frames export like any other image. The training dialog's
+pre-flight nonetheless refused every stack and video, which rejected valid datasets — including
+the one SAM 3 tracking (#51) exists to produce.
 
-**Workaround**: Export slices as individual images first
+What remains is narrower: a stack or video contributes **no pixels** until its slices have been
+materialised in this session. Project load and `add_images_to_list` both do that eagerly, so the
+reachable causes are a cancelled dimension dialog, an unreadable codec, or a moved file. The
+dialog blocks only when such a stack **has annotations**, since an unopened but unannotated stack
+cannot affect the export at all.
 
-**Priority**: Low (niche use case)
+**Priority**: Low (narrow residual case, reported explicitly rather than silently dropped)
 
 ---
 

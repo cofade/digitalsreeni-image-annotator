@@ -251,12 +251,46 @@ the controller graph.
 | `SAM3Utils` | inference/sam3_utils.py — in-process Ultralytics `SAM3SemanticPredictor` wrapper (text→masks) + `track()` video propagation via `SAM3VideoPredictor` (ADR-040). Reuses `SAMUtils`'s `_run_sync`/`_qimage_to_numpy`/`_mask_to_polygon` + shared in-flight flag; gated `sam3.pt` (never auto-downloaded). ADR-038/039/040, #50/#51. |
 | `TrackingController` | controllers/tracking_controller.py — SAM 3 video object tracking (#51, ADR-040). `can_track`/`run_tracking`/`_commit_tracked_result` (mirrors `_commit_dino_results`)/`undo_last_track`. Confident frames commit as `source:"sam3-track"` with a `track_run` id; uncertain frames route to `dino_batch_results` for the existing review pipeline. |
 | `YOLOController` | Training menu, `TrainingThread`, prediction dialog, result processing. Surfaces the run's MLflow deep link (`_on_mlflow_run_url`, mirrors SAM) and reports the saved `best.pt` path on completion. |
+| `ClipboardController` | controllers/clipboard_controller.py — in-app annotation clipboard (#66). App-level, so it survives image / slice / frame / project switches. Deep-copies in and out (value-equality is the only stable identity, ADR-022), clamps into the target's bounds (ADR-024), resolves missing classes once per distinct name, and refuses a pose whose K does not match the target class's schema (ADR-029). One `record_history` per paste. |
+| `QCController` | controllers/qc_controller.py — GUI adapter for the annotation audit (#70). Gathers annotations, image sizes and class names, shows `AnnotationQCDialog`, and applies repairs through `record_history` as **one** undo entry. The rules themselves live Qt-free in `core/annotation_qc.py` so the CLI reuses them. |
+| `ReviewController` | controllers/review_controller.py — model-vs-ground-truth review scoring (#71). Runs the prediction model across the project and scores each image by disagreement (annotated) or uncertainty (unannotated). Never mutates an annotation: predictions are extracted for scoring **without** going through `process_yolo_results`, which writes into the review overlay as a side effect. |
+| `CurationController` | controllers/curation_controller.py — embedding-based near-duplicate detection (#72). Embeds every image *including slices and video frames*, clusters, and selects a cluster in the image list. **Has no delete path at all**, by design. |
+| `SegmentEverythingController` | controllers/segment_everything_controller.py — unprompted SAM proposals into the **existing** review overlay (#69). A third producer alongside DINO and SAM 3, not a second review mechanic (ADR-015). Applies the `core/mask_filters` noise limits before anything reaches the canvas. |
+| `TrainingController` | controllers/training_controller.py — one entry point for all training (#73, ADR-042). Dispatches the unified `TrainDialog` to the existing trainers and performs the mechanics implicitly (prepare, YAML, load, save, refresh). Orchestration only; the trainers are untouched. |
+| `ModelRegistryController` | controllers/model_registry_controller.py — post-training lifecycle (#74). Registers, copies weights into `<project>/models/` with a JSON sidecar, feeds the results panel, and offers "try it now" **for YOLO runs only** (`predict_single_image` routes to the YOLO trainer regardless of what was trained; a fine-tuned SAM checkpoint is used interactively via SAM-box/SAM-points instead). Registers nothing on a failed or stopped run, and nothing at all while `is_loading_project` is set. Drops the review scores (#71), which were computed with the previous model. |
 | `SAMTrainController` | SAM fine-tuning menu, GPU gate, `SAMTrainingThread`, config dialog, registers fine-tuned checkpoints into the SAM selector (ADR-021). |
 | `io_controller` *(module-level functions, not a class)* | Thin UI wrappers around the pure `io/export_formats.py` and `io/import_formats.py` modules. |
 
 Communication: `ImageLabel` does not import controllers directly —
 it emits Qt signals (ADR-018) that the orchestrator connects to
 controller slots in `_connect_image_label_signals()`.
+
+## Level 3: The Qt-Free Core (shared with the CLI)
+
+These modules are imported by both the GUI and `sreeni-cli`, and **must not import Qt** at module
+level. A subprocess test enforces it (ADR-041); see
+[Deployment View](07_deployment_view.md#72-the-qt-free-boundary) for why the guard has to run
+out-of-process.
+
+| Module | Responsibility |
+|---|---|
+| `core/annotation_types.py` | `TypedDict`s for the annotation shapes plus `is_pose` / `is_polygon` / `is_bbox_only` (#78). `PoseAnnotation` declares **no** `segmentation` key — the type expresses the ADR-029 discriminator. |
+| `core/annotation_qc.py` | The QC rule engine (#70): geometry, redundancy, statistics, hygiene and pose rules, plus the unambiguous repairs. Powers both the dialog and `sreeni-cli validate`. |
+| `core/disagreement.py` | Model-vs-ground-truth scoring (#71). Greedy matching with a swap-improvement pass — no scipy; see the module docstring for why. |
+| `core/similarity.py` | Cosine similarity, threshold-based connected-component clustering, medoid representative, outliers (#72). Model-free: it takes plain vectors, so the embedding backend can be swapped without touching it. |
+| `core/task_inference.py` | Derives the training task from the annotations and produces the pre-flight blockers (#73). One source of truth shared with `train_model`'s YAML-based inference. |
+| `core/model_sidecar.py` | Build / read / locate the trained-model JSON sidecar, and the non-colliding weights filename (#74). |
+| `core/project_io.py` | Read an `.iap` without the GUI (#76). **No write path at all** — the CLI must never autosave into a project it was asked to read. |
+| `core/mask_filters.py` | Polygon IoU and the noise limits for unprompted mask proposals (#69). |
+| `core/onion.py` | Onion-skin neighbour selection, the content choice (annotations / image / both) and the settings clamps (#67). Ends never wrap. |
+| `core/image_size.py` | Image dimensions via a Pillow header read (#76) — what replaced `QImage` in the export layer. |
+
+## Level 3: CLI
+
+| Module | Responsibility |
+|---|---|
+| `cli/main.py` | `argparse` subcommands, exit-code constants, and the CLI-slug ↔ internal-format-label map. |
+| `cli/commands.py` | `export`, `convert`, `validate`, `predict`. Only `predict` imports torch, lazily. |
 
 ## Level 3: Export/Import Subsystem
 

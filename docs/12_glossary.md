@@ -20,6 +20,69 @@ Carl Zeiss Image file format for multi-dimensional microscopy images. Contains m
 ### DINO / Grounding DINO
 "DINO" in this codebase refers specifically to **Grounding DINO** (IDEA-Research, 2023) — an open-set object detector that takes a natural-language phrase ("drone", "wing of an aircraft") and returns bounding boxes for matching regions of an image. Not to be confused with the self-supervised vision-only DINOv1/v2 backbones (similar name, different model). Models live under `models/grounding-dino-base/` and `models/grounding-dino-tiny/`.
 
+### Disagreement Score
+How much a trained model and the human labels differ on one image (issue #71):
+`unmatched_ground_truth + unmatched_predictions + sum(1 - IoU)` over matched pairs. Perfect
+agreement scores 0; every term is in the same unit ("one object's worth of disagreement"), so a
+missing label, a spurious detection and a badly-fitting pair contribute comparably. **A high
+score is a hint, not a verdict** — it means the annotation is worth a look, never that it is
+wrong. Computed in the Qt-free `core/disagreement.py`. Pose instances are excluded (mask IoU is
+meaningless for keypoints; OKS is the right metric) and the exclusion is reported.
+
+### Uncertainty Score
+The counterpart for an image with **no** annotations (issue #71): how unsure the model is, so
+labelling it teaches the most. Each detection contributes `1 - 2*|conf - 0.5|`, summed rather
+than averaged — ten borderline detections teach more than one. An image with no detections
+scores 0: the model seeing nothing is not the model being unsure.
+
+### Finding / Rule / Severity (QC)
+The vocabulary of the annotation audit (issue #70). A **rule** is one check (self-intersecting
+polygon, near-duplicate, class-name typo, orphaned `Temp-*` class …). A **finding** is one
+instance of a rule firing, as plain data: rule, severity, image, class, annotation number,
+message, and whether it is `fixable`. **Severity** is `error` (will export or train wrong),
+`warning` (probably a mistake) or `info` (an observation, not a defect). Only unambiguous
+repairs are offered — an area outlier might be a genuinely large object.
+
+### Near-Duplicate Cluster
+A group of images whose embeddings are mutually reachable above a cosine-similarity threshold
+(issue #72). Found by connected components rather than k-means, because the cluster count is not
+known in advance and k-means would partition *every* image whether or not any are similar. The
+**representative** is the medoid — the member most similar to the rest, i.e. the frame that best
+stands in for the group. Clustering is transitive, which is correct for a burst of frames
+drifting slowly.
+
+### Model Sidecar
+A JSON file written next to a trained `.pt` (issue #74) holding what the checkpoint cannot say
+about itself: class names, task, `kpt_shape`/`flip_idx`, the training configuration and the final
+metrics. **Additive, never required** — a `.pt` without one still loads through the bare
+`kpt_shape` reconstruction, so externally trained models keep working, and a corrupt sidecar
+reads as no sidecar.
+
+### Onion Skin
+The neighbouring slice or frame ghosted over the current one at low opacity (issue #67). Two
+ghosts are available and the **annotation** ghost is the default: the neighbour's committed
+shapes, dashed and unfilled in their class colour, answering "what did I label there, and does
+this slice line up with it?". The **raster** ghost (the animator's onion skin) is opt-in, because
+blending two adjacent photographic slices — which differ everywhere, unlike two animation cels —
+mostly just makes the current one look out of focus. Purely decorative either way: it participates
+in no hit-testing, no SAM input and no export. Drawn *after* the image and *before* the
+annotations — an image slice is opaque, so a ghost painted beneath it would be invisible.
+
+### Pascal VOC
+An XML annotation format (one file per image) from the PASCAL Visual Object Classes challenge.
+Coordinates are corners — `xmin, ymin, xmax, ymax` — not `[x, y, width, height]`, so the importer
+converts (issue #75). `export_pascal_voc_both` additionally writes each outline **inline** as
+`<segmentation><polygon><ptN>`, and the importer reads it back, which is what makes the
+round-trip preserve masks rather than degrading them to boxes.
+
+Mask-PNG (`SegmentationClass`) reconstruction is deliberately **not** supported: in a foreign
+dataset the palette index is that producer's class id, with no defined relationship to a class
+name in this project, so any colour-to-class mapping would misattribute regions while appearing
+to work.
+
+A bndbox is always written, derived from the outline when the annotation has no `bbox` key —
+which is the normal case, since shapes drawn in this app carry segmentation only.
+
 ### Fine-Tuning (SAM)
 Continuing training of a pre-trained SAM 2 / 2.1 model on the user's own annotations so the assisted tools work better on their imagery. Because Ultralytics ships no SAM trainer, the app uses a custom loop over the Ultralytics `SAM2Model` (see [ADR-021](09_architecture_decisions.md#adr-021-sam-fine-tuning-via-a-custom-loop-over-the-ultralytics-sam2-module)). **Decoder-only** (default) trains just the mask decoder, freezing the image and prompt encoders — fast, low-VRAM, robust on modest data; optionally the image encoder is also unfrozen for heavily domain-shifted data.
 
@@ -116,9 +179,6 @@ Post-processing step that removes redundant overlapping boxes. After Grounding D
 
 ### Paint Brush Tool
 Drawing tool that creates freeform annotations by painting a mask with adjustable brush size. Converted to polygon contours when finished.
-
-### Pascal VOC
-Visual Object Classes dataset format. XML-based annotation format primarily for bounding boxes.
 
 ### Phrase (DINO)
 A free-form text description used by Grounding DINO to find objects. Each annotation class has a list of phrases — for example a "drone" class might use phrases `["drone", "quadcopter", "octocopter", "helicopter"]`. The class name itself is always the first phrase and cannot be removed.

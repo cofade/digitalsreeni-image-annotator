@@ -551,6 +551,140 @@ def generate_slice_name(filename, t, z, c, s):
 # Example: "stack.tif_T0_Z5_C0"
 ```
 
+## The Shortcut Registry and Its Gates (issue #65, ADR-043)
+
+The app has **two** keyboard mechanisms, and which one a binding belongs to is a real decision:
+
+| Mechanism | For | Why |
+|---|---|---|
+| `QShortcut` with `ApplicationShortcut` | **unconditional** bindings — Ctrl+Z, Ctrl+Y, F2 | `QTableWidget` and other focusable children consume keys before they bubble to the main window, so `keyPressEvent` never sees them. No text field wants a modified key. |
+| `ShortcutEventFilter` (`ui/shortcuts.py`) | **conditional** bindings — bare digits and letters, plus Ctrl+C/Ctrl+V | An `ApplicationShortcut` on `3` swallows that keystroke in *every* `QLineEdit`: renaming a class to "Layer 3" or typing a DINO phrase would silently drop characters. An event filter is the only mechanism that can be conditional on where focus is. |
+
+The filter is a **registry**, not another bespoke filter: `{(key, modifiers): callable}` plus a
+list of gate predicates that must all pass. Adding a global-key feature means registering a
+binding. This is what ADR-015's follow-up asked for.
+
+### The gates
+
+Both live in `ui/input_gates.py` and are **shared with `DINOReviewEventFilter`**, which used to
+duplicate them inline. Two filters drifting apart on a *safety* predicate is exactly the failure
+that note warned about.
+
+- `no_modal_open()` — a modal owns the keyboard; firing a canvas binding underneath it would act
+  on state the user cannot see.
+- `focus_is_text_entry()` — covers `QLineEdit`, `QTextEdit`, `QPlainTextEdit`, `QAbstractSpinBox`
+  and **editable** combo boxes. A non-editable combo takes no typed text, so gating on it would
+  needlessly disable the bindings whenever a dropdown has focus.
+
+`widget_is_text_entry(widget)` is split out from `focus_is_text_entry()` deliberately: which
+widget holds focus is a property of the windowing system and unreliable under the offscreen
+platform used in CI, whereas "is a `QSpinBox` a text entry" is a decision this module owns and
+must get right. The split is what makes the classification testable.
+
+### Rules for new bindings
+
+- A binding returning `False` does **not** consume the event — that is what makes an out-of-range
+  digit a silent no-op rather than an error.
+- Tool bindings must call `ImageAnnotator.activate_tool` and nothing else. Writing `current_tool`
+  or the SAM flags directly reintroduces the drift the choke-point exists to prevent.
+- Digits address the **first nine** classes only. Classes 10+ stay mouse-reachable; a
+  modifier-based second bank was rejected because two-key class selection is slower than clicking.
+
+### Discoverability without breaking the item text
+
+`ClassShortcutDelegate` *paints* the 1-9 badge. It cannot go into the item text, because **the
+item text IS the class name** across the app — `findItems(MatchExactly)` re-selects on it, the
+`Temp-` prefix checks drive the whole review workflow, `text()[5:]` derives the permanent name on
+accept, and rename reads it back. The same rule applies to the review-score badge on the image
+list (`ImageScoreDelegate`, issue #71), where the text additionally backs the
+`all_images[i]` ↔ `image_list.item(i)` positional invariant (ADR-035).
+
+## The Annotation Clipboard (issue #66)
+
+App-level, not per-image: it survives switching image, slice, frame and project, because "copy
+here, paste 40 slices later" is the entire point. Deliberately **not** the system clipboard —
+annotations are rich dicts with class bindings and schema constraints, and round-tripping them
+through text would lose the class-mapping decision.
+
+Three rules, each present because of a specific way the naive version breaks:
+
+1. **Deep copy in and out.** `image_label.annotations` is itself a deep copy and PyQt round-trips
+   `UserRole` dicts as copies, so value-equality is the only stable identity (ADR-022). A
+   reference would make the pasted shape an alias of the source.
+2. **Clamp, don't clip.** The target may be smaller. Per-coordinate clamping preserves vertex
+   count and ordering (ADR-024); a shapely clip is geometrically prettier but changes the vertex
+   count out from under a shape the user is about to nudge. `segmentation_raw` is clamped the
+   same way, or restoring Detail-% to 100 would push coordinates back out of bounds.
+3. **A pose travels only to a class with the same K.** K is locked once instances exist
+   (ADR-029); a 17-point pose on a 5-point class is not slightly wrong, it is corrupt. Mismatches
+   are reported and skipped — and a skipped pose does not cost the user the polygons pasted
+   alongside it.
+
+One `record_history()` before any mutation, so a five-annotation paste is one Ctrl+Z. A cancel at
+the class-mapping dialog pastes **nothing at all**: a partial paste after a cancel is worse than
+none.
+
+## Onion-Skinning and the Slice LRU (issue #67)
+
+### Ghost the annotations, not the pixels
+
+There are **two** ghosts, chosen by the `content` setting, and which one is the default matters
+more than any other decision here.
+
+The raster ghost — the animator's onion skin, the neighbouring slice blended over the current one
+— shipped first and was the first thing the feature got complained about. On an opaque
+photographic slice it does not read as "here is where that object was"; it reads as *this image is
+out of focus*. Two cels differ only where the drawing moved, so a blend is legible; two adjacent
+microscopy slices or video frames differ **everywhere**, so the blend is just noise.
+
+The question actually worth answering while stepping through a stack is *what did I label on the
+neighbouring slice, and does this one line up with it?* So `CONTENT_ANNOTATIONS` is the default:
+the neighbour's committed shapes, dashed and unfilled in their class colour. The current slice's
+own masks are filled, so an unfilled ghost stays distinguishable from exactly the thing it exists
+to be compared against. Hidden classes are skipped — a ghost that ignores the visibility checkbox
+is a ghost you cannot turn off.
+
+The annotation ghost is also the **cheap** one: a dict lookup per neighbour in `all_annotations`,
+no decode and no LRU traffic. `onion.wants_image()` gates the expensive half, so the default
+costs nothing beyond the lookup.
+
+### Layering and resolution
+
+The ghost is drawn **after** the current image and **before** every annotation layer. The issue
+asked for "underneath the current image", which cannot work: unlike an animation cel, an image
+slice is a fully opaque raster, so anything painted beneath it is invisible. The chosen order
+delivers what the requirement actually wanted — a visible ghost with the current slice's
+annotations legible on top.
+
+Neighbours are resolved in `display_image`, the single funnel where the canvas image changes,
+**never in `paintEvent`**: a cache lookup (and on a miss, a full decode) per repaint would put
+decoding in the pan and zoom path. Pixels go through `LazySliceList.get` like every other consumer,
+so the shared bounded LRU (ADR-036) stays the only owner of decoded pixels. The default
+single-neighbour mode costs one extra live decode; "both" costs two, which is why the capacity of
+8 was left alone rather than quietly raised.
+
+The ghost is **decorative and stays that way**: it never becomes `original_pixmap` (what SAM,
+export and every measurement read), contributes nothing to hit-testing, and is dropped on
+`clear()`. Opacity is restored to 1.0 after the pass so it cannot wash out later layers.
+
+## Vertex Count Changes and the Detail-% Baseline (issue #68)
+
+`segmentation_raw` (ADR-025) is captured lazily the first time a mask is thinned and is the source
+the Detail-% spinbox re-simplifies **from**. Once the live polygon gains or loses a vertex, that
+copy describes a different shape — so the next Detail-% drag would re-derive the outline from
+pre-edit geometry and **silently revert the user's work**.
+
+Resolved by **invalidating** rather than mirroring. Mirroring only means something if the raw and
+the live polygon share a vertex correspondence, and after simplification they do not: the raw is
+denser, so "the vertex the user just deleted" has no single counterpart there. Invalidation makes
+the edited shape the new baseline — correct, and explainable as "Detail-% restarts from what you
+now see". Esc restores the raw/detail pair too, so cancelling costs nothing either.
+
+The undo model stays session-scoped: the baseline is captured at edit-mode entry, insert/remove
+save and refresh the table via `polygonGeometryChanged` **without** pushing history, and Enter
+commits the session as one undo step. Esc reverts everything including insertions, leaving no
+entry (ADR-026).
+
 ## Keyboard Shortcuts
 
 ### Global Shortcuts
@@ -644,12 +778,28 @@ that name is the key into several independent registries:
 | `all_annotations[img]` / `image_label.annotations` | per-image buckets | plus each annotation's `category_name` |
 | `dino_class_table` rows | DINO widget | keyed by row text |
 | `dino_phrase_panel._phrases` | DINO widget | name → phrase list |
+| `dino_batch_results` | main window | pending review results, `category_name` captured at **detection** time |
+| `image_label.temp_annotations` | canvas | the on-screen half of the same review state |
+| `AnnotationHistory` snapshots | annotation controller | each undo entry is a whole `{class_name: [...]}` dict (ADR-026) |
 
 **Every roster mutation must touch all of them.** `add_class` and
 `delete_class` do; `rename_class` silently skipped the DINO pair and
 `class_visibility` until #63 — so a renamed class kept detecting under its dead
 name, lost its phrases *and* thresholds on the next project load (both are
 filtered against the live class list), and quietly became visible again.
+
+The last three rows were added after #63, and each failed *later* and quietly.
+A rename mid-review left pending proposals tagged with a name the project no
+longer had — drawn in the fallback colour, then discarded on accept. And the
+history snapshots made **Ctrl+Z after a rename restore the annotations under
+the old name**: unmapped, uncoloured, absent from the class list, so invisible
+on the canvas and still written into the `.iap`. A rename re-keys both; a
+delete drops them (a prompted proposal for a deleted class can only ever be
+discarded, and an undo that resurrects the class brings it back unusable).
+
+The onion-skin ghosts (#67) are a **cache**, not a registry: they hold
+`(class_name, annotations)` pairs resolved at navigation time, so rename and
+delete call `refresh_onion_skin()` rather than re-keying them.
 
 **Renaming onto an existing name is rejected, not merged.** `rename_class`
 runs a **pre-flight** block that validates every precondition *before* the
@@ -689,25 +839,42 @@ would re-derive `class_visibility` from the checkbox and become a hidden
 co-author of the rename. `rename_class` wraps the `setText` in
 `blockSignals(True/False)` so the explicit re-key is the sole writer.
 
-When adding a new name-keyed registry, add it to the table above **and** to all
-three mutation sites. The registries are hand-synced at each call site rather
-than projected from one roster — that coupling is known debt.
+When adding a new name-keyed registry, add it to the table above **and** to
+every mutation site. The registries are hand-synced at each call site rather
+than projected from one roster — that coupling is known debt, and the reason
+this table keeps growing one production bug at a time.
 
 ## DINO Temp Annotations — Single Field, Many Images
 
-> **Three producers (ADR-039/040):** the temp-annotation / `dino_batch_results`
-> pipeline is fed by the Grounding-DINO two-stage path, SAM 3's one-stage
-> `SAM3Utils.detect_text`, AND SAM 3 video tracking's uncertain frames
-> (`TrackingController`, source `"sam3"`). Tracking's CONFIDENT frames bypass
-> review and commit directly as `source:"sam3-track"`.
-
-> **Two detect producers (ADR-039):** the temp-annotation pipeline is fed by BOTH the
-> Grounding-DINO two-stage path and SAM 3's one-stage `SAM3Utils.detect_text`.
-> Temps are tagged `source: "dino"` or `source: "sam3"`; every `source ==`
-> check (the `DINOReviewEventFilter` Enter/Escape gate, commit/store/accept)
-> is `in ("dino", "sam3")`. SAM 3 batch results share the SAME
-> `dino_batch_results` dict, so the single-field re-sync rule below applies to
-> both unchanged.
+> **Four producers** now feed the temp-annotation / `dino_batch_results`
+> pipeline. Adding one means widening `REVIEW_SOURCES` in `dino_controller.py`
+> and parking results under the image key — never installing a parallel review
+> mechanic (ADR-015).
+>
+> | Producer | `source` tag | Notes |
+> |---|---|---|
+> | Grounding-DINO two-stage | `"dino"` | the original |
+> | SAM 3 text prompt | `"sam3"` | ADR-039, one-stage `SAM3Utils.detect_text` |
+> | SAM 3 video tracking | `"sam3"` | ADR-040, **uncertain** frames only; confident frames bypass review and commit directly as `source: "sam3-track"` |
+> | Segment Everything | `"sam-everything"` | issue #69, unprompted; additionally carries `assigned_class`, which is `None` until the user clicks the proposal |
+>
+> The **review gate** (`DINOReviewEventFilter`) reads the shared
+> `REVIEW_SOURCES` tuple, so a producer cannot be half-registered *there*. Note
+> that `source` carries other meanings elsewhere with their own literals —
+> slice-list colouring in `image_controller` and the scoring exclusion in
+> `core/disagreement` both test `"sam3-track"` directly — so a new producer
+> still has to be checked against those by hand. All four share
+> the SAME `dino_batch_results` dict, so the single-field re-sync rule below
+> applies to all of them unchanged — which is precisely why Segment Everything
+> parks its proposals there rather than living only in `temp_annotations`:
+> without that, one click in the image list would silently discard a batch of
+> class assignments.
+>
+> **Known limit**: one image key holds one producer's entries. Two producers
+> parking for the same image means the last writer wins, silently. In practice
+> the runs are sequential and `SegmentEverythingController.run()` refuses to
+> start while a review is pending — but `stage_proposals`, the entry point the
+> tests use, has no such guard, and neither does anything structural.
 
 `ImageLabel.temp_annotations` is a **single list on the image_label**,
 not a per-image cache. It holds the pending DINO+SAM masks shown as

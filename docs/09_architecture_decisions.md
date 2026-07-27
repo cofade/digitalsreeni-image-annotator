@@ -2348,9 +2348,12 @@ stopping, so a leaky split does not merely misreport, it changes when the run st
 **Consequences**:
 
 - The requested val percentage becomes a **target rather than a guarantee**, and the honest bound
-  is narrow: *no single group, added or substituted, would land closer to the target*. Choosing
-  the best subset is subset-sum, so `_split_by_group` fills with groups that fit, allows one large
-  group to replace the selection when that lands nearer, then improves while improving. On a
+  is narrow: *no single group added, dropped, or swapped for another would land closer to the
+  target*. Choosing the best subset is subset-sum, so `_split_by_group` fills with groups that
+  fit, allows one large group to replace the selection when that lands nearer, then hill-climbs on
+  single add/drop/swap moves until none improves. The climb enumerates one representative per
+  distinct group *size*, since same-size groups are interchangeable for hitting a count — without
+  that, the ungrouped path (one group per image) would compare millions of identical singletons. On a
   project of one 100-frame video plus one photo, a requested 20 % delivers a single image — that
   is not a defect, it is the closest of the two available answers. A property test over
   randomised group-size distributions asserts the bound; a first version of this change satisfied
@@ -2369,7 +2372,21 @@ stopping, so a leaky split does not merely misreport, it changes when the run st
   the heuristic only the fallback for paths that have none.
 - `SAMFineTuner.train` calls `split_groups` on a worker thread with no access to `image_slices`,
   so it uses the prefix fallback — which covers every name the app itself produces.
-- The warning is raised at three call sites, not one: `prompt_validation_split` (YOLO export menu
-  and Prepare YOLO Dataset), `TrainingController.run_yolo` (the unified Train dialog carries its
-  own split slider and never passes through the prompt) and `SAMTrainController._launch`. Missing
-  the second would leave the app's main training path as the one place without it.
+- The warning is raised at three GUI call sites, not one: `prompt_validation_split` (YOLO export
+  menu and Prepare YOLO Dataset), `TrainingController.run_yolo` (the unified Train dialog carries
+  its own split slider and never passes through the prompt) and `SAMTrainController._launch`.
+  Missing the second would leave the app's main training path as the one place without it.
+  `sreeni-cli export` prints the equivalent note.
+- It covers a second case besides the degenerate grouping: a split that leaves **training with a
+  single group**. Holding out a percentage by image count can route every small group to
+  validation when one group dominates, which is optimal by the count the split aims at and useless
+  as a dataset — and silent, because the grouping technically succeeded.
+- The preview behind the warning and the export itself must be computed over the **same** set of
+  names, which is why both go through `exportable_annotated_names`. They were computed separately
+  once, and a preview that counted an unopened video's frames stayed quiet while the export fell
+  back to the per-name split.
+- `training/sam_dataset.py::build_groups_from_folder` normalises `SampleGroup.name` to the
+  ext-stripped basename. The manifest stores `images/clip_F00042.png`, and that dot made every
+  frame its own group — so "Fine-Tune SAM from Dataset Folder" got no grouping at all while the
+  project path was correctly grouped. Normalising at the producer keeps every consumer of `name`
+  seeing one shape.

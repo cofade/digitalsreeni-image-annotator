@@ -25,6 +25,7 @@ from ..io.export_formats import (
     export_semantic_labels,
     export_yolo_v4,
     export_yolo_v5plus,
+    exportable_annotated_names,
 )
 from ..io.import_formats import import_coco_json, process_import_format
 
@@ -33,15 +34,16 @@ from ..core.logging_config import get_logger
 logger = get_logger(__name__)
 
 
-def annotated_image_names(all_annotations):
-    """The names the exporters will actually split — annotated ones only.
+def annotated_image_names(mw):
+    """The names ``mw``'s next YOLO export will split.
 
-    Mirrors the ``annotated = [...]`` line in ``export_yolo_v4`` /
-    ``export_yolo_v5plus``; the split preview has to be computed over the same
-    set the export will use, or the warning below is about a different split
-    than the one that happens.
+    Delegates to the exporter's own helper rather than reimplementing the
+    filter: the preview has to be computed over the same set the export uses,
+    or the warning is about a different split than the one that happens.
     """
-    return [name for name, ann in (all_annotations or {}).items() if ann]
+    return exportable_annotated_names(
+        mw.all_annotations, mw.slices, mw.image_slices, mw.image_paths
+    )
 
 
 def group_split_warning(names, image_slices, val_pct):
@@ -59,19 +61,40 @@ def group_split_warning(names, image_slices, val_pct):
 
     names = list(names)
     groups = derive_groups(names, image_slices)
-    _train, _val, fell_back = plan_split(names, val_pct, groups)
-    if not fell_back:
-        return None
-    return (
-        "Every annotated image here belongs to the same recording, so no "
-        "validation set can be held out without sharing frames with training.\n\n"
-        "The split was made per image instead. Near-identical frames land on "
-        "both sides, so the validation metrics this run reports will be "
-        "optimistic — read them as a training-progress signal, not as an "
-        "estimate of performance on new data.\n\n"
-        "Add images from a second recording for a validation set that measures "
-        "something."
-    )
+    train, val, fell_back = plan_split(names, val_pct, groups)
+
+    if fell_back:
+        return (
+            "Every annotated image here belongs to the same recording, so no "
+            "validation set can be held out without sharing frames with "
+            "training.\n\n"
+            "The split was made per image instead. Near-identical frames land "
+            "on both sides, so the validation metrics this run reports will be "
+            "optimistic — read them as a training-progress signal, not as an "
+            "estimate of performance on new data.\n\n"
+            "Add images from a second recording for a validation set that "
+            "measures something."
+        )
+
+    # A group is indivisible, so holding out a percentage *by image count* can
+    # route every small group to validation and leave training with nothing but
+    # the one dominant recording. That is optimal by the count the split aims
+    # at and useless as a dataset, and it is silent because the grouping
+    # technically worked.
+    total_groups = len({groups.get(name, name) for name in names})
+    train_groups = {groups.get(name, name) for name in train}
+    if total_groups > 2 and len(train_groups) == 1:
+        return (
+            "This split leaves the training set with a single recording, and "
+            "puts every other image into validation.\n\n"
+            "One group holds far more images than the rest, so holding out "
+            f"{val_pct}% by image count consumed all the smaller ones. The "
+            "model would train on one recording and be validated entirely on "
+            "images unlike it.\n\n"
+            "A smaller validation percentage, or more annotations outside the "
+            "dominant recording, would give a split worth measuring."
+        )
+    return None
 
 
 def warn_if_group_split_impossible(parent, names, image_slices, val_pct):
@@ -384,7 +407,7 @@ def export_annotations(mw):
     val_split = 0
     if export_format in ("YOLO (v4 and earlier)", "YOLO (v5+)"):
         val_split, ok = prompt_validation_split(
-            mw, annotated_image_names(mw.all_annotations), mw.image_slices
+            mw, annotated_image_names(mw), mw.image_slices
         )
         if not ok:
             return

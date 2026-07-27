@@ -191,9 +191,13 @@ def _is_exportable(image_name, slice_index, image_paths):
     where no slice collection is loaded, it produced an empty `images/train`
     with `data.yaml` still pointing at it.
 
-    Mirrors the loop's own resolution order and decides nothing the loop would
-    decide differently — except that it never materialises a slice QImage,
-    since planning a split must not decode pixels.
+    Mirrors the loop's resolution order, with one deliberate gap: planning a
+    split must not decode pixels, so a slice that is *indexed* but whose
+    QImage turns out to be unavailable (a released video handler, an
+    undecodable frame) passes here and is skipped by the loop. It therefore
+    over-estimates slightly and never under-estimates, which is the harmless
+    direction — a name wrongly kept costs a split slot, a name wrongly dropped
+    would lose an image from the dataset.
     """
     if image_name in slice_index:
         return True
@@ -210,6 +214,22 @@ def _is_exportable(image_name, slice_index, image_paths):
         return False
     # TIFF/CZI sources are skipped in favour of their extracted slices.
     return not image_path.lower().endswith(('.tif', '.tiff', '.czi'))
+
+
+def exportable_annotated_names(all_annotations, slices, image_slices, image_paths):
+    """The annotated names a YOLO export will actually write.
+
+    Exactly the set the split partitions. The UI's split preview calls this so
+    the warning it shows is about the split that runs — computing the two
+    separately is how they drift, and they did: a preview that counted an
+    unopened video's frames saw two groups and stayed quiet while the export
+    saw one and silently fell back to the per-name split.
+    """
+    index = _slice_index(slices, image_slices)
+    return [
+        name for name, annotations in (all_annotations or {}).items()
+        if annotations and _is_exportable(name, index, image_paths)
+    ]
 
 
 def export_yolo_v4(all_annotations, class_mapping, image_paths, slices, image_slices, output_dir, val_split=0, groups=None):

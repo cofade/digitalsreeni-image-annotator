@@ -95,6 +95,27 @@ def run_export(args):
 
     os.makedirs(args.out, exist_ok=True)
     label = EXPORT_FORMATS[args.format]
+
+    if args.val_split and label.startswith("YOLO"):
+        # The GUI raises this at the three places a split percentage is
+        # chosen; ADR-044 treats the CLI as a first-class path, so it says so
+        # too rather than emitting a leaky split in silence.
+        from ..core.dataset_split import derive_groups, plan_split
+        from ..io.export_formats import exportable_annotated_names
+
+        split_names = exportable_annotated_names(
+            project.all_annotations, [], {}, project.image_paths
+        )
+        _t, _v, fell_back = plan_split(
+            split_names, args.val_split, derive_groups(split_names)
+        )
+        if fell_back:
+            _stderr(
+                "note: every annotated image belongs to one recording, so the "
+                "validation set shares frames with training - the reported "
+                "metrics will be optimistic."
+            )
+
     _stderr(f"Exporting {len(project.image_paths)} image(s) as {label}...")
     try:
         _export_dispatch(label, project, args.out, args.val_split)

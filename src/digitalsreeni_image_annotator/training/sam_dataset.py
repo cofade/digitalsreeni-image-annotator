@@ -104,7 +104,19 @@ def build_groups_from_folder(folder: str):
         specs = entry.get("instances", [])
         if not specs or not os.path.exists(img_path):
             continue
-        groups.append(SampleGroup(lambda p=img_path: _qimage_to_numpy(QImage(p)), specs, name=img_rel))
+        # Ext-stripped basename, matching what the project path puts in `name`
+        # (`build_groups_from_project` uses the annotation key). The manifest
+        # stores `images/clip_F00042.png`, and the dot in that made
+        # `derive_groups` treat every frame of a recording as its own group --
+        # so "Fine-Tune SAM from Dataset Folder" silently got no grouping at
+        # all while the project path was correctly grouped. Normalising here
+        # rather than at the split keeps every consumer of `name` seeing one
+        # shape.
+        groups.append(SampleGroup(
+            lambda p=img_path: _qimage_to_numpy(QImage(p)),
+            specs,
+            name=os.path.splitext(os.path.basename(img_rel))[0],
+        ))
     return groups
 
 

@@ -148,15 +148,20 @@ def _split_by_group(
 
     A group is indivisible, so ``val_count`` is a target rather than a
     guarantee, and choosing the best *set* is subset-sum. This settles for a
-    cheap local optimum instead: fill with groups that fit, allow a single
-    large group to replace the whole selection when that lands nearer (the
-    fill eats small groups in hash order and can otherwise block a better big
-    one), then keep adding while each addition improves.
+    local optimum instead: fill with groups that fit, allow one large group to
+    replace the whole selection when that lands nearer, then hill-climb on
+    single moves -- **add, drop or swap** -- until none improves.
 
-    The guarantee is therefore: **no single group, added or substituted, would
-    land closer to the target.** That is exactly what the property test
-    asserts, and it is the honest bound -- not that the requested percentage is
-    delivered.
+    The guarantee is therefore: **no single group added, dropped, or swapped
+    for another would land closer to the target.** That is exactly what the
+    property test asserts, and it is the honest bound -- not that the requested
+    percentage is delivered.
+
+    The hill-climb enumerates one representative per distinct group *size*
+    rather than every group. Swaps are otherwise quadratic in the group count,
+    which matters: the ungrouped path runs this with one group per image, so
+    a few thousand images would mean millions of pointless comparisons between
+    interchangeable singletons.
 
     An earlier version added groups until it reached the target and then only
     reconsidered the last one. That is size-blind, and it delivered 1 % for a
@@ -196,20 +201,54 @@ def _split_by_group(
             chosen = [best_single]
             held_out = len(members[best_single])
 
-    # Then improve while improving. The bound keeps at least one group in
-    # train: an empty train set is not a split, whatever the arithmetic says.
-    while len(chosen) < len(ordered) - 1:
-        taken = set(chosen)
-        best = min(
-            (key for key in ordered if key not in taken),
-            key=lambda key: (_distance(held_out + len(members[key])), key),
-        )
-        if _distance(held_out + len(members[best])) >= _distance(held_out):
-            break
-        chosen.append(best)
-        held_out += len(members[best])
+    def _representatives(keys) -> dict[int, str]:
+        """One canonical group per distinct size, first in hash order.
 
-    val = {name for key in chosen for name in members[key]}
+        Two groups of the same size are interchangeable for hitting a count,
+        so only one of each needs considering. Picking the hash-first keeps the
+        result deterministic.
+        """
+        best: dict[int, str] = {}
+        for key in keys:
+            best.setdefault(len(members[key]), key)
+        return best
+
+    # Hill-climb on single moves. Every accepted move strictly reduces a
+    # non-negative integer distance, so this terminates; an exact hit short-
+    # circuits it entirely, which is the common ungrouped case.
+    selected = set(chosen)
+    while _distance(held_out) > 0:
+        outside = _representatives(key for key in ordered if key not in selected)
+        inside = _representatives(key for key in ordered if key in selected)
+
+        moves = []
+        # The bounds keep both sides non-empty: an empty train set is not a
+        # split, whatever the arithmetic says.
+        if len(selected) + 1 < len(ordered):
+            for size, key in outside.items():
+                moves.append((_distance(held_out + size), "add", key, ""))
+        if len(selected) > 1:
+            for size, key in inside.items():
+                moves.append((_distance(held_out - size), "drop", "", key))
+        for in_size, in_key in outside.items():
+            for out_size, out_key in inside.items():
+                moves.append(
+                    (_distance(held_out + in_size - out_size), "swap", in_key, out_key)
+                )
+
+        if not moves:
+            break
+        distance, _kind, add_key, drop_key = min(moves)
+        if distance >= _distance(held_out):
+            break
+        if add_key:
+            selected.add(add_key)
+            held_out += len(members[add_key])
+        if drop_key:
+            selected.discard(drop_key)
+            held_out -= len(members[drop_key])
+
+    val = {name for key in selected for name in members[key]}
     return set(names) - val, val
 
 

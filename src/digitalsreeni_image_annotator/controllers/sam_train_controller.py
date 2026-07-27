@@ -184,7 +184,12 @@ class SAMTrainController(QObject):
             self.mw,
             # getattr, not `.name`: this is a warning, and a warning must not
             # be able to abort a training launch over the shape of its input.
-            [getattr(group, "name", "") for group in groups],
+            # The index fallback mirrors `split_groups`, which keys unnamed
+            # groups separately rather than collapsing them into one.
+            [
+                getattr(group, "name", "") or f"#{index}"
+                for index, group in enumerate(groups)
+            ],
             getattr(self.mw, "image_slices", None),
             100 - cfg.get("train_pct", 100),
         )

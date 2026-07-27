@@ -308,12 +308,42 @@ def test_the_split_size_is_locally_optimal():
         distance = abs(held - target)
 
         message = f"trial {trial}: sizes={sizes} pct={val_pct} held={held} target={target}"
-        for members in buckets.values():
-            # Adding one more group must not improve things...
-            if not members <= val and len(val) + len(members) < len(names):
+        inside = [m for m in buckets.values() if m <= val]
+        outside = [m for m in buckets.values() if not m <= val]
+
+        for members in outside:
+            # Adding one more group must not improve things (unless it would
+            # empty train, which the split refuses)...
+            if len(val) + len(members) < len(names):
                 assert abs(held + len(members) - target) >= distance, message
-            # ...nor must holding out that group alone.
+        for members in inside:
+            # ...nor dropping one (unless it would empty val)...
+            if len(inside) > 1:
+                assert abs(held - len(members) - target) >= distance, message
+        for gone in inside:
+            for came in outside:
+                # ...nor swapping one for another, which is the move the first
+                # version of this test forgot and the implementation therefore
+                # never made: two 60-frame videos and two 30-frame stacks at
+                # 50 % delivered 33 %, with a swap sitting exactly on target.
+                swapped = held - len(gone) + len(came)
+                assert abs(swapped - target) >= distance, message
+        for members in buckets.values():
+            # ...nor holding out that group alone.
             assert abs(len(members) - target) >= distance, message
+
+
+def test_a_swap_is_taken_when_it_lands_on_the_target():
+    """The concrete case the property test was blind to."""
+    names, groups = [], {}
+    for key, size in (("run1", 60), ("run2", 30), ("run3", 60), ("run4", 30)):
+        for member in range(size):
+            name = f"{key}_m{member}"
+            names.append(name)
+            groups[name] = key
+
+    _train, val, _ = plan_split(names, 50, groups)
+    assert len(val) == 90  # 50% of 180, hit exactly by one 60 plus one 30
 
 
 def test_every_group_stays_whole_across_randomised_projects():
@@ -369,21 +399,54 @@ def test_a_single_recording_warns_that_the_metrics_are_optimistic():
     assert "optimistic" in message
 
 
-def test_annotated_image_names_matches_what_the_exporter_splits():
-    """The preview has to be computed over the same set the export uses, or the
-    warning is about a different split than the one that happens."""
+def test_a_training_set_of_one_recording_is_reported():
+    """Holding out a percentage by image count can route every small group to
+    validation when one group dominates — optimal by that count, useless as a
+    dataset, and silent because the grouping technically worked."""
+    from src.digitalsreeni_image_annotator.controllers.io_controller import (
+        group_split_warning,
+    )
+
+    names = _frames("clip", 200) + [f"p{i}.png" for i in range(20)]
+    message = group_split_warning(names, None, 20)
+    assert message is not None
+    assert "single recording" in message
+
+
+def test_a_healthy_multi_recording_split_stays_quiet():
+    from src.digitalsreeni_image_annotator.controllers.io_controller import (
+        group_split_warning,
+    )
+
+    names = _frames("a", 30) + _frames("b", 30) + _frames("c", 30) + _frames("d", 30)
+    assert group_split_warning(names, None, 25) is None
+
+
+def test_the_preview_counts_only_what_the_export_will_write(tmp_path):
+    """The preview and the export must partition the *same* names.
+
+    Computed separately they drifted: a project holding an unopened video's
+    frames previewed two groups and stayed quiet, while the export saw one
+    group, fell back to the per-name split, and leaked. Both now go through
+    ``exportable_annotated_names``.
+    """
     from src.digitalsreeni_image_annotator.controllers.io_controller import (
         annotated_image_names,
     )
 
-    all_annotations = {
-        "a.png": {"cell": [{"bbox": [0, 0, 1, 1]}]},
-        "b.png": {},
-        # Truthy-but-empty, and therefore counted -- because the exporter
-        # counts it too. Mirroring the exporter's own filter is the whole job;
-        # a "better" filter here would preview a different split than the one
-        # that runs.
-        "c.png": {"cell": []},
-    }
-    assert annotated_image_names(all_annotations) == ["a.png", "c.png"]
-    assert annotated_image_names(None) == []
+    photo = tmp_path / "a.png"
+    photo.write_bytes(b"")
+
+    class _MainWindow:
+        all_annotations = {
+            "a.png": {"cell": [{"bbox": [0, 0, 1, 1]}]},
+            "b.png": {},  # unannotated
+            "ghost_F00001": {"cell": [{"bbox": [0, 0, 1, 1]}]},  # never loaded
+        }
+        image_paths = {"a.png": str(photo)}
+        slices = []
+        image_slices = {}
+
+    # The ghost frame has no pixels anywhere, so the export skips it and it
+    # must not consume a slot in the split budget either.
+    assert annotated_image_names(_MainWindow()) == ["a.png"]

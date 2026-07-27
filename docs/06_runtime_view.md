@@ -700,9 +700,21 @@ User clicks "Export" > "YOLO v8/v11"
     ├─> Select output directory
     │
     ├─> Prompt for validation split % (QInputDialog, default 20, 0 = all train)
-    │       assign_train_val() deterministically partitions the annotated
-    │       images via a stable filename hash; the val count is exact so a
-    │       requested split is never silently empty (issue #83)
+    │       plan_split() partitions by GROUP, not by name (issue #80,
+    │       ADR-044): a stack's slices and a video's frames are one group and
+    │       never straddle the split, so validation is not measured on frames
+    │       all but identical to trained ones. Ordering is a stable MD5 of the
+    │       group key, so the split is reproducible across runs and machines.
+    │       A group is indivisible, so the requested count is a TARGET: the
+    │       guarantee is only that no single group added, dropped or swapped
+    │       would land closer. Neither side is ever empty.
+    │
+    ├─> Warn if the grouping degenerates
+    │       Everything in one group (a project that is one video) -> falls back
+    │       to the per-name split and says the metrics will be optimistic; an
+    │       empty val set would be truthful but silently disables validation
+    │       and early stopping (ADR-028). Also warns when the split leaves
+    │       training with a single recording.
     │
     ├─> export_yolo_v5plus(all_annotations, class_mapping, ..., val_split)
     │   │

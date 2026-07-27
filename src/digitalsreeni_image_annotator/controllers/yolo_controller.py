@@ -208,9 +208,7 @@ class YOLOController(QObject):
         from .io_controller import annotated_image_names, prompt_validation_split
 
         val_split, ok = prompt_validation_split(
-            self.mw,
-            annotated_image_names(self.mw.all_annotations),
-            self.mw.image_slices,
+            self.mw, annotated_image_names(self.mw), self.mw.image_slices
         )
         if not ok:
             return

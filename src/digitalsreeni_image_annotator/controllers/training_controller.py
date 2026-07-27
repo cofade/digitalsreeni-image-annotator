@@ -81,7 +81,7 @@ class TrainingController(QObject):
 
         warn_if_group_split_impossible(
             self.mw,
-            annotated_image_names(self.mw.all_annotations),
+            annotated_image_names(self.mw),
             self.mw.image_slices,
             config["val_split"],
         )

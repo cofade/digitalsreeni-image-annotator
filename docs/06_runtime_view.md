@@ -774,7 +774,7 @@ User: SAM Fine-Tune (beta) > Train on Current Project…
     │       trainer loads its OWN SAM instance; locking avoids a 2nd model on the same CUDA context
     │
     └─> SAMTrainingThread → SAMFineTuner.train(...)
-            │  split_groups(train_pct) → train/val, keyed by SOURCE not by image
+            │  split_groups(groups, train_pct) → train/val, keyed by SOURCE not image
             │    (ADR-044: a recording's frames never straddle the split, or the
             │     val loss driving early stopping is measured on near-copies of
             │     trained frames); deterministic; empty val at 100%

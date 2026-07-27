@@ -2312,9 +2312,13 @@ stopping, so a leaky split does not merely misreport, it changes when the run st
 - Grouping is derived from **structure, not from a model**. `image_slices` is already keyed by the
   ext-stripped base name, so `{slice_name: base}` is exact and needs no parsing and no pixel work.
   Names it does not cover fall back to a name-prefix heuristic; anything left is its own group.
-- **Always on, no opt-in.** The exporters derive the grouping themselves, so every path —
-  including the headless CLI, which passes empty slice collections and relies on the prefix
-  fallback — is protected without a caller remembering to ask for it.
+- **Always on, no opt-in.** The exporters derive the grouping themselves, so no caller has to
+  remember to ask for it. The headless CLI is safe for a different reason and it is worth being
+  precise about which: it cannot resolve slice or frame pixels at all, so `_is_exportable` drops
+  those names before the split sees them and every surviving name is a file on disk, hence its own
+  group. There is no group larger than one image there, so there is nothing to leak and nothing to
+  warn about — the CLI's existing `note:` about unexported slices is the honest signal. An earlier
+  revision of this change shipped a CLI warning branch that could not fire.
 - Embedding clusters from the curation feature (#72) can **refine** the grouping through
   `merge_groups` and the exporters' `groups=` parameter, but are never required — the worst case,
   a 200-frame video, is fixed with no model, no GPU and no curation run. The wiring is
@@ -2372,13 +2376,21 @@ stopping, so a leaky split does not merely misreport, it changes when the run st
   and a Z dimension, so wells in rows C, F, S, T and Z still merge. Nothing in a filename can
   resolve that, which is the argument for the `image_slices` mapping being the primary source and
   the heuristic only the fallback for paths that have none.
+- **Known gap:** a folder of *extracted* video frames on disk (`clip_F00001.png` as real files)
+  does not group. The dot means "a file, therefore an independent observation", and that is the
+  discriminator both the exporters and `_slice_base` rely on. Grouping ext-stripped filenames too
+  would close it, at the cost of collapsing legitimately independent photographs that happen to be
+  named `sample_T1.png` / `sample_T2.png` into one group — a false alarm on a flat dataset,
+  reported rather than silent, but disruptive. Left open deliberately, and recorded here rather
+  than discovered later: this is the one remaining path where the leak is still silent.
 - `SAMFineTuner.train` calls `split_groups` on a worker thread with no access to `image_slices`,
   so it uses the prefix fallback — which covers every name the app itself produces.
-- The wording lives in `core/dataset_split.split_warning`, **not** on the controller, so
-  `sreeni-cli export` emits the identical text. Putting it next to the dialog meant the CLI — a
-  first-class path by this ADR's own claim — could not import it and hand-rolled a subset, which
-  is the same duplication that let the split preview and the export drift apart. `io_controller`
-  is only the QMessageBox shell.
+- The wording lives in `core/dataset_split.split_warning`, **not** on the controller. It began
+  next to the dialog, in a module importing Qt at top level, which is what forced the CLI to
+  hand-roll a subset of it — the same duplication that had already let the split preview and the
+  export drift apart. `io_controller` is now only the QMessageBox shell. (The CLI ended up needing
+  no warning at all, per the point above, but keeping pure text out of a Qt module is right
+  regardless.)
 - The warning offers **Cancel**, and all three GUI call sites honour it: `prompt_validation_split`
   (YOLO export menu and Prepare YOLO Dataset) returns to its input dialog,
   `TrainingController.run_yolo` and `SAMTrainController._launch` abandon the run. A warning saying

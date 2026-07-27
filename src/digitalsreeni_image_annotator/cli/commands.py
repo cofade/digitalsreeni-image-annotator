@@ -96,23 +96,13 @@ def run_export(args):
     os.makedirs(args.out, exist_ok=True)
     label = EXPORT_FORMATS[args.format]
 
-    if args.val_split and label.startswith("YOLO"):
-        # The GUI raises this wherever a split percentage is chosen; ADR-044
-        # treats the CLI as a first-class path, so it says the same thing from
-        # the same source rather than emitting a leaky split in silence.
-        from ..core.dataset_split import split_warning
-        from ..io.export_formats import exportable_annotated_names
-
-        warning = split_warning(
-            exportable_annotated_names(
-                project.all_annotations, [], {}, project.image_paths
-            ),
-            args.val_split,
-        )
-        if warning:
-            for line in warning.splitlines():
-                _stderr(f"note: {line}" if line else "note:")
-
+    # No split warning here, deliberately (ADR-044). The GUI raises one wherever
+    # a percentage is chosen, but headlessly it would have nothing to say: slice
+    # and frame pixels are unavailable, so `_is_exportable` drops those names
+    # before the split ever sees them, and every name that survives is a file on
+    # disk and therefore its own group. There is no leaky split to warn about
+    # because there is no group larger than one image — which the `note:` above
+    # about unexported slices already tells the user.
     _stderr(f"Exporting {len(project.image_paths)} image(s) as {label}...")
     try:
         _export_dispatch(label, project, args.out, args.val_split)

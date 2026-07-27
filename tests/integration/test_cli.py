@@ -252,53 +252,32 @@ def test_no_autosave_or_recovery_file_appears(project, tmp_path):
 # --- export ----------------------------------------------------------------
 
 
-def test_a_single_recording_export_says_the_metrics_will_be_optimistic(
-    tmp_path, capsys
-):
-    """ADR-044 treats the CLI as a first-class path for the split warning.
+def test_a_headless_export_has_no_group_larger_than_one_image(tmp_path):
+    """Why the CLI carries no split warning (ADR-044).
 
-    A project that is one recording cannot be split leak-free, and the CLI must
-    say so rather than writing a dataset whose validation numbers look good for
-    the wrong reason. The wording comes from `core.dataset_split.split_warning`,
-    the same source the GUI uses.
+    A slice or frame has no pixels headlessly, so `_is_exportable` drops it
+    before the split sees it; every surviving name is a file on disk and is
+    therefore its own group. There is no leaky split to warn about — and an
+    earlier revision shipped a warning branch here that could never fire, with
+    a test that passed only on unrelated stderr noise.
     """
-    from PIL import Image
+    from src.digitalsreeni_image_annotator.core.dataset_split import (
+        derive_groups,
+        split_warning,
+    )
+    from src.digitalsreeni_image_annotator.io.export_formats import (
+        exportable_annotated_names,
+    )
 
-    images_dir = tmp_path / "images"
-    images_dir.mkdir()
-    images, paths, rel = [], {}, {}
-    for index in range(6):
-        name = f"clip_F{index:05d}.png"
-        Image.new("RGB", (60, 60), (64, 64, 64)).save(images_dir / name)
-        paths[name] = str(images_dir / name)
-        rel[name] = os.path.join("images", name)
-        images.append({
-            "file_name": name, "width": 60, "height": 60, "id": index + 1,
-            "is_multi_slice": False,
-            "annotations": {"cell": [_square(5, 5, 20)]},
-        })
+    frames = {
+        f"clip_F{i:05d}": {"cell": [{"bbox": [0, 0, 1, 1]}]} for i in range(6)
+    }
+    # The CLI's arguments: no slice collections, so no frame pixels.
+    assert exportable_annotated_names(frames, [], {}, {}) == []
 
-    project_path = tmp_path / "clip.iap"
-    project_path.write_text(json.dumps({
-        "classes": [{"name": "cell", "id": 1, "color": "#1F77B4"}],
-        "images": images,
-        "image_paths": paths,
-        "image_paths_rel": rel,
-    }), encoding="utf-8")
-
-    assert main([
-        "export", "--project", str(project_path), "--format", "yolov5",
-        "--out", str(tmp_path / "out"), "--val-split", "20",
-    ]) == EXIT_OK
-    assert "optimistic" in capsys.readouterr().err
-
-
-def test_a_healthy_export_says_nothing_about_the_split(project, tmp_path, capsys):
-    main([
-        "export", "--project", str(project), "--format", "yolov5",
-        "--out", str(tmp_path / "out"), "--val-split", "20",
-    ])
-    assert "optimistic" not in capsys.readouterr().err
+    on_disk = [f"clip_F{i:05d}.png" for i in range(6)]
+    assert len(set(derive_groups(on_disk).values())) == len(on_disk)
+    assert split_warning(on_disk, 20) is None
 
 
 def test_export_writes_coco(project, tmp_path):

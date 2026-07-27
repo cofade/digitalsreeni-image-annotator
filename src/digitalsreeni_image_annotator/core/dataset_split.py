@@ -194,17 +194,17 @@ def _split_by_group(
         return abs(count - val_count)
 
     # Every group is larger than the target: hold out the smallest rather than
-    # returning an empty val set.
-    if not chosen and len(ordered) > 1:
+    # returning an empty val set. (Two groups minimum is a precondition above,
+    # so this always leaves something in train.)
+    if not chosen:
         chosen = [min(ordered, key=lambda key: (len(members[key]), key))]
         held_out = len(members[chosen[0]])
 
     # A single large group can beat the whole fill.
-    if len(ordered) > 1:
-        best_single = min(ordered, key=lambda key: (_distance(len(members[key])), key))
-        if _distance(len(members[best_single])) < _distance(held_out):
-            chosen = [best_single]
-            held_out = len(members[best_single])
+    best_single = min(ordered, key=lambda key: (_distance(len(members[key])), key))
+    if _distance(len(members[best_single])) < _distance(held_out):
+        chosen = [best_single]
+        held_out = len(members[best_single])
 
     def _representatives(keys) -> dict[int, str]:
         """One canonical group per distinct size, first in hash order.
@@ -333,6 +333,10 @@ def split_warning(names, val_pct, image_slices=None):
             "measures something."
         )
 
+    # Strictly more than two groups, deliberately. With exactly two, training
+    # holding one and validating on the other is not a degenerate split at all
+    # -- it is the textbook one, and warning about it would fire on the
+    # healthiest possible two-recording project.
     total_groups = len({groups.get(name, name) for name in names})
     train_groups = {groups.get(name, name) for name in train}
     if total_groups > 2 and len(train_groups) == 1:

@@ -180,6 +180,38 @@ def create_coco_annotation(ann, image_id, annotation_id, class_name, class_mappi
 # concern even though the grouping logic is not.
 
 
+def _is_exportable(image_name, slice_index, image_paths):
+    """Whether the export loop below will actually write ``image_name``.
+
+    Used to filter the split input, and it has to be: a name the loop skips
+    must not consume a slot in the train/val budget. Otherwise the requested
+    percentage describes a larger set than what lands on disk — and once whole
+    groups move together (ADR-044), a video's worth of unwritable frames can
+    take the entire train side with it. That is not hypothetical: headlessly,
+    where no slice collection is loaded, it produced an empty `images/train`
+    with `data.yaml` still pointing at it.
+
+    Mirrors the loop's own resolution order and decides nothing the loop would
+    decide differently — except that it never materialises a slice QImage,
+    since planning a split must not decode pixels.
+    """
+    if image_name in slice_index:
+        return True
+    if '_' in image_name and '.' not in image_name:
+        # Looks like a slice, but no loaded collection holds it, so there are
+        # no pixels to write (the CLI passes empty collections by design).
+        return False
+    image_path = image_paths.get(image_name)
+    if image_path is None:
+        image_path = next(
+            (path for name, path in image_paths.items() if image_name in name), None
+        )
+    if not image_path:
+        return False
+    # TIFF/CZI sources are skipped in favour of their extracted slices.
+    return not image_path.lower().endswith(('.tif', '.tiff', '.czi'))
+
+
 def export_yolo_v4(all_annotations, class_mapping, image_paths, slices, image_slices, output_dir, val_split=0, groups=None):
     # Create output directories
     train_dir = os.path.join(output_dir, 'train')
@@ -199,7 +231,10 @@ def export_yolo_v4(all_annotations, class_mapping, image_paths, slices, image_sl
     # split silently inflates every validation metric. `groups` lets a caller
     # supply a refined grouping; deriving it here means every path -- including
     # the headless CLI -- is protected without opting in.
-    annotated = [name for name, ann in all_annotations.items() if ann]
+    annotated = [
+        name for name, ann in all_annotations.items()
+        if ann and _is_exportable(name, slice_index, image_paths)
+    ]
     name_groups = groups or derive_groups(annotated, image_slices)
     _, val_names = assign_train_val(annotated, val_split, name_groups)
 
@@ -383,7 +418,10 @@ def export_yolo_v5plus(all_annotations, class_mapping, image_paths, slices, imag
     slice_index = _slice_index(slices, image_slices)
 
     # Split by GROUP, not by name (ADR-044) -- see export_yolo_v4 above.
-    annotated = [name for name, ann in all_annotations.items() if ann]
+    annotated = [
+        name for name, ann in all_annotations.items()
+        if ann and _is_exportable(name, slice_index, image_paths)
+    ]
     name_groups = groups or derive_groups(annotated, image_slices)
     _, val_names = assign_train_val(annotated, val_split, name_groups)
 

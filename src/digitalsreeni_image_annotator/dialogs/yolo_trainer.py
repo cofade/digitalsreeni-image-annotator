@@ -338,8 +338,6 @@ class YOLOTrainer(QObject):
         return False
 
     def prepare_dataset(self, val_split=20):
-        from ..controllers.io_controller import project_split_groups
-
         output_dir, yaml_path = export_yolo_v5plus(
             self.main_window.all_annotations,
             self.main_window.class_mapping,
@@ -348,11 +346,9 @@ class YOLOTrainer(QObject):
             self.main_window.image_slices,
             self.dataset_path,
             val_split,
+            # The group-aware split (ADR-044) is derived inside the exporter,
+            # so this path gets it without passing anything.
             keypoint_schemas=self.main_window.keypoint_schemas,
-            # Group-aware split (ADR-044): this is the path the in-app trainer
-            # takes, so it is the one where a leaky split silently corrupts the
-            # validation curve the user watches.
-            groups=project_split_groups(self.main_window),
         )
 
         yaml_path = Path(yaml_path)

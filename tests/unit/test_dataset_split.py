@@ -229,6 +229,113 @@ def test_slice_base_leaves_a_dotted_name_alone():
     assert dataset_split._slice_base("plain_name") is None
 
 
+def test_the_heuristic_only_claims_real_dimension_letters():
+    """Restricting the suffix to the letters ``DimensionDialog`` assigns
+    (T/Z/C/S) plus F for video frames keeps most well-plate names intact.
+    Matching any ``[A-Z]\\d+`` put every well of a plate under one key.
+    """
+    assert dataset_split._slice_base("Plate1_A1_T1_Z1") == "Plate1_A1"
+    assert dataset_split._slice_base("Plate1_H12_Z1") == "Plate1_H12"
+    assert dataset_split._slice_base("clip_F00042") == "clip"
+    assert dataset_split._slice_base("mouse_S1_T1") == "mouse"
+
+
+def test_the_name_heuristic_is_ambiguous_where_the_name_is_ambiguous():
+    """Documents a real limit rather than pretending it away.
+
+    ``Plate1_C1_Z1`` is indistinguishable, from the name alone, from a stack
+    ``Plate1`` with a channel and a Z dimension — so wells in rows C, F, S, T
+    and Z collapse into the stack key. Nothing in a filename can resolve that.
+
+    It is the *safe* ambiguity: over-grouping costs split granularity, and
+    where it collapses far enough the ``fell_back`` flag fires and the user is
+    told. Under-grouping would silently reopen the leak instead. The exact
+    mapping below is what removes the guesswork.
+    """
+    names = [f"Plate1_{row}{col}_Z1" for row in "ABCDEFGH" for col in range(1, 13)]
+    groups = derive_groups(names)
+    assert len(set(groups.values())) == 73  # 96 wells, rows C and F absorbed
+    _train, _val, fell_back = plan_split(names, 20, groups)
+    assert not fell_back
+
+
+def test_a_loaded_project_groups_wells_exactly():
+    """With ``image_slices`` present — i.e. in the app, as opposed to the CLI —
+    the ambiguity above does not arise: each well is its own collection."""
+    names = [f"Plate1_{row}{col}_Z1" for row in "ABCDEFGH" for col in range(1, 13)]
+    image_slices = {
+        name.rsplit("_", 1)[0]: _FakeSliceList([name]) for name in names
+    }
+    groups = derive_groups(names, image_slices)
+    assert len(set(groups.values())) == 96
+
+
+# --- how close the split lands to what was asked for -----------------------
+
+
+def _val_count(total, val_pct):
+    """The target `plan_split` aims at — same formula, so the property test
+    measures the split rather than restating it."""
+    return max(1, min(total - 1, round(total * val_pct / 100)))
+
+
+def test_the_split_size_is_locally_optimal():
+    """A group is indivisible, so the requested percentage cannot always be
+    hit. What *is* guaranteed: no single group, added or substituted, would
+    land closer to the target.
+
+    This is the test that would have caught the original size-blind greedy,
+    which delivered 1 %, 9 % and 67 % for a requested 20 % on ordinary
+    video-and-photo projects while every cohesion assertion stayed green.
+    """
+    import random
+
+    rng = random.Random(20260727)
+    for trial in range(300):
+        sizes = [rng.choice([1, 1, 1, 2, 5, 30, 64, 100]) for _ in range(rng.randint(2, 9))]
+        names, groups = [], {}
+        for index, size in enumerate(sizes):
+            for member in range(size):
+                name = f"g{index}_m{member}"
+                names.append(name)
+                groups[name] = f"g{index}"
+        val_pct = rng.choice([10, 20, 25, 30, 50])
+        target = _val_count(len(names), val_pct)
+
+        train, val, _ = plan_split(names, val_pct, groups)
+        buckets = _buckets(names, groups)
+        held = len(val)
+        distance = abs(held - target)
+
+        message = f"trial {trial}: sizes={sizes} pct={val_pct} held={held} target={target}"
+        for members in buckets.values():
+            # Adding one more group must not improve things...
+            if not members <= val and len(val) + len(members) < len(names):
+                assert abs(held + len(members) - target) >= distance, message
+            # ...nor must holding out that group alone.
+            assert abs(len(members) - target) >= distance, message
+
+
+def test_every_group_stays_whole_across_randomised_projects():
+    import random
+
+    rng = random.Random(4711)
+    for _ in range(200):
+        sizes = [rng.randint(1, 40) for _ in range(rng.randint(2, 8))]
+        names, groups = [], {}
+        for index, size in enumerate(sizes):
+            for member in range(size):
+                name = f"g{index}_m{member}"
+                names.append(name)
+                groups[name] = f"g{index}"
+        train, val, _ = plan_split(names, rng.choice([10, 20, 40]), groups)
+        assert train and val
+        assert train.isdisjoint(val)
+        assert train | val == set(names)
+        for members in _buckets(names, groups).values():
+            assert members <= train or members <= val
+
+
 # --- the UI-facing warning -------------------------------------------------
 #
 # `group_split_warning` is a pure text function; importing its module pulls in

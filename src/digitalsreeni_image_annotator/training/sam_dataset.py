@@ -110,7 +110,7 @@ def build_groups_from_folder(folder: str):
 
 # ── train/val split ──────────────────────────────────────────────────────────
 
-def split_groups(groups, train_pct, image_slices=None):
+def split_groups(groups, train_pct):
     """Partition ``groups`` into ``(train, val)`` deterministically by image.
 
     ``train_pct`` in ``[0, 100]``; ``>= 100`` (or fewer than 2 groups) keeps
@@ -126,10 +126,12 @@ def split_groups(groups, train_pct, image_slices=None):
     source image or slice name, so a stack's slices and a video's frames are
     routed to one side together instead of straddling the split — otherwise the
     val loss is measured on frames all but identical to trained ones, and early
-    stopping is driven by a number that means nothing. ``image_slices`` makes
-    the grouping exact; without it (the trainer runs on a worker thread and does
-    not carry the main window's state) the name-prefix fallback in
-    ``derive_groups`` applies, which covers every name the app itself produces.
+    stopping is driven by a number that means nothing.
+
+    The grouping comes from the names alone: this runs on the training worker
+    thread and has no access to the main window's ``image_slices``, so
+    ``derive_groups`` falls back to its name-prefix rule — which covers every
+    name the app itself produces.
     """
     from ..core.dataset_split import derive_groups
     from ..io.export_formats import assign_train_val
@@ -139,7 +141,7 @@ def split_groups(groups, train_pct, image_slices=None):
         return groups, []
 
     keyed = {f"{i}:{g.name}": g for i, g in enumerate(groups)}
-    name_groups = derive_groups([g.name for g in groups], image_slices)
+    name_groups = derive_groups([g.name for g in groups])
     keyed_groups = {}
     for key, group in keyed.items():
         # An unnamed group falls back to its own unique key: collapsing every

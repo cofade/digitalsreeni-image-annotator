@@ -2313,9 +2313,18 @@ stopping, so a leaky split does not merely misreport, it changes when the run st
 - **Always on, no opt-in.** The exporters derive the grouping themselves, so every path —
   including the headless CLI, which passes empty slice collections and relies on the prefix
   fallback — is protected without a caller remembering to ask for it.
-- Embedding clusters from the curation feature (#72) **refine** the grouping through
-  `merge_groups`, but are never required. The worst case — a 200-frame video — is fixed with no
-  model, no GPU and no curation run.
+- Embedding clusters from the curation feature (#72) can **refine** the grouping through
+  `merge_groups` and the exporters' `groups=` parameter, but are never required — the worst case,
+  a 200-frame video, is fixed with no model, no GPU and no curation run. The wiring is
+  deliberately **not** in this change: `similarity.cluster` is pure-Python all-pairs, so calling
+  it during an export would freeze the GUI for minutes on a few hundred images. It lands with the
+  vectorised clusterer.
+- The exporters filter the split input to names they will actually **write** (`_is_exportable`).
+  A name the export loop skips must not consume a slot in the train/val budget: once whole groups
+  move together, a video's worth of unwritable frames takes the entire train side with it. That
+  is not hypothetical — headlessly, where no slice collection is loaded, an earlier revision of
+  this change produced an empty `images/train` with `data.yaml` still pointing at it. As a side
+  effect the requested percentage now describes what lands on disk rather than what was counted.
 - New Qt-free `core/dataset_split.py`. `assign_train_val` moved there and stays **re-exported**
   from `io/export_formats.py`, which is where `training/sam_dataset.py` and the split tests import
   it from.
@@ -2338,15 +2347,26 @@ stopping, so a leaky split does not merely misreport, it changes when the run st
 
 **Consequences**:
 
-- The requested val percentage becomes a **target rather than a guarantee**. A group is
-  indivisible, so the last group added usually overshoots; `_split_by_group` drops it again when
-  that lands closer to what was asked for. With one large group and a high percentage the result
-  can be well off the request — both sides are guaranteed non-empty, and nothing more than that.
+- The requested val percentage becomes a **target rather than a guarantee**, and the honest bound
+  is narrow: *no single group, added or substituted, would land closer to the target*. Choosing
+  the best subset is subset-sum, so `_split_by_group` fills with groups that fit, allows one large
+  group to replace the selection when that lands nearer, then improves while improving. On a
+  project of one 100-frame video plus one photo, a requested 20 % delivers a single image — that
+  is not a defect, it is the closest of the two available answers. A property test over
+  randomised group-size distributions asserts the bound; a first version of this change satisfied
+  every group-cohesion assertion while delivering 1 %, 9 % and 67 % for a requested 20 %, which is
+  why cohesion alone is not sufficient coverage here.
 - `groups=None` is bit-for-bit the historical per-name split (every name its own group), so
   existing callers and the nine `test_yolo_split.py` tests are unaffected.
 - The name-prefix fallback deliberately errs toward **over-grouping**: a stack literally named
   `run_T1` yields base `run`, merging it with `run_T2`. That costs some split granularity; the
-  opposite error would reopen the leak this ADR exists to close.
+  opposite error would reopen the leak this ADR exists to close. The suffix is restricted to the
+  letters `DimensionDialog` actually assigns (T/Z/C/S) plus F for video, because matching any
+  `[A-Z]\d+` collapsed a whole 96-well plate into one group. Ambiguity remains where the name is
+  genuinely ambiguous — `Plate1_C1_Z1` cannot be told apart from a stack `Plate1` with a channel
+  and a Z dimension, so wells in rows C, F, S, T and Z still merge. Nothing in a filename can
+  resolve that, which is the argument for the `image_slices` mapping being the primary source and
+  the heuristic only the fallback for paths that have none.
 - `SAMFineTuner.train` calls `split_groups` on a worker thread with no access to `image_slices`,
   so it uses the prefix fallback — which covers every name the app itself produces.
 - The warning is raised at three call sites, not one: `prompt_validation_split` (YOLO export menu

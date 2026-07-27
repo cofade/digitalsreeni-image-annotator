@@ -74,37 +74,6 @@ def group_split_warning(names, image_slices, val_pct):
     )
 
 
-def project_split_groups(mw):
-    """The split grouping for ``mw``'s annotated images (ADR-044).
-
-    Name-derived grouping always applies — it needs no model and no GPU, and is
-    what protects the common case. When a curation run has produced embeddings
-    (#72/#80), its near-duplicate clusters are folded in on top, so two frames
-    that came from different files but are nonetheless near-identical also stay
-    on one side of the split. No curation run simply means no refinement; the
-    grouping is never weaker than the name-derived one.
-
-    Clustering here costs one pass over vectors already in memory — the same
-    arithmetic the curation dialog's threshold slider runs, and bounded by the
-    same ``ALL_PAIRS_LIMIT``.
-    """
-    from ..core.dataset_split import derive_groups, merge_groups
-
-    names = annotated_image_names(mw.all_annotations)
-    groups = derive_groups(names, getattr(mw, "image_slices", None))
-
-    curation = getattr(mw, "curation_controller", None)
-    if curation is None or not getattr(curation, "embeddings", None):
-        return groups
-    try:
-        return merge_groups(groups, curation.clusters())
-    except Exception:
-        # Degrade to the name-derived grouping rather than failing an export:
-        # the refinement is a bonus, the base grouping is the correctness fix.
-        logger.exception("could not refine the split with curation clusters")
-        return groups
-
-
 def warn_if_group_split_impossible(parent, names, image_slices, val_pct):
     """Show :func:`group_split_warning` if there is one. No-op otherwise."""
     message = group_split_warning(names, image_slices, val_pct)
@@ -447,7 +416,6 @@ def export_annotations(mw):
             mw.image_slices,
             file_name,
             val_split,
-            groups=project_split_groups(mw),
         )
         message = "Annotations have been exported successfully in YOLO (v4 and earlier) format.\n"
         message += f"Labels: {labels_dir}\nYAML: {yaml_path}\nValidation split: {val_split}%"
@@ -463,7 +431,6 @@ def export_annotations(mw):
                 file_name,
                 val_split,
                 keypoint_schemas=mw.keypoint_schemas,
-                groups=project_split_groups(mw),
             )
         except ValueError as e:
             QMessageBox.warning(mw, "Export Error", str(e))

@@ -32,12 +32,20 @@ import hashlib
 import re
 from typing import Any, Iterable, Mapping, Sequence
 
-# A slice name is the ext-stripped base plus one `<DimLetter><index>` component
-# per non-spatial dimension (`SliceProvider._build_index`), or `_F#####` for a
-# video frame (ADR-037). Regular image names keep their extension, which is why
-# the dot check below is enough to tell the two apart -- the same signal the
-# exporters already use (`'_' in name and '.' not in name`).
-_SLICE_SUFFIX = re.compile(r"^(?P<base>.+?)(?:_[A-Z]\d+)+$")
+# A slice name is the ext-stripped base plus one `<DimLetter><1-based index>`
+# component per non-spatial dimension (`SliceProvider._build_index`), or
+# `_F#####` for a video frame (`video_handler.frame_key`, ADR-037). Regular
+# image names keep their extension, which is why the dot check below tells the
+# two apart -- the same signal the exporters already use.
+#
+# The letters are exactly the ones `DimensionDialog` offers minus the spatial
+# pair (H and W never become slice components), plus F for video. Matching any
+# `[A-Z]` instead looked more permissive but was actively wrong: a 96-well
+# plate exported as `Plate1_A1_T1_Z1` would have been grouped under `Plate1`,
+# collapsing 96 independent stacks into one group -- which degrades to the
+# per-name split this module exists to replace, while reporting that everything
+# came from one recording.
+_SLICE_SUFFIX = re.compile(r"^(?P<base>.+?)(?:_[TZCSF]\d+)+$")
 
 
 def _collection_names(collection: Any) -> list[str]:
@@ -59,10 +67,12 @@ def _slice_base(name: str) -> str | None:
     passes an empty mapping (``cli.commands._export_dispatch``) and an ``.iap``
     can carry slice names whose stack was never materialised in this session.
 
-    Over-grouping is the safe direction here, and the non-greedy base makes the
-    failure land that way: a stack literally named ``run_T1`` yields base
-    ``run``, merging it with ``run_T2``. That costs some split granularity; the
-    opposite error would reintroduce the leak this module exists to close.
+    Erring toward over-grouping is preferable *within limits* -- a stack
+    literally named ``run_T1`` yields base ``run`` and merges with ``run_T2``,
+    costing split granularity where the opposite error would reopen the leak.
+    But the limit is real: collapse far enough and every name lands in one
+    group, which falls back to the per-name split anyway. That is why the
+    dimension letters are enumerated rather than matched as any capital.
     """
     if "." in name:
         return None
@@ -130,15 +140,28 @@ def merge_groups(
 def _split_by_group(
     names: list[str], groups: Mapping[str, str], val_count: int
 ) -> tuple[set[str], set[str]]:
-    """Route whole groups into val until ``val_count`` images are held out.
+    """Route whole groups into val, landing as near ``val_count`` as possible.
 
     Groups are ordered by a stable MD5 of the group key -- the same device the
     name-keyed split used, so the result is reproducible across runs and
     machines (unlike ``hash()``, which is salted per process).
 
-    A group is indivisible, so the requested count is a target rather than a
-    guarantee: the last group added usually overshoots it. It is dropped again
-    when that lands closer to what was asked for.
+    A group is indivisible, so ``val_count`` is a target rather than a
+    guarantee, and choosing the best *set* is subset-sum. This settles for a
+    cheap local optimum instead: fill with groups that fit, allow a single
+    large group to replace the whole selection when that lands nearer (the
+    fill eats small groups in hash order and can otherwise block a better big
+    one), then keep adding while each addition improves.
+
+    The guarantee is therefore: **no single group, added or substituted, would
+    land closer to the target.** That is exactly what the property test
+    asserts, and it is the honest bound -- not that the requested percentage is
+    delivered.
+
+    An earlier version added groups until it reached the target and then only
+    reconsidered the last one. That is size-blind, and it delivered 1 % for a
+    requested 20 % on a video-plus-one-photo project while every
+    group-cohesion assertion stayed green.
     """
     members: dict[str, list[str]] = {}
     for name in names:
@@ -151,21 +174,40 @@ def _split_by_group(
     chosen: list[str] = []
     held_out = 0
     for key in ordered:
-        if chosen and held_out >= val_count:
+        if held_out + len(members[key]) <= val_count:
+            chosen.append(key)
+            held_out += len(members[key])
+            if held_out == val_count:
+                break
+
+    def _distance(count: int) -> int:
+        return abs(count - val_count)
+
+    # Every group is larger than the target: hold out the smallest rather than
+    # returning an empty val set.
+    if not chosen and len(ordered) > 1:
+        chosen = [min(ordered, key=lambda key: (len(members[key]), key))]
+        held_out = len(members[chosen[0]])
+
+    # A single large group can beat the whole fill.
+    if len(ordered) > 1:
+        best_single = min(ordered, key=lambda key: (_distance(len(members[key])), key))
+        if _distance(len(members[best_single])) < _distance(held_out):
+            chosen = [best_single]
+            held_out = len(members[best_single])
+
+    # Then improve while improving. The bound keeps at least one group in
+    # train: an empty train set is not a split, whatever the arithmetic says.
+    while len(chosen) < len(ordered) - 1:
+        taken = set(chosen)
+        best = min(
+            (key for key in ordered if key not in taken),
+            key=lambda key: (_distance(held_out + len(members[key])), key),
+        )
+        if _distance(held_out + len(members[best])) >= _distance(held_out):
             break
-        chosen.append(key)
-        held_out += len(members[key])
-
-    if len(chosen) > 1:
-        without = held_out - len(members[chosen[-1]])
-        if abs(without - val_count) < abs(held_out - val_count):
-            chosen.pop()
-
-    # Never drain train. With singleton groups the count clamp already
-    # guarantees this; with real groups a single large one can swallow
-    # everything, and an empty train set is not a split at all.
-    if len(chosen) == len(ordered) and len(ordered) > 1:
-        chosen.pop()
+        chosen.append(best)
+        held_out += len(members[best])
 
     val = {name for key in chosen for name in members[key]}
     return set(names) - val, val

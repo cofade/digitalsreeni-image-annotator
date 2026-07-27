@@ -184,10 +184,11 @@ class SAMTrainController(QObject):
             self.mw,
             # getattr, not `.name`: this is a warning, and a warning must not
             # be able to abort a training launch over the shape of its input.
-            # The index fallback mirrors `split_groups`, which keys unnamed
-            # groups separately rather than collapsing them into one.
+            # The fallback is byte-identical to what `split_groups` keys an
+            # unnamed group with, so the preview and the split agree rather
+            # than merely looking like they do.
             [
-                getattr(group, "name", "") or f"#{index}"
+                getattr(group, "name", "") or f"{index}:"
                 for index, group in enumerate(groups)
             ],
             # No image_slices, deliberately: `split_groups` derives the
@@ -196,7 +197,10 @@ class SAMTrainController(QObject):
             # that runs — and for "train from folder" it would describe
             # whatever project happens to be open.
             None,
-            100 - cfg.get("train_pct", 100),
+            # Hard key, like `run_yolo`'s `config["val_split"]`: a soft default
+            # would silently set 0% and switch the warning off for good if the
+            # dialog's key were ever renamed.
+            100 - cfg["train_pct"],
         ):
             return
 

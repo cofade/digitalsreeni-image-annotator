@@ -241,8 +241,8 @@ def _split_by_group(
                     (_distance(held_out + in_size - out_size), "swap", in_key, out_key)
                 )
 
-        if not moves:
-            break
+        # `moves` is never empty: that would need a single group, which the
+        # precondition above refuses.
         distance, kind, add_key, drop_key = min(moves)
         if distance >= _distance(held_out):
             break

@@ -73,6 +73,121 @@ def test_export_keeps_a_recordings_frames_on_one_side(temp_output_dir):
         assert members <= train or members <= val, f"{base} straddled the split"
 
 
+def test_v4_export_keeps_a_recordings_frames_on_one_side(temp_output_dir):
+    """The v4 twin. It is one of the three choke points ADR-044 names, it is
+    reachable from the export menu and from `sreeni-cli export --format
+    yolov4`, and its directory layout differs (`train/images` + `valid/images`)
+    — so the v5+ test does not transfer by inspection.
+
+    Added after a mutation test: switching v4's grouping off left the whole
+    suite green.
+    """
+    out_dir = os.path.join(temp_output_dir, "grouped_v4")
+    image = QImage(32, 32, QImage.Format.Format_RGB32)
+    image.fill(0xFFFFFFFF)
+
+    clip = [(f"clip_F{i:05d}", image) for i in range(12)]
+    stack = [(f"stack_T1_Z{i + 1}", image) for i in range(8)]
+    annotations = {name: _box_annotation() for name, _ in clip + stack}
+
+    export_yolo_v4(
+        annotations, {"cell": 1}, image_paths={},
+        slices=[], image_slices={"clip": clip, "stack": stack},
+        output_dir=out_dir, val_split=40,
+    )
+
+    train = {
+        os.path.splitext(f)[0]
+        for f in os.listdir(os.path.join(out_dir, "train", "images"))
+    }
+    val = {
+        os.path.splitext(f)[0]
+        for f in os.listdir(os.path.join(out_dir, "valid", "images"))
+    }
+    assert train and val
+    assert len(train) + len(val) == 20
+
+    for base in ("clip", "stack"):
+        members = {name for name, _ in (clip if base == "clip" else stack)}
+        assert members <= train or members <= val, f"{base} straddled the split"
+
+
+def test_v4_headless_export_never_empties_the_train_directory(temp_output_dir):
+    """The v4 twin of the empty-`train` regression — also mutation-proven to be
+    uncovered before this existed."""
+    out_dir = os.path.join(temp_output_dir, "headless_v4")
+    photo_dir = os.path.join(temp_output_dir, "photos_v4")
+    os.makedirs(photo_dir)
+
+    image_paths, annotations = {}, {}
+    for i in range(20):
+        name = f"p{i:02d}.png"
+        path = os.path.join(photo_dir, name)
+        Image.new("RGB", (32, 32)).save(path)
+        image_paths[name] = path
+        annotations[name] = _box_annotation()
+    for i in range(200):
+        annotations[f"clip_F{i:05d}"] = _box_annotation()
+
+    export_yolo_v4(
+        annotations, {"cell": 1}, image_paths,
+        slices=[], image_slices={}, output_dir=out_dir, val_split=20,
+    )
+
+    train = os.listdir(os.path.join(out_dir, "train", "images"))
+    val = os.listdir(os.path.join(out_dir, "valid", "images"))
+    assert train, "train/images is empty; the dataset cannot be trained"
+    assert val
+    assert len(train) + len(val) == 20
+    assert len(val) == 4
+
+
+def test_the_split_preview_lists_exactly_what_the_export_writes(temp_output_dir):
+    """`_is_exportable` is a second implementation of the export loop's
+    resolution order, kept in step by a docstring. This asserts they agree, so
+    the next edit to the loop cannot drift them apart in silence.
+    """
+    from src.digitalsreeni_image_annotator.io.export_formats import (
+        exportable_annotated_names,
+    )
+
+    out_dir = os.path.join(temp_output_dir, "agreement")
+    photo_dir = os.path.join(temp_output_dir, "photos_mixed")
+    os.makedirs(photo_dir)
+    image = QImage(32, 32, QImage.Format.Format_RGB32)
+    image.fill(0xFFFFFFFF)
+
+    image_paths, annotations = {}, {}
+    for name in ("real.png", "other.jpg"):
+        path = os.path.join(photo_dir, name)
+        Image.new("RGB", (32, 32)).save(path)
+        image_paths[name] = path
+        annotations[name] = _box_annotation()
+    # A TIFF source (skipped in favour of its slices), a loaded slice, and a
+    # slice whose collection was never loaded.
+    image_paths["stack.tif"] = os.path.join(photo_dir, "stack.tif")
+    annotations["stack.tif"] = _box_annotation()
+    loaded = [("stack_T1_Z1", image)]
+    annotations["stack_T1_Z1"] = _box_annotation()
+    annotations["ghost_F00001"] = _box_annotation()
+    annotations["unannotated.png"] = {}
+
+    previewed = set(
+        exportable_annotated_names(annotations, [], {"stack": loaded}, image_paths)
+    )
+    export_yolo_v5plus(
+        annotations, {"cell": 1}, image_paths,
+        slices=[], image_slices={"stack": loaded},
+        output_dir=out_dir, val_split=0,
+    )
+
+    written = {
+        os.path.splitext(f)[0]
+        for f in os.listdir(os.path.join(out_dir, "images", "train"))
+    }
+    assert {os.path.splitext(name)[0] for name in previewed} == written
+
+
 def test_headless_export_never_empties_the_train_directory(temp_output_dir):
     """The CLI passes empty slice collections, so a video's frames have no
     pixels to write. They must not consume the train side's budget.

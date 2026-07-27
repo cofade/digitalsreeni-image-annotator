@@ -34,6 +34,71 @@ def test_set_sam_ui_locked_toggles_widgets(window):
     assert c._menu.isEnabled()
 
 
+def test_declining_the_split_warning_abandons_the_run(window, monkeypatch):
+    """ADR-044 says all three GUI call sites honour Cancel. This is the third,
+    and the one the ADR singles out as biting hardest: the SAM val loss drives
+    early stopping, so a leaky split does not merely misreport, it changes when
+    the run stops.
+
+    Added after a mutation test — replacing the guard with `if False and ...`
+    left the entire suite green.
+    """
+    from PyQt6.QtWidgets import QMessageBox
+
+    import digitalsreeni_image_annotator.controllers.sam_train_controller as mod
+    from digitalsreeni_image_annotator.dialogs.sam_trainer_dialog import (
+        SAMTrainConfigDialog,
+    )
+    from digitalsreeni_image_annotator.training.sam_trainer import SampleGroup
+
+    c = window.sam_train_controller
+    monkeypatch.setattr(c, "_gpu_gate", lambda: True)
+    monkeypatch.setattr(
+        SAMTrainConfigDialog, "exec",
+        lambda self: SAMTrainConfigDialog.DialogCode.Accepted,
+    )
+    monkeypatch.setattr(
+        SAMTrainConfigDialog, "get_config",
+        lambda self: {
+            "base_model": "SAM 2 tiny", "out_name": "t", "epochs": 1,
+            "lr": 1e-4, "batch_size": 1, "prompt_type": "bbox",
+            "freeze_image_encoder": True, "train_pct": 80,
+        },
+    )
+
+    shown = []
+    monkeypatch.setattr(
+        QMessageBox, "warning",
+        staticmethod(lambda *a, **k: (
+            shown.append(a[2]), QMessageBox.StandardButton.Cancel
+        )[1]),
+    )
+    monkeypatch.setattr(QMessageBox, "critical", staticmethod(lambda *a, **k: None))
+
+    started = []
+
+    class _Tuner:
+        def __init__(self, *a, **k):
+            started.append(True)
+            raise AssertionError("the run must not start after Cancel")
+
+    monkeypatch.setattr(mod, "SAMFineTuner", _Tuner)
+
+    # One recording: no leak-free split exists, so the warning fires.
+    groups = [
+        SampleGroup(lambda: None, [{"bbox": [0, 0, 1, 1]}], name=f"clip_F{i:05d}")
+        for i in range(8)
+    ]
+    c._launch(groups)
+
+    assert shown and "optimistic" in shown[0]
+    assert not started
+    # And the early return does not leave the fine-tune menu locked. (The SAM
+    # tool buttons are not asserted here: their enabled state depends on
+    # whether an image is loaded, so they are disabled at baseline anyway.)
+    assert c._menu.isEnabled()
+
+
 def test_launch_unlocks_ui_when_setup_raises(window, monkeypatch):
     """If anything between locking and thread.start() raises, the SAM UI must
     be restored — otherwise the tools stay dead until app restart."""
@@ -55,7 +120,7 @@ def test_launch_unlocks_ui_when_setup_raises(window, monkeypatch):
         lambda self: {
             "base_model": "SAM 2 tiny", "out_name": "t", "epochs": 1,
             "lr": 1e-4, "batch_size": 1, "prompt_type": "bbox",
-            "freeze_image_encoder": True,
+            "freeze_image_encoder": True, "train_pct": 80,
         },
     )
 
@@ -95,7 +160,7 @@ def test_launch_always_wires_a_real_mlflow_tracker(window, monkeypatch):
         lambda self: {
             "base_model": "SAM 2 tiny", "out_name": "t", "epochs": 1,
             "lr": 1e-4, "batch_size": 1, "prompt_type": "bbox",
-            "freeze_image_encoder": True,
+            "freeze_image_encoder": True, "train_pct": 80,
         },
     )
 

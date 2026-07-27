@@ -2383,6 +2383,10 @@ stopping, so a leaky split does not merely misreport, it changes when the run st
   named `sample_T1.png` / `sample_T2.png` into one group — a false alarm on a flat dataset,
   reported rather than silent, but disruptive. Left open deliberately, and recorded here rather
   than discovered later: this is the one remaining path where the leak is still silent.
+  `dialogs/dataset_splitter.py` — the standalone folder-splitting tool, which is not one of the
+  three choke points above — walks straight into it: it shuffles a directory listing with an
+  unseeded `random.shuffle`, so it is neither grouped nor reproducible. The app is **not**
+  uniformly group-aware, and that tool is where it is not.
 - `SAMFineTuner.train` calls `split_groups` on a worker thread with no access to `image_slices`,
   so it uses the prefix fallback — which covers every name the app itself produces.
 - The wording lives in `core/dataset_split.split_warning`, **not** on the controller. It began

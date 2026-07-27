@@ -168,6 +168,10 @@ def test_a_video_project_holds_out_a_whole_recording():
     assert train and val
     assert train.isdisjoint(val)
     assert train | val == set(names)
+    # Literal, not recomputed: the property test measures locality against a
+    # target it derives the same way `plan_split` does, so it cannot catch a
+    # wrong target. One hard number closes that loop.
+    assert len(val) == 20
 
 
 def test_a_single_recording_falls_back_and_says_so():

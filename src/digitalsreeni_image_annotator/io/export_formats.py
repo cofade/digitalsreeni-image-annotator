@@ -4,13 +4,13 @@ import json
 # headless export require a display. `core.image_size` reads the header via
 # Pillow instead. Slice QImages still arrive as arguments and are used as
 # objects, which needs no import.
+from ..core.dataset_split import assign_train_val, derive_groups
 from ..core.image_size import image_dimensions
 from ..core.keypoint_schema import schema_k
 from ..core.slice_index import resolve_slice_image as _resolve_slice_image
 from ..core.slice_index import slice_index as _slice_index
 from ..utils import calculate_area, calculate_bbox
 import yaml
-import hashlib
 import os
 import shutil
 import tempfile
@@ -174,30 +174,13 @@ def create_coco_annotation(ann, image_id, annotation_id, class_name, class_mappi
 
 
 
-def assign_train_val(image_names, val_pct):
-    """Deterministically partition image names into (train_set, val_set).
-
-    val_pct in [0, 100]; 0 -> everything in train (the original behaviour).
-    Ordering uses a stable filename hash so the split is reproducible across
-    runs and machines (unlike the built-in hash() which is salted per process).
-    The val count is the nearest integer to the requested fraction, clamped so
-    the val set is never accidentally empty: whenever val_pct > 0 and there are
-    >= 2 annotated images, at least one image lands in val and at least one
-    stays in train.
-    """
-    names = list(image_names)
-    if val_pct <= 0 or len(names) < 2:
-        return set(names), set()
-    ordered = sorted(names, key=lambda n: hashlib.md5(n.encode("utf-8")).hexdigest())
-    n = len(ordered)
-    # round() is half-to-even, which is fine here; the clamp keeps both sides
-    # non-empty regardless of how the nearest-integer falls.
-    val_count = max(1, min(n - 1, round(n * val_pct / 100)))
-    val = set(ordered[:val_count])
-    return set(names) - val, val
+# `assign_train_val` moved to core.dataset_split (issue #80, ADR-044) and is
+# imported above. It stays re-exported from here: `training.sam_dataset` and the
+# split tests import it from this module, and the split remains an export
+# concern even though the grouping logic is not.
 
 
-def export_yolo_v4(all_annotations, class_mapping, image_paths, slices, image_slices, output_dir, val_split=0):
+def export_yolo_v4(all_annotations, class_mapping, image_paths, slices, image_slices, output_dir, val_split=0, groups=None):
     # Create output directories
     train_dir = os.path.join(output_dir, 'train')
     valid_dir = os.path.join(output_dir, 'valid')
@@ -211,9 +194,14 @@ def export_yolo_v4(all_annotations, class_mapping, image_paths, slices, image_sl
     # Create a mapping of slice names to their QImage objects
     slice_index = _slice_index(slices, image_slices)
 
-    # Deterministically split the annotated images into train/val.
+    # Split by GROUP, not by name (ADR-044): a stack's slices and a video's
+    # frames are near-identical observations, and letting them straddle the
+    # split silently inflates every validation metric. `groups` lets a caller
+    # supply a refined grouping; deriving it here means every path -- including
+    # the headless CLI -- is protected without opting in.
     annotated = [name for name, ann in all_annotations.items() if ann]
-    _, val_names = assign_train_val(annotated, val_split)
+    name_groups = groups or derive_groups(annotated, image_slices)
+    _, val_names = assign_train_val(annotated, val_split, name_groups)
 
     for image_name, annotations in all_annotations.items():
         # Skip if there are no annotations for this image/slice
@@ -361,7 +349,7 @@ def _pose_export_check(all_annotations, class_mapping, keypoint_schemas):
     return k, (flip_idx or list(range(k)))
 
 
-def export_yolo_v5plus(all_annotations, class_mapping, image_paths, slices, image_slices, output_dir, val_split=0, keypoint_schemas=None):
+def export_yolo_v5plus(all_annotations, class_mapping, image_paths, slices, image_slices, output_dir, val_split=0, keypoint_schemas=None, groups=None):
     """
     Export annotations in YOLO v5+ format.
     Directory structure:
@@ -394,9 +382,10 @@ def export_yolo_v5plus(all_annotations, class_mapping, image_paths, slices, imag
     # here, which is what lets a video's annotated frames train (#45/#47).
     slice_index = _slice_index(slices, image_slices)
 
-    # Deterministically split the annotated images into train/val.
+    # Split by GROUP, not by name (ADR-044) -- see export_yolo_v4 above.
     annotated = [name for name, ann in all_annotations.items() if ann]
-    _, val_names = assign_train_val(annotated, val_split)
+    name_groups = groups or derive_groups(annotated, image_slices)
+    _, val_names = assign_train_val(annotated, val_split, name_groups)
 
     logger.debug(f"export: {len(all_annotations)} image entries, "
           f"{len(image_paths)} known image paths, "

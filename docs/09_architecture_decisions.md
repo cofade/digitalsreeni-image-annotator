@@ -2284,3 +2284,72 @@ unclaimed.
   image is the *common* case, and breaking it would defeat the feature. Digits are unaffected in
   practice (type-ahead on a numeric prefix is rare). Revisit if type-ahead turns out to be load-
   bearing for anyone.
+
+## ADR-044: The Train/Val Split Key Is the Group, Not the Image Name
+
+**Status**: Accepted (issue #80)
+
+**Context**: `assign_train_val` partitioned train/val by a stable MD5 of the image *name*. That is
+correct exactly when every name is an independent observation, and in this app it routinely is
+not. A multi-dimensional stack contributes one name per slice (`stack_T1_Z5_C1`) and a video one
+per frame (`video_F00042`), and consecutive frames are near-identical. A name-keyed split
+therefore scatters the frames of one recording across both sides **by construction** — the model
+is validated on data it effectively trained on.
+
+Nothing fails. The dataset exports, training runs, and the validation metrics come back *better*
+— the more redundant the data, the better they look. That is the worst available failure mode for
+a number people use to decide whether a model is ready.
+
+The function was the single choke point for all three training paths: `export_yolo_v4`,
+`export_yolo_v5plus` (and therefore `prepare_dataset` → in-app YOLO training) and
+`training/sam_dataset.py::split_groups` (SAM fine-tuning — where val loss also drives early
+stopping, so a leaky split does not merely misreport, it changes when the run stops).
+
+**Decision**: The split key is a **group**, and a group never straddles the split.
+
+- Grouping is derived from **structure, not from a model**. `image_slices` is already keyed by the
+  ext-stripped base name, so `{slice_name: base}` is exact and needs no parsing and no pixel work.
+  Names it does not cover fall back to a name-prefix heuristic; anything left is its own group.
+- **Always on, no opt-in.** The exporters derive the grouping themselves, so every path —
+  including the headless CLI, which passes empty slice collections and relies on the prefix
+  fallback — is protected without a caller remembering to ask for it.
+- Embedding clusters from the curation feature (#72) **refine** the grouping through
+  `merge_groups`, but are never required. The worst case — a 200-frame video — is fixed with no
+  model, no GPU and no curation run.
+- New Qt-free `core/dataset_split.py`. `assign_train_val` moved there and stays **re-exported**
+  from `io/export_formats.py`, which is where `training/sam_dataset.py` and the split tests import
+  it from.
+- **Degenerate case: warn, do not silently disable validation.** When everything belongs to one
+  group — a project that is a single video — no honest split exists. `plan_split` returns a
+  `fell_back` flag, uses the per-name split, and the UI states plainly that the validation numbers
+  will be optimistic.
+
+**Alternatives considered**:
+
+- *An empty val set in the degenerate case*: the truthful answer, and rejected. The trainer skips
+  the validation pass and early stopping when val is empty (ADR-028), so the user silently loses
+  two features and gets no explanation — that reads as a regression, not as information.
+- *Opt-in checkbox, default off*: no behavioural change for anyone, and the leak stays the default
+  for everyone who never finds the checkbox. The bug would remain in practice.
+- *Grouping from embedding clusters only*: conceptually cleaner, practically worse. It requires a
+  GPU curation run before every export, and without one there is no protection at all.
+- *Splitting a group proportionally instead of whole*: defeats the purpose. A partially split
+  group leaks exactly as much as an unsplit one.
+
+**Consequences**:
+
+- The requested val percentage becomes a **target rather than a guarantee**. A group is
+  indivisible, so the last group added usually overshoots; `_split_by_group` drops it again when
+  that lands closer to what was asked for. With one large group and a high percentage the result
+  can be well off the request — both sides are guaranteed non-empty, and nothing more than that.
+- `groups=None` is bit-for-bit the historical per-name split (every name its own group), so
+  existing callers and the nine `test_yolo_split.py` tests are unaffected.
+- The name-prefix fallback deliberately errs toward **over-grouping**: a stack literally named
+  `run_T1` yields base `run`, merging it with `run_T2`. That costs some split granularity; the
+  opposite error would reopen the leak this ADR exists to close.
+- `SAMFineTuner.train` calls `split_groups` on a worker thread with no access to `image_slices`,
+  so it uses the prefix fallback — which covers every name the app itself produces.
+- The warning is raised at three call sites, not one: `prompt_validation_split` (YOLO export menu
+  and Prepare YOLO Dataset), `TrainingController.run_yolo` (the unified Train dialog carries its
+  own split slider and never passes through the prompt) and `SAMTrainController._launch`. Missing
+  the second would leave the app's main training path as the one place without it.

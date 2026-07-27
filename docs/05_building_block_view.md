@@ -284,6 +284,7 @@ out-of-process.
 | `core/mask_filters.py` | Polygon IoU and the noise limits for unprompted mask proposals (#69). |
 | `core/onion.py` | Onion-skin neighbour selection, the content choice (annotations / image / both) and the settings clamps (#67). Ends never wrap. |
 | `core/image_size.py` | Image dimensions via a Pillow header read (#76) — what replaced `QImage` in the export layer. |
+| `core/dataset_split.py` | Group-aware train/val splitting (#80, ADR-044): `derive_groups` (exact from `image_slices`, name-prefix fallback), `merge_groups` (folds in curation clusters), `plan_split` (whole groups, plus the `fell_back` flag) and `assign_train_val`, which moved here from `io/export_formats.py` and stays re-exported there. Deliberately imports nothing from `core/slice_cache`, which reaches `QImage`. |
 
 ## Level 3: CLI
 

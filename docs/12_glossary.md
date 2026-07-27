@@ -51,6 +51,20 @@ known in advance and k-means would partition *every* image whether or not any ar
 stands in for the group. Clustering is transitive, which is correct for a burst of frames
 drifting slowly.
 
+### Group-Aware Split
+
+The train/val partition keys on a **group** — one recording, one stack, one near-duplicate
+cluster — rather than on the image name, and a whole group lands on one side. Introduced by
+ADR-044 because slice and frame names are individually addressable but are not independent
+observations. The requested percentage becomes a target: a group is indivisible.
+
+### Near-Duplicate Leakage
+
+Near-identical images landing on **both** sides of the train/val split, so validation measures
+memorisation instead of generalisation. Silent by construction — the metrics get *better* as the
+data gets more redundant, which is why it survived undetected until #80. What the group-aware
+split prevents.
+
 ### Model Sidecar
 A JSON file written next to a trained `.pt` (issue #74) holding what the checkpoint cannot say
 about itself: class names, task, `kpt_shape`/`flip_idx`, the training configuration and the final

@@ -173,6 +173,22 @@ class SAMTrainController(QObject):
         if dialog.exec() != SAMTrainConfigDialog.DialogCode.Accepted:
             return
         cfg = dialog.get_config()
+
+        # Same grouping caveat as the YOLO path (ADR-044): the SAM val loss
+        # drives early stopping, so a val set sharing a recording with train
+        # does not merely report an optimistic number, it changes when the run
+        # stops.
+        from .io_controller import warn_if_group_split_impossible
+
+        warn_if_group_split_impossible(
+            self.mw,
+            # getattr, not `.name`: this is a warning, and a warning must not
+            # be able to abort a training launch over the shape of its input.
+            [getattr(group, "name", "") for group in groups],
+            getattr(self.mw, "image_slices", None),
+            100 - cfg.get("train_pct", 100),
+        )
+
         base_model = cfg.pop("base_model")
         out_name = cfg.pop("out_name")
         cfg["out_path"] = make_custom_filename(base_model, out_name)

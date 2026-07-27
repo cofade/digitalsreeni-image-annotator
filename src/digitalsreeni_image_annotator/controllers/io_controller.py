@@ -33,19 +33,105 @@ from ..core.logging_config import get_logger
 logger = get_logger(__name__)
 
 
-def prompt_validation_split(parent):
+def annotated_image_names(all_annotations):
+    """The names the exporters will actually split — annotated ones only.
+
+    Mirrors the ``annotated = [...]`` line in ``export_yolo_v4`` /
+    ``export_yolo_v5plus``; the split preview has to be computed over the same
+    set the export will use, or the warning below is about a different split
+    than the one that happens.
+    """
+    return [name for name, ann in (all_annotations or {}).items() if ann]
+
+
+def group_split_warning(names, image_slices, val_pct):
+    """Warning text when a leak-free split is impossible, else ``None``.
+
+    Separated from the dialog so the wording is testable without a QApplication.
+    See ADR-044: when every annotated image belongs to one group — a project
+    that is a single video, typically — the split falls back to the per-name
+    one, and the honest thing is to say so rather than report a validation
+    number the data cannot support.
+    """
+    if val_pct <= 0:
+        return None
+    from ..core.dataset_split import derive_groups, plan_split
+
+    names = list(names)
+    groups = derive_groups(names, image_slices)
+    _train, _val, fell_back = plan_split(names, val_pct, groups)
+    if not fell_back:
+        return None
+    return (
+        "Every annotated image here belongs to the same recording, so no "
+        "validation set can be held out without sharing frames with training.\n\n"
+        "The split was made per image instead. Near-identical frames land on "
+        "both sides, so the validation metrics this run reports will be "
+        "optimistic — read them as a training-progress signal, not as an "
+        "estimate of performance on new data.\n\n"
+        "Add images from a second recording for a validation set that measures "
+        "something."
+    )
+
+
+def project_split_groups(mw):
+    """The split grouping for ``mw``'s annotated images (ADR-044).
+
+    Name-derived grouping always applies — it needs no model and no GPU, and is
+    what protects the common case. When a curation run has produced embeddings
+    (#72/#80), its near-duplicate clusters are folded in on top, so two frames
+    that came from different files but are nonetheless near-identical also stay
+    on one side of the split. No curation run simply means no refinement; the
+    grouping is never weaker than the name-derived one.
+
+    Clustering here costs one pass over vectors already in memory — the same
+    arithmetic the curation dialog's threshold slider runs, and bounded by the
+    same ``ALL_PAIRS_LIMIT``.
+    """
+    from ..core.dataset_split import derive_groups, merge_groups
+
+    names = annotated_image_names(mw.all_annotations)
+    groups = derive_groups(names, getattr(mw, "image_slices", None))
+
+    curation = getattr(mw, "curation_controller", None)
+    if curation is None or not getattr(curation, "embeddings", None):
+        return groups
+    try:
+        return merge_groups(groups, curation.clusters())
+    except Exception:
+        # Degrade to the name-derived grouping rather than failing an export:
+        # the refinement is a bonus, the base grouping is the correctness fix.
+        logger.exception("could not refine the split with curation clusters")
+        return groups
+
+
+def warn_if_group_split_impossible(parent, names, image_slices, val_pct):
+    """Show :func:`group_split_warning` if there is one. No-op otherwise."""
+    message = group_split_warning(names, image_slices, val_pct)
+    if message:
+        QMessageBox.warning(parent, "Validation Split", message)
+
+
+def prompt_validation_split(parent, names=None, image_slices=None):
     """Ask what fraction of images to hold out for validation.
 
     Returns ``(val_split, ok)`` from a single shared QInputDialog so the YOLO
     menu export and the in-app YOLO trainer can't drift apart. ``0`` keeps the
     historical all-in-train layout.
+
+    Pass ``names``/``image_slices`` to have the degenerate-grouping case
+    reported straight after the choice (ADR-044); omitting them keeps the plain
+    prompt for callers that have no project state to check.
     """
-    return QInputDialog.getInt(
+    val_split, ok = QInputDialog.getInt(
         parent,
         "Validation Split",
         "Percent of images for the validation set (0 = all in train):",
         20, 0, 100, 5,
     )
+    if ok and names is not None:
+        warn_if_group_split_impossible(parent, names, image_slices, val_split)
+    return val_split, ok
 
 
 def _rebuild_imported_annotation(ann, category_name, number):
@@ -328,7 +414,9 @@ def export_annotations(mw):
     # much of the data to hold out (0 keeps the historical all-in-train layout).
     val_split = 0
     if export_format in ("YOLO (v4 and earlier)", "YOLO (v5+)"):
-        val_split, ok = prompt_validation_split(mw)
+        val_split, ok = prompt_validation_split(
+            mw, annotated_image_names(mw.all_annotations), mw.image_slices
+        )
         if not ok:
             return
 
@@ -359,6 +447,7 @@ def export_annotations(mw):
             mw.image_slices,
             file_name,
             val_split,
+            groups=project_split_groups(mw),
         )
         message = "Annotations have been exported successfully in YOLO (v4 and earlier) format.\n"
         message += f"Labels: {labels_dir}\nYAML: {yaml_path}\nValidation split: {val_split}%"
@@ -374,6 +463,7 @@ def export_annotations(mw):
                 file_name,
                 val_split,
                 keypoint_schemas=mw.keypoint_schemas,
+                groups=project_split_groups(mw),
             )
         except ValueError as e:
             QMessageBox.warning(mw, "Export Error", str(e))

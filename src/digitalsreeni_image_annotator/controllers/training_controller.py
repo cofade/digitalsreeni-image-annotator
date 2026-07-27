@@ -73,6 +73,19 @@ class TrainingController(QObject):
         if not trainer.load_model(config["base_model"]):
             return
 
+        # This dialog carries its own split slider, so it never passes through
+        # `prompt_validation_split` — the degenerate-grouping warning has to be
+        # raised here too, or the app's main training path is the one place it
+        # is missing (ADR-044).
+        from .io_controller import annotated_image_names, warn_if_group_split_impossible
+
+        warn_if_group_split_impossible(
+            self.mw,
+            annotated_image_names(self.mw.all_annotations),
+            self.mw.image_slices,
+            config["val_split"],
+        )
+
         try:
             yaml_path = trainer.prepare_dataset(config["val_split"])
         except Exception as exc:

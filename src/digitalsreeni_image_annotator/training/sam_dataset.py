@@ -110,7 +110,7 @@ def build_groups_from_folder(folder: str):
 
 # ── train/val split ──────────────────────────────────────────────────────────
 
-def split_groups(groups, train_pct):
+def split_groups(groups, train_pct, image_slices=None):
     """Partition ``groups`` into ``(train, val)`` deterministically by image.
 
     ``train_pct`` in ``[0, 100]``; ``>= 100`` (or fewer than 2 groups) keeps
@@ -121,7 +121,17 @@ def split_groups(groups, train_pct):
 
     Each group is keyed by ``"{index}:{name}"`` so duplicate or empty
     ``SampleGroup.name`` values can't collapse two images into one split bucket.
+
+    **Split by source, not by name (ADR-044).** ``SampleGroup.name`` is the
+    source image or slice name, so a stack's slices and a video's frames are
+    routed to one side together instead of straddling the split — otherwise the
+    val loss is measured on frames all but identical to trained ones, and early
+    stopping is driven by a number that means nothing. ``image_slices`` makes
+    the grouping exact; without it (the trainer runs on a worker thread and does
+    not carry the main window's state) the name-prefix fallback in
+    ``derive_groups`` applies, which covers every name the app itself produces.
     """
+    from ..core.dataset_split import derive_groups
     from ..io.export_formats import assign_train_val
 
     groups = list(groups)
@@ -129,7 +139,20 @@ def split_groups(groups, train_pct):
         return groups, []
 
     keyed = {f"{i}:{g.name}": g for i, g in enumerate(groups)}
-    _train_keys, val_keys = assign_train_val(keyed.keys(), 100 - train_pct)
+    name_groups = derive_groups([g.name for g in groups], image_slices)
+    keyed_groups = {}
+    for key, group in keyed.items():
+        # An unnamed group falls back to its own unique key: collapsing every
+        # `name=""` group into one bucket is exactly what the indexed key
+        # exists to prevent.
+        if group.name:
+            keyed_groups[key] = name_groups.get(group.name) or key
+        else:
+            keyed_groups[key] = key
+
+    _train_keys, val_keys = assign_train_val(
+        keyed.keys(), 100 - train_pct, keyed_groups
+    )
     train = [g for k, g in keyed.items() if k not in val_keys]
     val = [g for k, g in keyed.items() if k in val_keys]
     return train, val

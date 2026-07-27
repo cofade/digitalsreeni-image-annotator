@@ -2319,12 +2319,13 @@ stopping, so a leaky split does not merely misreport, it changes when the run st
   group. There is no group larger than one image there, so there is nothing to leak and nothing to
   warn about — the CLI's existing `note:` about unexported slices is the honest signal. An earlier
   revision of this change shipped a CLI warning branch that could not fire.
-- Embedding clusters from the curation feature (#72) can **refine** the grouping through
-  `merge_groups` and the exporters' `groups=` parameter, but are never required — the worst case,
-  a 200-frame video, is fixed with no model, no GPU and no curation run. The wiring is
-  deliberately **not** in this change: `similarity.cluster` is pure-Python all-pairs, so calling
-  it during an export would freeze the GUI for minutes on a few hundred images. It lands with the
-  vectorised clusterer.
+- Embedding clusters from the curation feature (#72) could **refine** the grouping — union them
+  into the derived groups so two near-identical images from different files also stay on one side
+  — but are never required: the worst case, a 200-frame video, is fixed with no model, no GPU and
+  no curation run. None of that is in this change, not even the seam. `similarity.cluster` is
+  pure-Python all-pairs, so calling it during an export would freeze the GUI for minutes on a few
+  hundred images; the merge helper and the parameter to feed it land in #82 together with the
+  vectorised clusterer and an actual caller.
 - The exporters filter the split input to names they will actually **write** (`_is_exportable`).
   A name the export loop skips must not consume a slot in the train/val budget: once whole groups
   move together, a video's worth of unwritable frames takes the entire train side with it. That
@@ -2359,7 +2360,12 @@ stopping, so a leaky split does not merely misreport, it changes when the run st
   fit, allows one large group to replace the selection when that lands nearer, then hill-climbs on
   single add/drop/swap moves until none improves. The climb enumerates one representative per
   distinct group *size*, since same-size groups are interchangeable for hitting a count — without
-  that, the ungrouped path (one group per image) would compare millions of identical singletons. On a
+  that, the ungrouped path (one group per image) would compare millions of identical singletons.
+  On a project of one 100-frame video plus one photo, a requested 20 % delivers a single image:
+  that is the closer of the two available answers, not a defect. **Group cohesion is not
+  sufficient test coverage here** — a selection can keep every group whole and still deliver 1 %
+  for a requested 20 %, so the delivered *size* needs its own property test, as do the bounds that
+  keep both sides non-empty. On a
   project of one 100-frame video plus one photo, a requested 20 % delivers a single image — that
   is not a defect, it is the closest of the two available answers. A property test over
   randomised group-size distributions asserts the bound; a first version of this change satisfied
@@ -2387,6 +2393,12 @@ stopping, so a leaky split does not merely misreport, it changes when the run st
   three choke points above — walks straight into it: it shuffles a directory listing with an
   unseeded `random.shuffle`, so it is neither grouped nor reproducible. The app is **not**
   uniformly group-aware, and that tool is where it is not.
+  - One exception, deliberately inconsistent with the paragraph above:
+    `build_groups_from_folder` **does** ext-strip, because a prepared SAM dataset is written by
+    `export_sam_dataset` from slice names and is therefore known to contain them. The cost is the
+    one just described — `sample_T1.png` and `sample_T2.png` in such a folder merge — and it is
+    accepted there because the alternative was no grouping at all on that path. The two SAM entry
+    points consequently group the same data slightly differently.
 - `SAMFineTuner.train` calls `split_groups` on a worker thread with no access to `image_slices`,
   so it uses the prefix fallback — which covers every name the app itself produces.
 - The wording lives in `core/dataset_split.split_warning`, **not** on the controller. It began

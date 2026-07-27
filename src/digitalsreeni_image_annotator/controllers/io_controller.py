@@ -47,7 +47,7 @@ def annotated_image_names(mw):
     )
 
 
-def confirm_split_warning(parent, names, image_slices, val_pct):
+def confirm_split_warning(parent, names, image_slices, val_pct, groups=None):
     """Show what is wrong with the split, if anything. ``False`` to back out.
 
     The wording lives in ``core.dataset_split.split_warning`` so the CLI emits
@@ -59,7 +59,7 @@ def confirm_split_warning(parent, names, image_slices, val_pct):
     being told that the val loss driving early stopping is meaningless, which
     is worth being able to act on before a GPU run starts.
     """
-    message = split_warning(names, val_pct, image_slices)
+    message = split_warning(names, val_pct, image_slices, groups)
     if not message:
         return True
     choice = QMessageBox.warning(
@@ -67,7 +67,10 @@ def confirm_split_warning(parent, names, image_slices, val_pct):
         "Validation Split",
         message,
         QMessageBox.StandardButton.Ok | QMessageBox.StandardButton.Cancel,
-        QMessageBox.StandardButton.Cancel,
+        # Ok, not Cancel: on the export path the user has just typed a
+        # percentage, and defaulting to Cancel would let Enter throw it away.
+        # The warning is information; Cancel is there for acting on it.
+        QMessageBox.StandardButton.Ok,
     )
     return choice == QMessageBox.StandardButton.Ok
 
@@ -85,15 +88,19 @@ def prompt_validation_split(parent, names=None, image_slices=None):
     actionable; omitting the arguments keeps the plain prompt for callers with
     no project state to check.
     """
+    # Seeded from the last declined value, so backing out of the warning
+    # re-opens the prompt where the user left it rather than at the default.
+    proposed = 20
     while True:
         val_split, ok = QInputDialog.getInt(
             parent,
             "Validation Split",
             "Percent of images for the validation set (0 = all in train):",
-            20, 0, 100, 5,
+            proposed, 0, 100, 5,
         )
         if not ok:
             return val_split, False
+        proposed = val_split
         if names is None or confirm_split_warning(
             parent, names, image_slices, val_split
         ):

@@ -232,7 +232,7 @@ def exportable_annotated_names(all_annotations, slices, image_slices, image_path
     ]
 
 
-def export_yolo_v4(all_annotations, class_mapping, image_paths, slices, image_slices, output_dir, val_split=0, groups=None):
+def export_yolo_v4(all_annotations, class_mapping, image_paths, slices, image_slices, output_dir, val_split=0):
     # Create output directories
     train_dir = os.path.join(output_dir, 'train')
     valid_dir = os.path.join(output_dir, 'valid')
@@ -248,14 +248,14 @@ def export_yolo_v4(all_annotations, class_mapping, image_paths, slices, image_sl
 
     # Split by GROUP, not by name (ADR-044): a stack's slices and a video's
     # frames are near-identical observations, and letting them straddle the
-    # split silently inflates every validation metric. `groups` lets a caller
-    # supply a refined grouping; deriving it here means every path -- including
+    # split silently inflates every validation metric. Deriving the grouping
+    # here rather than taking it from the caller means every path -- including
     # the headless CLI -- is protected without opting in.
     annotated = [
         name for name, ann in all_annotations.items()
         if ann and _is_exportable(name, slice_index, image_paths)
     ]
-    name_groups = groups or derive_groups(annotated, image_slices)
+    name_groups = derive_groups(annotated, image_slices)
     _, val_names = assign_train_val(annotated, val_split, name_groups)
 
     for image_name, annotations in all_annotations.items():
@@ -404,7 +404,7 @@ def _pose_export_check(all_annotations, class_mapping, keypoint_schemas):
     return k, (flip_idx or list(range(k)))
 
 
-def export_yolo_v5plus(all_annotations, class_mapping, image_paths, slices, image_slices, output_dir, val_split=0, keypoint_schemas=None, groups=None):
+def export_yolo_v5plus(all_annotations, class_mapping, image_paths, slices, image_slices, output_dir, val_split=0, keypoint_schemas=None):
     """
     Export annotations in YOLO v5+ format.
     Directory structure:
@@ -442,7 +442,7 @@ def export_yolo_v5plus(all_annotations, class_mapping, image_paths, slices, imag
         name for name, ann in all_annotations.items()
         if ann and _is_exportable(name, slice_index, image_paths)
     ]
-    name_groups = groups or derive_groups(annotated, image_slices)
+    name_groups = derive_groups(annotated, image_slices)
     _, val_names = assign_train_val(annotated, val_split, name_groups)
 
     logger.debug(f"export: {len(all_annotations)} image entries, "

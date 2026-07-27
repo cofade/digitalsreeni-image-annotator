@@ -534,22 +534,30 @@ Each slice: 512×512 pixels
 
 ### Slice Naming Convention
 
+The authority is `SliceProvider._build_index` in `core/slice_cache.py`. Two details are
+load-bearing and were documented backwards until #81 — the base is **ext-stripped** and the
+indices are **1-based**:
+
 ```python
-def generate_slice_name(filename, t, z, c, s):
-    parts = []
-    if t is not None:
-        parts.append(f"T{t}")
-    if z is not None:
-        parts.append(f"Z{z}")
-    if c is not None:
-        parts.append(f"C{c}")
-    if s is not None:
-        parts.append(f"S{s}")
+# core/slice_cache.py, paraphrased
+slice_name = f"{base}_" + "_".join(f"{dims[i]}{val + 1}" for ...)
 
-    return f"{filename}_{'_'.join(parts)}"
-
-# Example: "stack.tif_T0_Z5_C0"
+# base = os.path.splitext(os.path.basename(path))[0]   -> "stack", not "stack.tif"
+# val + 1                                              -> Z1, not Z0
+#
+# Example: "stack_T1_Z5_C1"
+# Video frames: "clip_F00042"  (core/video_handler.frame_key, ADR-037)
 ```
+
+**The absence of a dot is the discriminator.** A slice name has no extension; a regular image
+name keeps one. Three places rely on that to tell them apart: both YOLO exporters
+(`'_' in name and '.' not in name`), `io/export_formats._is_exportable`, and
+`core/dataset_split._slice_base`, which derives the group a slice belongs to for the train/val
+split (ADR-044). `add_images_to_list` enforces the ext-stripping so `video.mp4` and `video.tif`
+cannot clobber each other's slices.
+
+Writing `stack.tif_T0_Z5_C0` into a fixture therefore produces a name the grouping treats as an
+ordinary image — which is not a bug in the grouping.
 
 ## The Shortcut Registry and Its Gates (issue #65, ADR-043)
 

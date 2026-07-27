@@ -9,6 +9,24 @@ weights, no worker thread.
 import pytest
 
 
+def _two_recordings(per_clip=4):
+    """Real ``SampleGroup``s from two recordings.
+
+    These used to be bare ``object()``s on the grounds that the content failed
+    before use. Since #81 the split warning inspects the groups' names on the
+    way in, so the fixture has to be the shape production actually passes — and
+    two recordings mean a healthy split, so no warning interrupts the paths
+    these tests are about.
+    """
+    from digitalsreeni_image_annotator.training.sam_trainer import SampleGroup
+
+    return [
+        SampleGroup(lambda: None, [{"bbox": [0, 0, 1, 1]}], name=f"{base}_F{i:05d}")
+        for base in ("clipA", "clipB")
+        for i in range(per_clip)
+    ]
+
+
 @pytest.fixture
 def window(qt_application):
     from digitalsreeni_image_annotator.annotator_window import ImageAnnotator
@@ -131,7 +149,7 @@ def test_launch_unlocks_ui_when_setup_raises(window, monkeypatch):
     monkeypatch.setattr(mod, "SAMFineTuner", Boom)
     monkeypatch.setattr(QMessageBox, "critical", staticmethod(lambda *a, **k: None))
 
-    c._launch([object()])  # group content irrelevant — fails before use
+    c._launch(_two_recordings())
 
     assert window.sam_box_button.isEnabled()
     assert window.sam_points_button.isEnabled()
@@ -182,7 +200,7 @@ def test_launch_always_wires_a_real_mlflow_tracker(window, monkeypatch):
 
     monkeypatch.setattr(mod, "SAMTrainingThread", FakeThread)
 
-    c._launch([object()])
+    c._launch(_two_recordings())
 
     tracker = captured["cfg"]["tracker"]
     assert isinstance(tracker, MLflowTracker)  # real tracker, never None/_NullTracker

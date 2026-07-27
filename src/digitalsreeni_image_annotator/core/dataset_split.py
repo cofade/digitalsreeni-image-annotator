@@ -30,7 +30,7 @@ from __future__ import annotations
 
 import hashlib
 import re
-from typing import Any, Iterable, Mapping, Sequence
+from typing import Any, Iterable, Mapping
 
 # A slice name is the ext-stripped base plus one `<DimLetter><1-based index>`
 # component per non-spatial dimension (`SliceProvider._build_index`), or
@@ -99,42 +99,6 @@ def derive_groups(
     for name in names:
         groups[name] = exact.get(name) or _slice_base(name) or name
     return groups
-
-
-def merge_groups(
-    groups: Mapping[str, str], clusters: Iterable[Sequence[str]] | None
-) -> dict[str, str]:
-    """Fold near-duplicate ``clusters`` into an existing grouping.
-
-    Union-find over the *group keys*, so the two sources compose transitively:
-    if names ``a`` and ``b`` already share a stack and a cluster links ``b`` to
-    ``c``, all three end up in one group. A cluster member that is not in
-    ``groups`` (an image with no annotations, say) still bridges the groups on
-    either side of it, which is the behaviour that makes the refinement worth
-    anything.
-    """
-    parent: dict[str, str] = {}
-
-    def find(key: str) -> str:
-        parent.setdefault(key, key)
-        while parent[key] != key:
-            parent[key] = parent[parent[key]]
-            key = parent[key]
-        return key
-
-    def union(a: str, b: str) -> None:
-        root_a, root_b = find(a), find(b)
-        if root_a != root_b:
-            parent[root_b] = root_a
-
-    for key in groups.values():
-        find(key)
-    for cluster in clusters or []:
-        keys = [groups.get(name, name) for name in cluster]
-        for key in keys[1:]:
-            union(keys[0], key)
-
-    return {name: find(key) for name, key in groups.items()}
 
 
 def _split_by_group(
@@ -298,7 +262,7 @@ def plan_split(
     return (*_split_by_group(ordered_names, groups, val_count), False)
 
 
-def split_warning(names, val_pct, image_slices=None):
+def split_warning(names, val_pct, image_slices=None, groups=None):
     """What is wrong with the split about to happen, or ``None``.
 
     Lives here, not on the controller, because the CLI is a first-class path
@@ -312,12 +276,18 @@ def split_warning(names, val_pct, image_slices=None):
     * the split leaves **training** with a single group. That is optimal by the
       image count the split aims at and useless as a dataset, and it is silent
       otherwise, because the grouping technically succeeded.
+
+    ``groups`` overrides the derivation for callers that already know their own
+    grouping — the SAM path keys by ``"{index}:{name}"``, and rebuilding an
+    approximation of that here would preview a different split than the one
+    that runs.
     """
     if val_pct <= 0:
         return None
 
     names = list(names)
-    groups = derive_groups(names, image_slices)
+    if groups is None:
+        groups = derive_groups(names, image_slices)
     train, _val, fell_back = plan_split(names, val_pct, groups)
 
     if fell_back:

@@ -419,9 +419,14 @@ segmentation-only output (issue #35 PR-3).
 
 **Slice Naming Convention**:
 ```
-{filename}_T{t}_Z{z}_C{c}_S{s}
-Example: stack.tif_T0_Z5_C0_S0
+{ext-stripped base}_T{t+1}_Z{z+1}_C{c+1}_S{s+1}
+Example: stack_T1_Z5_C1_S1     (from stack.tif — no extension, 1-based)
+Video:   clip_F00042           (core/video_handler.frame_key)
 ```
+
+The missing extension is what distinguishes a slice name from an image name across the
+exporters and `core/dataset_split` (ADR-044) — see
+[Slice Naming Convention](08_crosscutting_concepts.md#slice-naming-convention).
 
 **Dimension Labels**: T (Time), Z (Depth), C (Channel), S (Scene), H (Height), W (Width)
 

@@ -1,4 +1,4 @@
-"""The split warning's four call sites (issue #81, ADR-044).
+"""The split warning's three call sites (issue #81, ADR-044).
 
 ``split_warning`` itself is pure text and tested in ``test_dataset_split.py``.
 This file covers the part that decides whether anyone ever sees it — which is

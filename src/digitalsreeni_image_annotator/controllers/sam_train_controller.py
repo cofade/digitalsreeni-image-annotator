@@ -178,29 +178,22 @@ class SAMTrainController(QObject):
         # here: the SAM val loss drives early stopping, so a val set sharing a
         # recording with train does not merely report an optimistic number, it
         # changes when the run stops. Worth being able to back out of.
+        from ..training.sam_dataset import split_keys
         from .io_controller import confirm_split_warning
 
+        # The exact keys and grouping `split_groups` will use, not a rebuilt
+        # approximation of them: two groups can share a name, and a bare name
+        # list collapses those before the split sees them.
+        keyed, keyed_groups = split_keys(groups)
         if not confirm_split_warning(
             self.mw,
-            # getattr, not `.name`: this is a warning, and a warning must not
-            # be able to abort a training launch over the shape of its input.
-            # The fallback is byte-identical to what `split_groups` keys an
-            # unnamed group with, so the preview and the split agree rather
-            # than merely looking like they do.
-            [
-                getattr(group, "name", "") or f"{index}:"
-                for index, group in enumerate(groups)
-            ],
-            # No image_slices, deliberately: `split_groups` derives the
-            # grouping from names alone on the worker thread, so passing the
-            # exact mapping here would preview a different split than the one
-            # that runs — and for "train from folder" it would describe
-            # whatever project happens to be open.
+            list(keyed),
             None,
             # Hard key, like `run_yolo`'s `config["val_split"]`: a soft default
             # would silently set 0% and switch the warning off for good if the
             # dialog's key were ever renamed.
             100 - cfg["train_pct"],
+            groups=keyed_groups,
         ):
             return
 

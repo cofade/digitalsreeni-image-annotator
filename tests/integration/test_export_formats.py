@@ -142,6 +142,23 @@ def test_v4_headless_export_never_empties_the_train_directory(temp_output_dir):
     assert len(val) == 4
 
 
+def test_a_slice_name_shadowed_by_a_substring_match_is_still_excluded(
+    temp_output_dir,
+):
+    """`_is_exportable`'s "looks like a slice, nothing holds it" early return.
+
+    Without it the substring fallback below can match an unrelated key —
+    `stack_T1_Z1` is a substring of `stack_T1_Z1_mask.png` — and the name would
+    pass the filter, consume a slot in the split budget, and then be skipped by
+    the export loop anyway, which is the exact accounting error the filter
+    exists to prevent.
+    """
+    from src.digitalsreeni_image_annotator.io.export_formats import _is_exportable
+
+    image_paths = {"stack_T1_Z1_mask.png": "/nowhere/stack_T1_Z1_mask.png"}
+    assert not _is_exportable("stack_T1_Z1", {}, image_paths)
+
+
 def test_the_split_preview_lists_exactly_what_the_export_writes(temp_output_dir):
     """`_is_exportable` is a second implementation of the export loop's
     resolution order, kept in step by a docstring. This asserts they agree, so
@@ -181,11 +198,15 @@ def test_the_split_preview_lists_exactly_what_the_export_writes(temp_output_dir)
         output_dir=out_dir, val_split=0,
     )
 
-    written = {
-        os.path.splitext(f)[0]
-        for f in os.listdir(os.path.join(out_dir, "images", "train"))
+    written = set(os.listdir(os.path.join(out_dir, "images", "train")))
+    # A slice is written as `<name>.png`; a regular image keeps its own file
+    # name. Stripping both sides would hide an extension mismatch and collide
+    # `x.png` with `x.jpg`, so the expectation is built the way the loop
+    # writes it.
+    expected = {
+        name if "." in name else f"{name}.png" for name in previewed
     }
-    assert {os.path.splitext(name)[0] for name in previewed} == written
+    assert expected == written
 
 
 def test_headless_export_never_empties_the_train_directory(temp_output_dir):

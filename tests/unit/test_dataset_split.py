@@ -17,7 +17,6 @@ from src.digitalsreeni_image_annotator.core import dataset_split
 from src.digitalsreeni_image_annotator.core.dataset_split import (
     assign_train_val,
     derive_groups,
-    merge_groups,
     plan_split,
 )
 
@@ -118,32 +117,6 @@ def test_an_exact_mapping_beats_the_name_heuristic():
     assert groups["run_T1_Z1"] == groups["run_T1_Z2"] == "run_T1"
 
 
-# --- folding in near-duplicate clusters ------------------------------------
-
-
-def test_merge_groups_is_transitive():
-    """Names already sharing a stack plus a cluster linking one of them to a
-    third name must all end up together, or the refinement reintroduces the
-    very straddle it was meant to close."""
-    groups = {"a_Z1": "a", "a_Z2": "a", "loose.png": "loose.png"}
-    merged = merge_groups(groups, [["a_Z2", "loose.png"]])
-    assert len({merged["a_Z1"], merged["a_Z2"], merged["loose.png"]}) == 1
-
-
-def test_a_cluster_member_outside_the_grouping_still_bridges():
-    """An unannotated image is not in the split, but it is evidence that the
-    two images it resembles are near-duplicates of each other."""
-    groups = {"left.png": "left.png", "right.png": "right.png"}
-    merged = merge_groups(groups, [["left.png", "unannotated.png", "right.png"]])
-    assert merged["left.png"] == merged["right.png"]
-
-
-def test_merging_no_clusters_changes_nothing():
-    groups = {"a.png": "a.png", "b.png": "b.png"}
-    assert merge_groups(groups, []) == groups
-    assert merge_groups(groups, None) == groups
-
-
 # --- the split itself ------------------------------------------------------
 
 
@@ -195,6 +168,30 @@ def test_neither_side_is_ever_empty_even_with_lopsided_groups():
     assert train | val == set(names)
 
 
+def test_a_very_high_percentage_still_leaves_something_to_train_on():
+    """The bound that stops the hill-climb draining train had no test at all:
+    relaxing it from `<` to `<=` left all 1428 other tests green and produced
+    `train=0, val=10`. That is the same empty-training-set failure this change
+    already shipped once, so it gets its own case at the percentage that
+    reaches it.
+
+    Above 50% is reachable in the app: the export prompt accepts 0-100 and the
+    SAM dialog blocks only 0% train.
+    """
+    names, groups = [], {}
+    for key, size in (("g0", 3), ("g1", 7)):
+        for member in range(size):
+            name = f"{key}_m{member}"
+            names.append(name)
+            groups[name] = key
+
+    for val_pct in (60, 75, 90, 100):
+        train, val, _ = plan_split(names, val_pct, groups)
+        assert train, f"train emptied at {val_pct}%"
+        assert val, f"val emptied at {val_pct}%"
+        assert train | val == set(names)
+
+
 def test_the_group_split_is_deterministic():
     names = _frames("clipA", 10) + _frames("clipB", 10) + ["x.png", "y.png"]
     groups = derive_groups(names)
@@ -227,8 +224,14 @@ def test_the_split_covers_and_partitions_every_name():
 
 
 def test_slice_base_leaves_a_dotted_name_alone():
-    """Guards the one heuristic in the module against widening."""
+    """Guards the one heuristic in the module against widening.
+
+    ``photo.raw_T1`` is the case that actually pins the dot check: the others
+    are refused by the end-anchored regex on their own, so without this line
+    deleting the guard entirely left the whole suite green.
+    """
     assert dataset_split._slice_base("photo_T1.png") is None
+    assert dataset_split._slice_base("photo.raw_T1") is None
     assert dataset_split._slice_base("stack_T1_Z2") == "stack"
     assert dataset_split._slice_base("plain_name") is None
 
@@ -303,7 +306,9 @@ def test_the_split_size_is_locally_optimal():
                 name = f"g{index}_m{member}"
                 names.append(name)
                 groups[name] = f"g{index}"
-        val_pct = rng.choice([10, 20, 25, 30, 50])
+        # Past 50 too: the non-empty-side bounds are only approached up there,
+        # and the app lets the user go to 100.
+        val_pct = rng.choice([10, 20, 25, 30, 50, 60, 75, 90])
         target = _val_count(len(names), val_pct)
 
         train, val, _ = plan_split(names, val_pct, groups)
@@ -362,7 +367,7 @@ def test_every_group_stays_whole_across_randomised_projects():
                 name = f"g{index}_m{member}"
                 names.append(name)
                 groups[name] = f"g{index}"
-        train, val, _ = plan_split(names, rng.choice([10, 20, 40]), groups)
+        train, val, _ = plan_split(names, rng.choice([10, 20, 40, 70, 95]), groups)
         assert train and val
         assert train.isdisjoint(val)
         assert train | val == set(names)

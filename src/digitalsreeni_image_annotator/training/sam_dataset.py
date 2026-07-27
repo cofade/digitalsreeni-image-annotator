@@ -148,28 +148,42 @@ def split_groups(groups, train_pct):
     ``derive_groups`` falls back to its name-prefix rule — which covers every
     name the app itself produces.
     """
-    from ..core.dataset_split import derive_groups
     from ..io.export_formats import assign_train_val
 
     groups = list(groups)
     if train_pct >= 100 or len(groups) < 2:
         return groups, []
 
-    keyed = {f"{i}:{g.name}": g for i, g in enumerate(groups)}
-    name_groups = derive_groups([g.name for g in groups])
-    keyed_groups = {}
-    for key, group in keyed.items():
-        # An unnamed group falls back to its own unique key: collapsing every
-        # `name=""` group into one bucket is exactly what the indexed key
-        # exists to prevent.
-        if group.name:
-            keyed_groups[key] = name_groups.get(group.name) or key
-        else:
-            keyed_groups[key] = key
-
+    keyed, keyed_groups = split_keys(groups)
     _train_keys, val_keys = assign_train_val(
         keyed.keys(), 100 - train_pct, keyed_groups
     )
     train = [g for k, g in keyed.items() if k not in val_keys]
     val = [g for k, g in keyed.items() if k in val_keys]
     return train, val
+
+
+def split_keys(groups):
+    """``({split key: group}, {split key: source group})`` for ``groups``.
+
+    Factored out so the warning shown before a run previews **this** mapping
+    rather than rebuilding an approximation of it. Passing the bare
+    ``[g.name for g in groups]`` looked equivalent and was not: two groups can
+    share a name (a prepared folder holding `a.png` and `a.jpg` ext-strips both
+    to `a`), and a list of duplicates collapses to one entry before the split
+    sees it — so the preview reported a healthy split while the real one
+    degenerated and fell back. Same divergence class as the export preview,
+    one layer down.
+    """
+    from ..core.dataset_split import derive_groups
+
+    keyed = {f"{index}:{group.name}": group for index, group in enumerate(groups)}
+    name_groups = derive_groups([group.name for group in groups])
+
+    keyed_groups = {}
+    for key, group in keyed.items():
+        # An unnamed group falls back to its own unique key: collapsing every
+        # `name=""` group into one bucket is exactly what the indexed key
+        # exists to prevent.
+        keyed_groups[key] = (name_groups.get(group.name) or key) if group.name else key
+    return keyed, keyed_groups

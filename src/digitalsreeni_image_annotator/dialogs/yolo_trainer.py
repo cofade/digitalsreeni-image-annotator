@@ -31,6 +31,32 @@ YOLO_MODELS_DIR = os.path.join(models_base_dir(), "yolo")
 YOLO_CUSTOM_DIR = os.path.join(YOLO_MODELS_DIR, "custom")
 
 
+def _schema_from_yaml(data):
+    """Keypoint schema from a model yaml / sidecar mapping, or ``None``.
+
+    The rich hand-authored schema when one was carried across, else the generic
+    ``kp0..kpK-1`` reconstruction from a bare ``kpt_shape``, else nothing.
+
+    Extracted so a model trained in this session and the same model loaded back
+    from disk resolve to the same schema. They did not: only the load path built
+    one, so a freshly trained pose model was left with ``None`` and every pose
+    the user then placed on its class was silently dropped.
+    """
+    data = data or {}
+    full = data.get("keypoint_schema")
+    if full:
+        return sanitize_schema(full)
+    kpt_shape = data.get("kpt_shape")
+    if kpt_shape:
+        k = int(kpt_shape[0])
+        return sanitize_schema({
+            "names": [f"kp{i}" for i in range(k)],
+            "skeleton": [],
+            "flip_idx": data.get("flip_idx"),
+        })
+    return None
+
+
 def _sanitize_run_name(name):
     """Filesystem-safe run name; falls back to ``model`` when empty."""
     safe = "".join(c if c.isalnum() or c in "-_" else "_" for c in str(name)).strip("_")
@@ -298,6 +324,14 @@ class YOLOTrainer(QObject):
             try:
                 self.model = YOLO(model_path)
                 self.loaded_model_path = model_path
+                # Drop the previous model's prediction state. These are only
+                # ever populated by load_prediction_model and by a finished
+                # training run, while self.model is written by three paths --
+                # so without this, loading a different checkpoint leaves the
+                # last run's names attached to it, and predictions come back
+                # confidently labelled with the wrong classes.
+                self.class_names = None
+                self.prediction_keypoint_schema = None
                 return True
             except Exception as e:
                 QMessageBox.critical(self.main_window, "Error Loading Model", f"Could not load the model. Error: {str(e)}")
@@ -610,9 +644,18 @@ class YOLOTrainer(QObject):
                     if kpt_shape:
                         yaml_out_data['kpt_shape'] = kpt_shape
                         yaml_out_data['flip_idx'] = train_yaml.get('flip_idx')
-                        schemas = [self.main_window.keypoint_schemas.get(n) for n in names.values()]
+                        known = getattr(self.main_window, "keypoint_schemas", None) or {}
+                        schemas = [known.get(n) for n in names.values()]
                         if schemas and all(s is not None for s in schemas) and all(s == schemas[0] for s in schemas):
                             yaml_out_data['keypoint_schema'] = schemas[0]
+                    # Same reason as class_names above, and a worse failure if
+                    # missed: the model is the active prediction model with no
+                    # load step, so a schema that stays None means
+                    # process_yolo_results seeds no keypoint_schemas entry, the
+                    # accept path carries none over, and finish_keypoint then
+                    # SILENTLY DISCARDS every pose the user places on that
+                    # class. A crash would have been kinder.
+                    self.prediction_keypoint_schema = _schema_from_yaml(yaml_out_data)
             except Exception:
                 logger.exception("Could not carry pose metadata into registered model yaml")
             yaml_out = best.parent.parent / "data.yaml"
@@ -839,9 +882,11 @@ class YOLOTrainer(QObject):
         mismatch: the one explanation that was certainly wrong, since there was
         no YAML in play at all.
 
-        Raises ``IndexError`` for an unknown index -- including for the dict
-        form, whose native ``KeyError`` the callers do not catch -- because a
-        genuine class mismatch is what they already report on.
+        Raises ``IndexError`` for an unknown index, including for the dict
+        form whose native error is a ``KeyError``. Both callers wrap the whole
+        loop in ``except Exception``, so a KeyError was never going to escape --
+        but they catch ``IndexError`` *specifically* to report a class mismatch,
+        and that is the accurate message for this failure.
         """
         names = self.class_names or getattr(self.model, "names", None)
         if not names:

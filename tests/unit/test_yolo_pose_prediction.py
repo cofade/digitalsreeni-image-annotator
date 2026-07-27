@@ -17,6 +17,7 @@ from PyQt6.QtCore import QObject
 from src.digitalsreeni_image_annotator.controllers.yolo_controller import (
     YOLOController,
 )
+from src.digitalsreeni_image_annotator.dialogs.yolo_trainer import YOLOTrainer
 
 
 class _FakeTensor:
@@ -66,14 +67,10 @@ class _StubYoloTrainer:
         self.class_names = class_names
         self.prediction_keypoint_schema = prediction_keypoint_schema
 
-    def class_name_for(self, index):
-        names = self.class_names or getattr(self.model, "names", None)
-        if not names:
-            raise IndexError(f"no class names available (index {index})")
-        try:
-            return names[index]
-        except KeyError as exc:
-            raise IndexError(index) from exc
+    # The real accessor, not a copy of it: a stub reimplementation means the
+    # controller call sites are only ever exercised against a duplicate of the
+    # code under test.
+    class_name_for = YOLOTrainer.class_name_for
 
 
 class _StubMainWindow(QObject):

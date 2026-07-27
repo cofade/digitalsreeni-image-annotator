@@ -23,6 +23,7 @@ import pytest
 from PyQt6.QtCore import Qt
 from PyQt6.QtGui import QColor
 
+from digitalsreeni_image_annotator.dialogs.yolo_trainer import YOLOTrainer
 from digitalsreeni_image_annotator.io.export_formats import export_yolo_v5plus
 
 
@@ -221,8 +222,9 @@ class _FakeTrainer:
         result = _FakeResult(width, height) if self.with_mask else _FakeResult()
         return [result], (height, width), (height, width)
 
-    def class_name_for(self, index):
-        return self.class_names[index]
+    # The real accessor rather than a simplified stand-in, so the controller
+    # call sites are exercised against the code under test.
+    class_name_for = YOLOTrainer.class_name_for
 
 
 def test_predicting_on_a_video_frame_does_not_crash(video_window, monkeypatch):

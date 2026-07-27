@@ -802,12 +802,17 @@ class YOLOController(QObject):
             results = self.mw.yolo_trainer.predict(source)
             self.process_yolo_results(results, file_name, (width, height))
         except Exception as e:
+            # Deliberately no guess at the cause. This used to append "this
+            # might be a mismatch between the model and the YAML file classes",
+            # which since #74 is often impossible -- a model trained in-app is
+            # active with no YAML in the flow at all -- and it sent a user
+            # hunting for a nonexistent file while the real fault was elsewhere.
+            # A genuine class mismatch raises IndexError and is reported
+            # specifically, by name, further in.
             QMessageBox.warning(
                 self.mw,
                 "Prediction Error",
-                f"An error occurred during prediction: {str(e)}\n\n"
-                "This might be due to a mismatch between the model and the YAML file classes. "
-                "Please check that the YAML file corresponds to the loaded model.",
+                f"Prediction failed: {type(e).__name__}: {e}",
             )
 
     def process_yolo_results(self, results, image_name, image_size):
@@ -945,12 +950,17 @@ class YOLOController(QObject):
                         return
 
         except Exception as e:
+            # Deliberately no guess at the cause. This used to append "this
+            # might be a mismatch between the model and the YAML file classes",
+            # which since #74 is often impossible -- a model trained in-app is
+            # active with no YAML in the flow at all -- and it sent a user
+            # hunting for a nonexistent file while the real fault was elsewhere.
+            # A genuine class mismatch raises IndexError and is reported
+            # specifically, by name, further in.
             QMessageBox.warning(
                 self.mw,
                 "Prediction Error",
-                f"An error occurred during prediction: {str(e)}\n\n"
-                "This might be due to a mismatch between the model and the YAML file classes. "
-                "Please check that the YAML file corresponds to the loaded model.",
+                f"Prediction failed: {type(e).__name__}: {e}",
             )
             return
 

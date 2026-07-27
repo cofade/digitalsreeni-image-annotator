@@ -335,7 +335,10 @@ class TrainDialog(QDialog):
         self.advanced_toggle.setArrowType(
             Qt.ArrowType.DownArrow if expanded else Qt.ArrowType.RightArrow
         )
-        self.advanced_box.setVisible(expanded)
+        # The is_yolo half matters: these are YOLO-only controls, and SAM mode
+        # hides them precisely so it cannot collect values it would discard.
+        # Without the guard, expanding while in SAM mode surfaces them again.
+        self.advanced_box.setVisible(expanded and self.training_type() == TYPE_YOLO)
         self.adjustSize()
 
     def _refresh_summary(self):
@@ -388,8 +391,6 @@ class TrainDialog(QDialog):
 
 
 def _wrap(layout):
-    from PyQt6.QtWidgets import QWidget
-
     widget = QWidget()
     widget.setLayout(layout)
     return widget

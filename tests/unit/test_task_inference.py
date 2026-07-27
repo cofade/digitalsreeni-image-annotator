@@ -359,7 +359,9 @@ def test_advanced_settings_apply_whether_or_not_they_are_expanded(dialog_factory
     dialog = dialog_factory(_project(cell=[_polygon()]), [{"file_name": "i.png"}])
 
     assert dialog.advanced_toggle.isChecked() is False
-    assert dialog.advanced_box.isVisible() is False
+    # isVisibleTo, not isVisible: the dialog is never shown headlessly, so
+    # isVisible() is False for everything and would assert nothing.
+    assert dialog.advanced_box.isVisibleTo(dialog) is False
     collapsed = dialog.get_config()
 
     dialog.advanced_toggle.setChecked(True)
@@ -432,6 +434,10 @@ def test_yolo_only_fields_hide_for_sam(dialog_factory):
     assert dialog.imgsz_spin.isVisibleTo(dialog) is False
     assert dialog.split_row_widget.isVisibleTo(dialog) is False
     assert dialog.base_row_widget.isVisibleTo(dialog) is False
+    assert dialog.advanced_box.isVisibleTo(dialog) is False
+    assert dialog.advanced_toggle.isVisibleTo(dialog) is False
+    # ...and expanding it in SAM mode must not surface YOLO-only controls.
+    dialog.advanced_toggle.setChecked(True)
     assert dialog.advanced_box.isVisibleTo(dialog) is False
 
 

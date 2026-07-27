@@ -1,14 +1,17 @@
-"""Class-name resolution for predictions (crash found in manual use).
+"""Prediction-time state on YOLOTrainer (crashes found in manual use).
 
-A model trained in-app is made the active prediction model with no separate
-load step -- but ``class_names`` was only ever populated by *loading* a model
-through its yaml, so straight after training it was still None. The first
-prediction then did ``class_names[class_id]`` and raised "'NoneType' object is
-not subscriptable", which the caller reported as a probable mismatch between
-the model and the YAML file classes: the one explanation that was certainly
-wrong, since no YAML was involved.
+``self.model`` has three producers -- ``load_model``, ``load_prediction_model``
+and a finished training run -- but ``class_names`` and
+``prediction_keypoint_schema`` were populated by only one of them. A model
+trained in-app is the active prediction model with no separate load step, so
+both were still None and the first prediction did ``class_names[class_id]``:
+"'NoneType' object is not subscriptable", reported as a probable mismatch
+between the model and the YAML file classes -- the one explanation that was
+certainly wrong, since no YAML was involved.
 
-The model always knows its own names. That is the fallback.
+Three rules, one per producer: the trained run sets them, a load replaces them,
+and ``class_name_for`` falls back to the model's own names, which are always
+there.
 """
 
 import pytest
@@ -52,3 +55,35 @@ def test_no_names_anywhere_raises_rather_than_returning_none():
     trainer = _trainer(class_names=None, model_names=None)
     with pytest.raises(IndexError):
         trainer.class_name_for(0)
+
+
+# --- loading a different model must not inherit the last one's state --------
+
+
+def test_load_model_drops_the_previous_models_prediction_state(tmp_path, monkeypatch):
+    """Train a run, then load some other checkpoint, then predict.
+
+    Before the fallback existed this sequence raised the loud NoneType error.
+    With it, a stale ``class_names`` would instead have the new model's class 0
+    confidently reported under the *old* run's name -- mislabelled temp
+    annotations the user can accept and export. Loading has to clear.
+    """
+    import ultralytics
+
+    trainer = YOLOTrainer.__new__(YOLOTrainer)
+    trainer.class_names = {0: "bee"}
+    trainer.prediction_keypoint_schema = {"names": ["a"], "skeleton": [], "flip_idx": [0]}
+    trainer.model = None
+    trainer.loaded_model_path = None
+
+    other = tmp_path / "other.pt"
+    other.write_bytes(b"fake")
+    monkeypatch.setattr(
+        ultralytics, "YOLO", lambda path: type("M", (), {"names": {0: "person"}})()
+    )
+
+    assert trainer.load_model(str(other)) is True
+
+    assert trainer.class_names is None
+    assert trainer.prediction_keypoint_schema is None
+    assert trainer.class_name_for(0) == "person", "inherited the old run's names"

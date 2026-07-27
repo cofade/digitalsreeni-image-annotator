@@ -366,60 +366,59 @@ def test_every_group_stays_whole_across_randomised_projects():
             assert members <= train or members <= val
 
 
-# --- the UI-facing warning -------------------------------------------------
+# --- the warning ------------------------------------------------------------
 #
-# `group_split_warning` is a pure text function; importing its module pulls in
-# Qt in-process, which the subprocess purity test above is immune to.
+# `split_warning` is pure text and lives in core, not on the controller, so the
+# CLI can emit the identical wording (ADR-044). These need no QApplication.
 
 
 def test_no_warning_when_the_grouping_works():
-    from src.digitalsreeni_image_annotator.controllers.io_controller import (
-        group_split_warning,
-    )
-
     names = _frames("clipA", 10) + _frames("clipB", 10)
-    assert group_split_warning(names, None, 20) is None
+    assert dataset_split.split_warning(names, 20) is None
 
 
 def test_no_warning_when_no_validation_set_was_asked_for():
-    from src.digitalsreeni_image_annotator.controllers.io_controller import (
-        group_split_warning,
-    )
-
-    assert group_split_warning(_frames("clip", 10), None, 0) is None
+    assert dataset_split.split_warning(_frames("clip", 10), 0) is None
 
 
-def test_a_single_recording_warns_that_the_metrics_are_optimistic():
-    from src.digitalsreeni_image_annotator.controllers.io_controller import (
-        group_split_warning,
-    )
-
-    message = group_split_warning(_frames("clip", 10), None, 20)
+def test_a_single_group_warns_that_the_metrics_are_optimistic():
+    message = dataset_split.split_warning(_frames("clip", 10), 20)
     assert message is not None
     assert "optimistic" in message
 
 
-def test_a_training_set_of_one_recording_is_reported():
+def test_a_training_set_of_one_group_is_reported():
     """Holding out a percentage by image count can route every small group to
-    validation when one group dominates — optimal by that count, useless as a
+    validation when one dominates — optimal by that count, useless as a
     dataset, and silent because the grouping technically worked."""
-    from src.digitalsreeni_image_annotator.controllers.io_controller import (
-        group_split_warning,
-    )
-
     names = _frames("clip", 200) + [f"p{i}.png" for i in range(20)]
-    message = group_split_warning(names, None, 20)
+    message = dataset_split.split_warning(names, 20)
     assert message is not None
-    assert "single recording" in message
+    assert "single group" in message
 
 
 def test_a_healthy_multi_recording_split_stays_quiet():
-    from src.digitalsreeni_image_annotator.controllers.io_controller import (
-        group_split_warning,
-    )
-
     names = _frames("a", 30) + _frames("b", 30) + _frames("c", 30) + _frames("d", 30)
-    assert group_split_warning(names, None, 25) is None
+    assert dataset_split.split_warning(names, 25) is None
+
+
+def test_the_warning_is_reachable_without_qt():
+    """It is the CLI's copy too, so it must not have followed the dialog into
+    a Qt-importing module — which is where it started out."""
+    code = (
+        "import sys;"
+        "sys.path.insert(0, 'src');"
+        "from digitalsreeni_image_annotator.core.dataset_split import split_warning;"
+        "assert split_warning(['c_F00001', 'c_F00002'], 20);"
+        "qt = [n for n in sys.modules if n.startswith('PyQt6')];"
+        "assert not qt, qt;"
+        "print('clean')"
+    )
+    result = subprocess.run(
+        [sys.executable, "-c", code], capture_output=True, text=True
+    )
+    assert result.returncode == 0, result.stderr
+    assert "clean" in result.stdout
 
 
 def test_the_preview_counts_only_what_the_export_will_write(tmp_path):

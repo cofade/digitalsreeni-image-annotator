@@ -252,6 +252,55 @@ def test_no_autosave_or_recovery_file_appears(project, tmp_path):
 # --- export ----------------------------------------------------------------
 
 
+def test_a_single_recording_export_says_the_metrics_will_be_optimistic(
+    tmp_path, capsys
+):
+    """ADR-044 treats the CLI as a first-class path for the split warning.
+
+    A project that is one recording cannot be split leak-free, and the CLI must
+    say so rather than writing a dataset whose validation numbers look good for
+    the wrong reason. The wording comes from `core.dataset_split.split_warning`,
+    the same source the GUI uses.
+    """
+    from PIL import Image
+
+    images_dir = tmp_path / "images"
+    images_dir.mkdir()
+    images, paths, rel = [], {}, {}
+    for index in range(6):
+        name = f"clip_F{index:05d}.png"
+        Image.new("RGB", (60, 60), (64, 64, 64)).save(images_dir / name)
+        paths[name] = str(images_dir / name)
+        rel[name] = os.path.join("images", name)
+        images.append({
+            "file_name": name, "width": 60, "height": 60, "id": index + 1,
+            "is_multi_slice": False,
+            "annotations": {"cell": [_square(5, 5, 20)]},
+        })
+
+    project_path = tmp_path / "clip.iap"
+    project_path.write_text(json.dumps({
+        "classes": [{"name": "cell", "id": 1, "color": "#1F77B4"}],
+        "images": images,
+        "image_paths": paths,
+        "image_paths_rel": rel,
+    }), encoding="utf-8")
+
+    assert main([
+        "export", "--project", str(project_path), "--format", "yolov5",
+        "--out", str(tmp_path / "out"), "--val-split", "20",
+    ]) == EXIT_OK
+    assert "optimistic" in capsys.readouterr().err
+
+
+def test_a_healthy_export_says_nothing_about_the_split(project, tmp_path, capsys):
+    main([
+        "export", "--project", str(project), "--format", "yolov5",
+        "--out", str(tmp_path / "out"), "--val-split", "20",
+    ])
+    assert "optimistic" not in capsys.readouterr().err
+
+
 def test_export_writes_coco(project, tmp_path):
     out = tmp_path / "coco_out"
     assert main([

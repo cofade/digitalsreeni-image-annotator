@@ -29,6 +29,7 @@ from ..io.export_formats import (
 )
 from ..io.import_formats import import_coco_json, process_import_format
 
+from ..core.dataset_split import split_warning
 from ..core.logging_config import get_logger
 
 logger = get_logger(__name__)
@@ -46,62 +47,29 @@ def annotated_image_names(mw):
     )
 
 
-def group_split_warning(names, image_slices, val_pct):
-    """Warning text when a leak-free split is impossible, else ``None``.
+def confirm_split_warning(parent, names, image_slices, val_pct):
+    """Show what is wrong with the split, if anything. ``False`` to back out.
 
-    Separated from the dialog so the wording is testable without a QApplication.
-    See ADR-044: when every annotated image belongs to one group — a project
-    that is a single video, typically — the split falls back to the per-name
-    one, and the honest thing is to say so rather than report a validation
-    number the data cannot support.
+    The wording lives in ``core.dataset_split.split_warning`` so the CLI emits
+    the identical text; this is the QMessageBox shell around it.
+
+    Offers **Cancel**, and callers honour it. A warning saying the validation
+    numbers cannot be trusted, with only an OK button, trains exactly the
+    click-through reflex it exists to prevent — and on the SAM path the user is
+    being told that the val loss driving early stopping is meaningless, which
+    is worth being able to act on before a GPU run starts.
     """
-    if val_pct <= 0:
-        return None
-    from ..core.dataset_split import derive_groups, plan_split
-
-    names = list(names)
-    groups = derive_groups(names, image_slices)
-    train, val, fell_back = plan_split(names, val_pct, groups)
-
-    if fell_back:
-        return (
-            "Every annotated image here belongs to the same recording, so no "
-            "validation set can be held out without sharing frames with "
-            "training.\n\n"
-            "The split was made per image instead. Near-identical frames land "
-            "on both sides, so the validation metrics this run reports will be "
-            "optimistic — read them as a training-progress signal, not as an "
-            "estimate of performance on new data.\n\n"
-            "Add images from a second recording for a validation set that "
-            "measures something."
-        )
-
-    # A group is indivisible, so holding out a percentage *by image count* can
-    # route every small group to validation and leave training with nothing but
-    # the one dominant recording. That is optimal by the count the split aims
-    # at and useless as a dataset, and it is silent because the grouping
-    # technically worked.
-    total_groups = len({groups.get(name, name) for name in names})
-    train_groups = {groups.get(name, name) for name in train}
-    if total_groups > 2 and len(train_groups) == 1:
-        return (
-            "This split leaves the training set with a single recording, and "
-            "puts every other image into validation.\n\n"
-            "One group holds far more images than the rest, so holding out "
-            f"{val_pct}% by image count consumed all the smaller ones. The "
-            "model would train on one recording and be validated entirely on "
-            "images unlike it.\n\n"
-            "A smaller validation percentage, or more annotations outside the "
-            "dominant recording, would give a split worth measuring."
-        )
-    return None
-
-
-def warn_if_group_split_impossible(parent, names, image_slices, val_pct):
-    """Show :func:`group_split_warning` if there is one. No-op otherwise."""
-    message = group_split_warning(names, image_slices, val_pct)
-    if message:
-        QMessageBox.warning(parent, "Validation Split", message)
+    message = split_warning(names, val_pct, image_slices)
+    if not message:
+        return True
+    choice = QMessageBox.warning(
+        parent,
+        "Validation Split",
+        message,
+        QMessageBox.StandardButton.Ok | QMessageBox.StandardButton.Cancel,
+        QMessageBox.StandardButton.Cancel,
+    )
+    return choice == QMessageBox.StandardButton.Ok
 
 
 def prompt_validation_split(parent, names=None, image_slices=None):
@@ -111,19 +79,25 @@ def prompt_validation_split(parent, names=None, image_slices=None):
     menu export and the in-app YOLO trainer can't drift apart. ``0`` keeps the
     historical all-in-train layout.
 
-    Pass ``names``/``image_slices`` to have the degenerate-grouping case
-    reported straight after the choice (ADR-044); omitting them keeps the plain
-    prompt for callers that have no project state to check.
+    Pass ``names``/``image_slices`` to have a problem with the resulting split
+    reported straight after the choice (ADR-044). Declining that warning
+    returns to this dialog rather than proceeding, so the advice it gives is
+    actionable; omitting the arguments keeps the plain prompt for callers with
+    no project state to check.
     """
-    val_split, ok = QInputDialog.getInt(
-        parent,
-        "Validation Split",
-        "Percent of images for the validation set (0 = all in train):",
-        20, 0, 100, 5,
-    )
-    if ok and names is not None:
-        warn_if_group_split_impossible(parent, names, image_slices, val_split)
-    return val_split, ok
+    while True:
+        val_split, ok = QInputDialog.getInt(
+            parent,
+            "Validation Split",
+            "Percent of images for the validation set (0 = all in train):",
+            20, 0, 100, 5,
+        )
+        if not ok:
+            return val_split, False
+        if names is None or confirm_split_warning(
+            parent, names, image_slices, val_split
+        ):
+            return val_split, True
 
 
 def _rebuild_imported_annotation(ann, category_name, number):

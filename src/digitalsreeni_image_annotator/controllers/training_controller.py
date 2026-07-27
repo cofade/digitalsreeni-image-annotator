@@ -74,17 +74,19 @@ class TrainingController(QObject):
             return
 
         # This dialog carries its own split slider, so it never passes through
-        # `prompt_validation_split` — the degenerate-grouping warning has to be
-        # raised here too, or the app's main training path is the one place it
-        # is missing (ADR-044).
-        from .io_controller import annotated_image_names, warn_if_group_split_impossible
+        # `prompt_validation_split` — the split warning has to be raised here
+        # too, or the app's main training path is the one place it is missing
+        # (ADR-044). Declining it abandons the run: the user has just been told
+        # the validation numbers cannot be trusted.
+        from .io_controller import annotated_image_names, confirm_split_warning
 
-        warn_if_group_split_impossible(
+        if not confirm_split_warning(
             self.mw,
             annotated_image_names(self.mw),
             self.mw.image_slices,
             config["val_split"],
-        )
+        ):
+            return
 
         try:
             yaml_path = trainer.prepare_dataset(config["val_split"])

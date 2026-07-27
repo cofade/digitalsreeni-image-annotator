@@ -774,7 +774,10 @@ User: SAM Fine-Tune (beta) > Train on Current Project…
     │       trainer loads its OWN SAM instance; locking avoids a 2nd model on the same CUDA context
     │
     └─> SAMTrainingThread → SAMFineTuner.train(...)
-            │  split_groups(train_pct, seed) → train/val (deterministic; empty val at 100%)
+            │  split_groups(train_pct) → train/val, keyed by SOURCE not by image
+            │    (ADR-044: a recording's frames never straddle the split, or the
+            │     val loss driving early stopping is measured on near-copies of
+            │     trained frames); deterministic; empty val at 100%
             │  build predictor (one warmup predict), pin device, apply freeze policy
             │  LambdaLR(warmup_cosine_lambda(total_steps)) when the schedule is on
             │  for each epoch:

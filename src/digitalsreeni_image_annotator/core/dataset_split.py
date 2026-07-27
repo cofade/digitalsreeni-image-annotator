@@ -175,6 +175,11 @@ def _split_by_group(
     ordered = sorted(
         members, key=lambda key: hashlib.md5(key.encode("utf-8")).hexdigest()
     )
+    if len(ordered) < 2:
+        # Callers route this to the ungrouped path; returning an empty val set
+        # here is the one outcome the whole design says must not happen
+        # quietly, so it is refused rather than left to a future caller.
+        raise ValueError("a group split needs at least two groups")
 
     chosen: list[str] = []
     held_out = 0
@@ -238,13 +243,16 @@ def _split_by_group(
 
         if not moves:
             break
-        distance, _kind, add_key, drop_key = min(moves)
+        distance, kind, add_key, drop_key = min(moves)
         if distance >= _distance(held_out):
             break
-        if add_key:
+        # Dispatch on the move kind, not on key truthiness: a group key that
+        # happened to be the empty string would apply nothing, leave the
+        # distance unchanged, and be re-selected forever.
+        if kind in ("add", "swap"):
             selected.add(add_key)
             held_out += len(members[add_key])
-        if drop_key:
+        if kind in ("drop", "swap"):
             selected.discard(drop_key)
             held_out -= len(members[drop_key])
 
@@ -270,7 +278,10 @@ def plan_split(
     """
     ordered_names = list(names)
     total = len(ordered_names)
-    if val_pct <= 0 or total < 2:
+    # Distinct, not raw length: a duplicated name is one thing to place, and
+    # two copies of it cannot be split. Guarding here is what makes the
+    # two-group precondition in `_split_by_group` unreachable.
+    if val_pct <= 0 or len(set(ordered_names)) < 2:
         return set(ordered_names), set(), False
 
     # Nearest integer, clamped so neither side is ever empty. round() is
@@ -285,6 +296,57 @@ def plan_split(
         return (*_split_by_group(ordered_names, {}, val_count), True)
 
     return (*_split_by_group(ordered_names, groups, val_count), False)
+
+
+def split_warning(names, val_pct, image_slices=None):
+    """What is wrong with the split about to happen, or ``None``.
+
+    Lives here, not on the controller, because the CLI is a first-class path
+    for this (ADR-044) and cannot import a module that pulls in Qt. Putting the
+    wording next to the dialog meant the CLI hand-rolled a subset of it — the
+    same duplication that let the preview and the export drift apart.
+
+    Two conditions are worth telling someone about:
+
+    * the grouping degenerates to one group, so no leak-free split exists;
+    * the split leaves **training** with a single group. That is optimal by the
+      image count the split aims at and useless as a dataset, and it is silent
+      otherwise, because the grouping technically succeeded.
+    """
+    if val_pct <= 0:
+        return None
+
+    names = list(names)
+    groups = derive_groups(names, image_slices)
+    train, _val, fell_back = plan_split(names, val_pct, groups)
+
+    if fell_back:
+        return (
+            "Every annotated image here falls into one group — one recording, "
+            "or one set of similarly-named files — so no validation set can be "
+            "held out without sharing near-identical images with training.\n\n"
+            "The split was made per image instead. Near-identical images land "
+            "on both sides, so the validation metrics this run reports will be "
+            "optimistic: read them as a training-progress signal, not as an "
+            "estimate of performance on new data.\n\n"
+            "Data from a second recording would give a validation set that "
+            "measures something."
+        )
+
+    total_groups = len({groups.get(name, name) for name in names})
+    train_groups = {groups.get(name, name) for name in train}
+    if total_groups > 2 and len(train_groups) == 1:
+        return (
+            "This split leaves the training set with a single group and puts "
+            "every other image into validation.\n\n"
+            f"Groups are held out whole, so asking for {val_pct}% by image "
+            "count consumed all of them but one. The model would train on one "
+            "recording and be validated entirely on images unlike it — the "
+            "mirror image of the problem the grouping exists to prevent.\n\n"
+            "A different validation percentage, or more annotations outside "
+            "the largest group, would give a split worth measuring."
+        )
+    return None
 
 
 def assign_train_val(

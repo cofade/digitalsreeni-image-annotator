@@ -123,7 +123,7 @@ def build_groups_from_folder(folder: str):
 # ── train/val split ──────────────────────────────────────────────────────────
 
 def split_groups(groups, train_pct):
-    """Partition ``groups`` into ``(train, val)`` deterministically by image.
+    """Partition ``groups`` into ``(train, val)`` deterministically by source.
 
     ``train_pct`` in ``[0, 100]``; ``>= 100`` (or fewer than 2 groups) keeps
     everything in train with an empty val set — the caller then skips the
@@ -131,8 +131,11 @@ def split_groups(groups, train_pct):
     (stable MD5 ordering) so the SAM split matches the YOLO export's behaviour
     and is reproducible across runs and machines.
 
-    Each group is keyed by ``"{index}:{name}"`` so duplicate or empty
-    ``SampleGroup.name`` values can't collapse two images into one split bucket.
+    Each group is keyed by ``"{index}:{name}"``, which keeps two same-named
+    ``SampleGroup``s distinct as *entries*. They do now share a split bucket,
+    deliberately: identically-named sources are exactly what the grouping is
+    supposed to keep together. An **empty** name falls back to the unique key,
+    since "unnamed" is not evidence of a shared source.
 
     **Split by source, not by name (ADR-044).** ``SampleGroup.name`` is the
     source image or slice name, so a stack's slices and a video's frames are

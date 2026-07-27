@@ -1236,10 +1236,12 @@ first 10% of steps, cosine floor = 10% of peak); only the *peak* LR, train %, an
 patience are user-editable (the literature says the peak LR matters more than the
 shape).
 
-- **Deterministic per-image split.** A new `sam_dataset.split_groups(groups,
-  train_pct, seed)` reuses the YOLO export's stable-MD5 `assign_train_val` (ADR for
-  #83) so SAM and YOLO split identically and reproducibly. `SampleGroup` gained a
-  `name` used only as the split key. At 100% train (or a single image) the val set is
+- **Deterministic split.** A new `sam_dataset.split_groups(groups, train_pct)`
+  reuses the YOLO export's stable-MD5 `assign_train_val` (ADR for #83) so SAM and
+  YOLO split identically and reproducibly. `SampleGroup` gained a `name` used only as
+  the split key. *(Superseded in part by ADR-044: the key is now the source group
+  derived from that name, not the name itself — otherwise the val loss that drives
+  early stopping below is measured on near-copies of trained frames.)* At 100% train (or a single image) the val set is
   empty and the val pass / early stopping are skipped (the UI says so; the SAM dialog
   also disables OK at 0% train). **YOLO's split stays at "Prepare Dataset" time** —
   it's baked into `images/train` vs `images/val` folders at export, so the Train
@@ -2372,11 +2374,19 @@ stopping, so a leaky split does not merely misreport, it changes when the run st
   the heuristic only the fallback for paths that have none.
 - `SAMFineTuner.train` calls `split_groups` on a worker thread with no access to `image_slices`,
   so it uses the prefix fallback — which covers every name the app itself produces.
-- The warning is raised at three GUI call sites, not one: `prompt_validation_split` (YOLO export
-  menu and Prepare YOLO Dataset), `TrainingController.run_yolo` (the unified Train dialog carries
-  its own split slider and never passes through the prompt) and `SAMTrainController._launch`.
-  Missing the second would leave the app's main training path as the one place without it.
-  `sreeni-cli export` prints the equivalent note.
+- The wording lives in `core/dataset_split.split_warning`, **not** on the controller, so
+  `sreeni-cli export` emits the identical text. Putting it next to the dialog meant the CLI — a
+  first-class path by this ADR's own claim — could not import it and hand-rolled a subset, which
+  is the same duplication that let the split preview and the export drift apart. `io_controller`
+  is only the QMessageBox shell.
+- The warning offers **Cancel**, and all three GUI call sites honour it: `prompt_validation_split`
+  (YOLO export menu and Prepare YOLO Dataset) returns to its input dialog,
+  `TrainingController.run_yolo` and `SAMTrainController._launch` abandon the run. A warning saying
+  the validation numbers cannot be trusted, with only an OK button, trains exactly the
+  click-through reflex it exists to prevent — and its advice ("choose a different percentage") had
+  nothing to act on. `run_yolo` is the one that must not be missed: the unified Train dialog
+  carries its own split slider and never passes through the prompt, so it would otherwise be the
+  app's main training path with no signal at all.
 - It covers a second case besides the degenerate grouping: a split that leaves **training with a
   single group**. Holding out a percentage by image count can route every small group to
   validation when one group dominates, which is optimal by the count the split aims at and useless

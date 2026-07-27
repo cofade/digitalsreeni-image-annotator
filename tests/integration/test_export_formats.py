@@ -159,6 +159,62 @@ def test_a_slice_name_shadowed_by_a_substring_match_is_still_excluded(
     assert not _is_exportable("stack_T1_Z1", {}, image_paths)
 
 
+def test_unannotated_images_do_not_consume_the_split_budget(temp_output_dir):
+    """An opened-but-unannotated image is `all_annotations[name] == {}`, which
+    is the normal state for most of a project.
+
+    Counting those inflates the budget: 20 annotated plus 200 unannotated makes
+    the val target 44 rather than 4, and 44 arbitrary names get routed to val
+    while only the annotated subset is written — so `data.yaml` points `val:`
+    at a directory holding a handful of files, or none. Same accounting bug as
+    the unwritable-frames one, different filter.
+
+    Mutation-proven gap: removing `ann and` from both exporters' comprehensions
+    left the entire suite green.
+    """
+    out_dir = os.path.join(temp_output_dir, "unannotated")
+    photo_dir = os.path.join(temp_output_dir, "photos_unannotated")
+    os.makedirs(photo_dir)
+
+    image_paths, annotations = {}, {}
+    for i in range(20):
+        name = f"has{i:03d}.png"
+        path = os.path.join(photo_dir, name)
+        Image.new("RGB", (32, 32)).save(path)
+        image_paths[name] = path
+        annotations[name] = _box_annotation()
+    for i in range(200):
+        # Real files with real paths — only the annotations are missing, so
+        # nothing but the `ann and` guard keeps them out of the budget.
+        name = f"none{i:03d}.png"
+        path = os.path.join(photo_dir, name)
+        Image.new("RGB", (32, 32)).save(path)
+        image_paths[name] = path
+        annotations[name] = {}
+
+    export_yolo_v5plus(
+        annotations, {"cell": 1}, image_paths,
+        slices=[], image_slices={}, output_dir=out_dir, val_split=20,
+    )
+    train = os.listdir(os.path.join(out_dir, "images", "train"))
+    val = os.listdir(os.path.join(out_dir, "images", "val"))
+    assert len(train) + len(val) == 20, "only annotated images should be written"
+    # 20% of the twenty annotated images, not of all 220 names.
+    assert len(val) == 4
+    assert len(train) == 16
+
+    # The v4 twin: same guard, separate comprehension, separate layout.
+    v4_dir = os.path.join(temp_output_dir, "unannotated_v4")
+    export_yolo_v4(
+        annotations, {"cell": 1}, image_paths,
+        slices=[], image_slices={}, output_dir=v4_dir, val_split=20,
+    )
+    v4_train = os.listdir(os.path.join(v4_dir, "train", "images"))
+    v4_val = os.listdir(os.path.join(v4_dir, "valid", "images"))
+    assert len(v4_train) + len(v4_val) == 20
+    assert len(v4_val) == 4
+
+
 def test_the_split_preview_lists_exactly_what_the_export_writes(temp_output_dir):
     """`_is_exportable` is a second implementation of the export loop's
     resolution order, kept in step by a docstring. This asserts they agree, so

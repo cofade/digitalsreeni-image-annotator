@@ -15,10 +15,11 @@ observations", and the whole group lands on one side.
 
 **Groups are derived from structure, not from a model.** The primary source is
 ``image_slices``, already keyed by the ext-stripped base name, so the mapping is
-exact and free. Embedding clusters from the curation feature (#72) can *refine*
-it through :func:`merge_groups`, but they are never required: the worst leakage
--- a 200-frame video -- is fixed without a model, a GPU or a curation run, and
-therefore on every path including the headless CLI.
+exact and free. Near-duplicate clusters from the curation feature (#72) could
+refine it further, but they are never required and nothing here waits for them:
+the worst leakage -- a 200-frame video -- is fixed without a model, a GPU or a
+curation run. That refinement lands in #82, with the vectorised clusterer and
+an actual caller.
 
 Qt-free (ADR-041), and deliberately importing nothing from ``slice_cache``:
 that module reaches ``core.image_utils``, which imports ``QImage``. The

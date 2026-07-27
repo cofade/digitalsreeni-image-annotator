@@ -198,6 +198,14 @@ def _is_exportable(image_name, slice_index, image_paths):
     over-estimates slightly and never under-estimates, which is the harmless
     direction — a name wrongly kept costs a split slot, a name wrongly dropped
     would lose an image from the dataset.
+
+    This is a second implementation of the loop's dispatch, and what keeps the
+    two honest is
+    ``test_the_split_preview_lists_exactly_what_the_export_writes``: it runs a
+    mixed name set through both and asserts the written files equal the
+    returned names. Calling this from inside the loop as well was tried and
+    reverted — the loop's own branches already skip everything it rejects, so
+    the extra call changed nothing any test could detect.
     """
     if image_name in slice_index:
         return True

@@ -2365,14 +2365,9 @@ stopping, so a leaky split does not merely misreport, it changes when the run st
   that is the closer of the two available answers, not a defect. **Group cohesion is not
   sufficient test coverage here** — a selection can keep every group whole and still deliver 1 %
   for a requested 20 %, so the delivered *size* needs its own property test, as do the bounds that
-  keep both sides non-empty. On a
-  project of one 100-frame video plus one photo, a requested 20 % delivers a single image — that
-  is not a defect, it is the closest of the two available answers. A property test over
-  randomised group-size distributions asserts the bound; a first version of this change satisfied
-  every group-cohesion assertion while delivering 1 %, 9 % and 67 % for a requested 20 %, which is
-  why cohesion alone is not sufficient coverage here.
+  keep both sides non-empty, and so does every boolean filter feeding the budget.
 - `groups=None` is bit-for-bit the historical per-name split (every name its own group), so
-  existing callers and the nine `test_yolo_split.py` tests are unaffected.
+  the existing `test_yolo_split.py` tests are unaffected.
 - The name-prefix fallback deliberately errs toward **over-grouping**: a stack literally named
   `run_T1` yields base `run`, merging it with `run_T2`. That costs some split granularity; the
   opposite error would reopen the leak this ADR exists to close. The suffix is restricted to the
@@ -2397,7 +2392,11 @@ stopping, so a leaky split does not merely misreport, it changes when the run st
     `build_groups_from_folder` **does** ext-strip, because a prepared SAM dataset is written by
     `export_sam_dataset` from slice names and is therefore known to contain them. The cost is the
     one just described — `sample_T1.png` and `sample_T2.png` in such a folder merge — and it is
-    accepted there because the alternative was no grouping at all on that path. The two SAM entry
+    accepted there because the alternative was no grouping at all on that path. `_is_exportable`
+    carries a second, narrower version of the same gap: it cannot decode pixels, so a slice that
+    is *indexed* but turns out to be undecodable passes the filter and consumes a split slot the
+    export never fills. Same shape as the empty-`images/val` bug, much smaller blast radius, and
+    unavoidable without decoding during planning. The two SAM entry
     points consequently group the same data slightly differently.
 - `SAMFineTuner.train` calls `split_groups` on a worker thread with no access to `image_slices`,
   so it uses the prefix fallback — which covers every name the app itself produces.

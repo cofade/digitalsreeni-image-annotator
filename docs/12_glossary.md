@@ -62,7 +62,7 @@ observations. The requested percentage becomes a target: a group is indivisible.
 
 Near-identical images landing on **both** sides of the train/val split, so validation measures
 memorisation instead of generalisation. Silent by construction — the metrics get *better* as the
-data gets more redundant, which is why it survived undetected until #80. What the group-aware
+data gets more redundant, which is why it survived undetected until #81. What the group-aware
 split prevents.
 
 ### Model Sidecar

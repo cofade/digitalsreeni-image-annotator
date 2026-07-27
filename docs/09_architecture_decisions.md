@@ -2289,7 +2289,7 @@ unclaimed.
 
 ## ADR-044: The Train/Val Split Key Is the Group, Not the Image Name
 
-**Status**: Accepted (issue #80)
+**Status**: Accepted (issue #81; the decision came out of the #80 curation discussion)
 
 **Context**: `assign_train_val` partitioned train/val by a stable MD5 of the image *name*. That is
 correct exactly when every name is an independent observation, and in this app it routinely is
@@ -2385,9 +2385,9 @@ stopping, so a leaky split does not merely misreport, it changes when the run st
   reported rather than silent, but disruptive. Left open deliberately, and recorded here rather
   than discovered later: this is the one remaining path where the leak is still silent.
   `dialogs/dataset_splitter.py` — the standalone folder-splitting tool, which is not one of the
-  three choke points above — walks straight into it: it shuffles a directory listing with an
-  unseeded `random.shuffle`, so it is neither grouped nor reproducible. The app is **not**
-  uniformly group-aware, and that tool is where it is not.
+  three choke points above — walks straight into it and is also unseeded, so its splits are not
+  even reproducible. Tracked as **#85**; the app is **not** uniformly group-aware, and that tool
+  is where it is not.
   - One exception, deliberately inconsistent with the paragraph above:
     `build_groups_from_folder` **does** ext-strip, because a prepared SAM dataset is written by
     `export_sam_dataset` from slice names and is therefore known to contain them. The cost is the

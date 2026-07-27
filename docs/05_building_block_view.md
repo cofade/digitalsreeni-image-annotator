@@ -284,7 +284,7 @@ out-of-process.
 | `core/mask_filters.py` | Polygon IoU and the noise limits for unprompted mask proposals (#69). |
 | `core/onion.py` | Onion-skin neighbour selection, the content choice (annotations / image / both) and the settings clamps (#67). Ends never wrap. |
 | `core/image_size.py` | Image dimensions via a Pillow header read (#76) — what replaced `QImage` in the export layer. |
-| `core/dataset_split.py` | Group-aware train/val splitting (#80, ADR-044): `derive_groups` (exact from `image_slices`, name-prefix fallback), `plan_split` (whole groups, locally-optimal size, plus the `fell_back` flag), `split_warning` (the text the GUI shows — here rather than on the controller so it stays Qt-free) and `assign_train_val`, which moved here from `io/export_formats.py` and stays re-exported there. Deliberately imports nothing from `core/slice_cache`, which reaches `QImage`. |
+| `core/dataset_split.py` | Group-aware train/val splitting (#81, ADR-044): `derive_groups` (exact from `image_slices`, name-prefix fallback), `plan_split` (whole groups, locally-optimal size, plus the `fell_back` flag), `split_warning` (the text the GUI shows — here rather than on the controller so it stays Qt-free) and `assign_train_val`, which moved here from `io/export_formats.py` and stays re-exported there. Deliberately imports nothing from `core/slice_cache`, which reaches `QImage`. |
 
 ## Level 3: CLI
 
@@ -332,7 +332,7 @@ Each tool is a standalone dialog/window:
 |--------|---------|--------------|
 | `annotation_statistics.py` | Statistics display | Count, area per class, plotly charts |
 | `coco_json_combiner.py` | Merge datasets | Combine multiple COCO JSON files |
-| `dataset_splitter.py` | Train/val/test split | Stratified splitting, configurable ratios |
+| `dataset_splitter.py` | Train/val/test split | Configurable ratios, **unseeded** `random.shuffle` — neither reproducible nor group-aware (ADR-044) |
 | `image_patcher.py` | Create patches | Sliding window with overlap |
 | `image_augmenter.py` | Data augmentation | Rotation, flip, brightness, preview |
 | `slice_registration.py` | Align slices | Multiple registration algorithms (pystackreg) |

@@ -30,7 +30,7 @@ def temp_output_dir():
     shutil.rmtree(temp_dir)
 
 
-# --- group-aware train/val split at the export boundary (#80, ADR-044) -----
+# --- group-aware train/val split at the export boundary (#81, ADR-044) -----
 #
 # These run the exporter itself rather than `plan_split`, because the wiring is
 # the load-bearing part: the grouping is derived *inside* the exporter, which is
@@ -246,7 +246,7 @@ def test_the_split_preview_lists_exactly_what_the_export_writes(temp_output_dir)
     annotations["unannotated.png"] = {}
 
     previewed = set(
-        exportable_annotated_names(annotations, [], {"stack": loaded}, image_paths)
+        exportable_annotated_names(annotations, image_paths, [], {"stack": loaded})
     )
     export_yolo_v5plus(
         annotations, {"cell": 1}, image_paths,

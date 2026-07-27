@@ -1,4 +1,4 @@
-"""Group-aware train/val splitting (issue #80, ADR-044).
+"""Group-aware train/val splitting (issue #81, ADR-044).
 
 The bug these tests exist for is invisible at runtime. A name-keyed split over
 a video's frames produces a perfectly ordinary-looking dataset, trains without

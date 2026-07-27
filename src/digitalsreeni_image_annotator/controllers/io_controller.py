@@ -43,7 +43,7 @@ def annotated_image_names(mw):
     or the warning is about a different split than the one that happens.
     """
     return exportable_annotated_names(
-        mw.all_annotations, mw.slices, mw.image_slices, mw.image_paths
+        mw.all_annotations, mw.image_paths, mw.slices, mw.image_slices
     )
 
 

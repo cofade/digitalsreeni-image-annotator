@@ -174,7 +174,7 @@ def create_coco_annotation(ann, image_id, annotation_id, class_name, class_mappi
 
 
 
-# `assign_train_val` moved to core.dataset_split (issue #80, ADR-044) and is
+# `assign_train_val` moved to core.dataset_split (issue #81, ADR-044) and is
 # imported above. It stays re-exported from here: `training.sam_dataset` and the
 # split tests import it from this module, and the split remains an export
 # concern even though the grouping logic is not.
@@ -224,7 +224,7 @@ def _is_exportable(image_name, slice_index, image_paths):
     return not image_path.lower().endswith(('.tif', '.tiff', '.czi'))
 
 
-def exportable_annotated_names(all_annotations, slices, image_slices, image_paths):
+def exportable_annotated_names(all_annotations, image_paths, slices, image_slices):
     """The annotated names a YOLO export will actually write.
 
     Exactly the set the split partitions. The UI's split preview calls this so
@@ -232,6 +232,10 @@ def exportable_annotated_names(all_annotations, slices, image_slices, image_path
     separately is how they drift, and they did: a preview that counted an
     unopened video's frames saw two groups and stayed quiet while the export
     saw one and silently fell back to the per-name split.
+
+    Parameter order matches ``export_yolo_v5plus``'s (minus ``class_mapping``)
+    on purpose: a helper whose whole job is to agree with the exporter should
+    not be one transposed positional argument away from disagreeing with it.
     """
     index = _slice_index(slices, image_slices)
     return [

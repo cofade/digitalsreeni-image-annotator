@@ -185,8 +185,9 @@ See [Cross-cutting Concepts](docs/08_crosscutting_concepts.md#coordinate-systems
 - User assigns dimensions (T, Z, C, H, W) via dialog
 - Slices extracted with names like `stack_T1_Z5_C1` — the base is **ext-stripped**
   (`os.path.splitext(...)[0]`, enforced in `add_images_to_list` so `video.mp4` and
-  `video.tif` can't clobber each other) and the indices are **1-based**
-  (`SliceProvider._build_index`). Video frames are `clip_F00042` (`video_handler.frame_key`).
+  `video.tif` can't clobber each other) and the stack-dimension indices are **1-based**
+  (`SliceProvider._build_index`). Video frames are `clip_F00042` and are **0-based**
+  (`video_handler.frame_key`) — the two conventions differ, deliberately or otherwise.
   The absence of a dot is what distinguishes a slice name from an image name across the
   exporters and `core/dataset_split`
 - Each slice annotated independently

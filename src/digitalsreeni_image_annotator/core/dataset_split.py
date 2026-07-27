@@ -1,4 +1,4 @@
-"""Group-aware train/val splitting (issue #80, ADR-044).
+"""Group-aware train/val splitting (issue #81, ADR-044).
 
 The split used to be keyed by the **image name**. That is correct only when
 every name is an independent observation, and in this app it routinely is not:
@@ -110,6 +110,11 @@ def _split_by_group(
     Groups are ordered by a stable MD5 of the group key -- the same device the
     name-keyed split used, so the result is reproducible across runs and
     machines (unlike ``hash()``, which is salted per process).
+
+    Precondition: ``names`` holds no duplicates. Every caller satisfies it
+    (dict keys, or ``"{index}:{name}"`` pairs), and ``plan_split`` guards on
+    the distinct count — a repeat would be counted twice in a group's size
+    while ``val_count`` came from the raw length.
 
     A group is indivisible, so ``val_count`` is a target rather than a
     guarantee, and choosing the best *set* is subset-sum. This settles for a
@@ -263,7 +268,12 @@ def plan_split(
     return (*_split_by_group(ordered_names, groups, val_count), False)
 
 
-def split_warning(names, val_pct, image_slices=None, groups=None):
+def split_warning(
+    names: Iterable[str],
+    val_pct: float,
+    image_slices: Mapping[str, Any] | None = None,
+    groups: Mapping[str, str] | None = None,
+) -> str | None:
     """What is wrong with the split about to happen, or ``None``.
 
     Lives here, not on the controller, because the CLI is a first-class path
@@ -286,10 +296,10 @@ def split_warning(names, val_pct, image_slices=None, groups=None):
     if val_pct <= 0:
         return None
 
-    names = list(names)
+    ordered = list(names)
     if groups is None:
-        groups = derive_groups(names, image_slices)
-    train, _val, fell_back = plan_split(names, val_pct, groups)
+        groups = derive_groups(ordered, image_slices)
+    train, _val, fell_back = plan_split(ordered, val_pct, groups)
 
     if fell_back:
         return (
@@ -308,7 +318,7 @@ def split_warning(names, val_pct, image_slices=None, groups=None):
     # holding one and validating on the other is not a degenerate split at all
     # -- it is the textbook one, and warning about it would fire on the
     # healthiest possible two-recording project.
-    total_groups = len({groups.get(name, name) for name in names})
+    total_groups = len({groups.get(name, name) for name in ordered})
     train_groups = {groups.get(name, name) for name in train}
     if total_groups > 2 and len(train_groups) == 1:
         return (

@@ -700,7 +700,7 @@ User clicks "Export" > "YOLO v8/v11"
     ├─> Select output directory
     │
     ├─> Prompt for validation split % (QInputDialog, default 20, 0 = all train)
-    │       plan_split() partitions by GROUP, not by name (issue #80,
+    │       plan_split() partitions by GROUP, not by name (issue #81,
     │       ADR-044): a stack's slices and a video's frames are one group and
     │       never straddle the split, so validation is not measured on frames
     │       all but identical to trained ones. Ordering is a stable MD5 of the

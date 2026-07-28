@@ -159,6 +159,55 @@ def test_a_slice_name_shadowed_by_a_substring_match_is_still_excluded(
     assert not _is_exportable("stack_T1_Z1", {}, image_paths)
 
 
+def test_an_explicit_grouping_overrides_the_derived_one(temp_output_dir):
+    """The curation refinement's only route into the export (ADR-045).
+
+    These are ten independent files by name -- nothing structural links them --
+    so only a supplied grouping can keep them together. If the exporter ignored
+    the parameter, the split would simply look reasonable and the refinement
+    would be silently inert, which is precisely the failure mode this whole
+    area keeps producing.
+    """
+    photo_dir = os.path.join(temp_output_dir, "photos_grouped")
+    os.makedirs(photo_dir)
+
+    image_paths, annotations = {}, {}
+    for index in range(10):
+        name = f"shot{index:02d}.png"
+        path = os.path.join(photo_dir, name)
+        Image.new("RGB", (32, 32)).save(path)
+        image_paths[name] = path
+        annotations[name] = _box_annotation()
+
+    # The first six are near-duplicates of each other; the rest are their own.
+    groups = {
+        name: ("burst" if index < 6 else name)
+        for index, name in enumerate(sorted(annotations))
+    }
+    burst = {name for name, group in groups.items() if group == "burst"}
+
+    v5_dir = os.path.join(temp_output_dir, "grouped_arg_v5")
+    export_yolo_v5plus(
+        annotations, {"cell": 1}, image_paths,
+        slices=[], image_slices={}, output_dir=v5_dir, val_split=40,
+        groups=groups,
+    )
+    v5_val = set(os.listdir(os.path.join(v5_dir, "images", "val")))
+    held = burst & v5_val
+    assert len(held) in (0, len(burst)), "the supplied grouping was ignored"
+
+    # The v4 twin: separate comprehension, separate layout.
+    v4_dir = os.path.join(temp_output_dir, "grouped_arg_v4")
+    export_yolo_v4(
+        annotations, {"cell": 1}, image_paths,
+        slices=[], image_slices={}, output_dir=v4_dir, val_split=40,
+        groups=groups,
+    )
+    v4_val = set(os.listdir(os.path.join(v4_dir, "valid", "images")))
+    held = burst & v4_val
+    assert len(held) in (0, len(burst)), "the supplied grouping was ignored"
+
+
 def test_unannotated_images_do_not_consume_the_split_budget(temp_output_dir):
     """An opened-but-unannotated image is `all_annotations[name] == {}`, which
     is the normal state for most of a project.

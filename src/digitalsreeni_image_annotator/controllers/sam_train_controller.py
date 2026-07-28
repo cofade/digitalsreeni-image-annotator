@@ -185,6 +185,14 @@ class SAMTrainController(QObject):
         # approximation of them: two groups can share a name, and a bare name
         # list collapses those before the split sees them.
         keyed, keyed_groups = split_keys(groups)
+        # Near-duplicate clusters, if a curation run produced any, refine the
+        # structural grouping (ADR-045). They are keyed by image name and the
+        # split is keyed by "{index}:{name}", so they have to be translated
+        # first -- handing them over untranslated would match nothing, in
+        # silence.
+        keyed_groups = self.mw.curation_controller.refine(
+            keyed_groups, {key: group.name for key, group in keyed.items()}
+        )
         if not confirm_split_warning(
             self.mw,
             list(keyed),
@@ -196,6 +204,12 @@ class SAMTrainController(QObject):
             groups=keyed_groups,
         ):
             return
+
+        # The run splits on exactly the grouping the warning described. Without
+        # this the worker would re-derive it from names alone and quietly drop
+        # the cluster refinement, so the dialog would be describing a different
+        # split than the one that ran.
+        cfg["keyed_groups"] = keyed_groups
 
         base_model = cfg.pop("base_model")
         out_name = cfg.pop("out_name")

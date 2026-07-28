@@ -116,9 +116,29 @@ class _FakeTrainer:
     def load_model(self, _base):
         return True
 
-    def prepare_dataset(self, _val_split):
+    def prepare_dataset(self, _val_split, groups=None):
         self.prepared = True
+        self.groups = groups
         return "unused.yaml"
+
+
+class _NoCurationRun:
+    """A main window whose curation controller holds no embeddings.
+
+    Delegates to the same ``derive_groups`` the controller would, rather than
+    reimplementing it: the point of the stub is "no clusters to fold in", not
+    "a different grouping".
+    """
+
+    def __init__(self, image_slices):
+        self.image_slices = image_slices
+
+    def split_groups(self, names):
+        from src.digitalsreeni_image_annotator.core.dataset_split import (
+            derive_groups,
+        )
+
+        return derive_groups(names, self.image_slices)
 
 
 def test_declining_the_warning_abandons_a_yolo_run(warning_box, monkeypatch):
@@ -139,6 +159,7 @@ def test_declining_the_warning_abandons_a_yolo_run(warning_box, monkeypatch):
         slices = [(name, object()) for name in _frames("clip", 8)]
         image_slices = {"clip": slices}
         yolo_trainer = trainer
+        curation_controller = _NoCurationRun(image_slices)
 
         class yolo_controller:
             @staticmethod

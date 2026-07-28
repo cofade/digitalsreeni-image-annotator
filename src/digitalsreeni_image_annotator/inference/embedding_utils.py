@@ -77,6 +77,29 @@ def content_hash(path, chunk_size=1 << 20):
         return None
 
 
+def slice_digest(source_digest, slice_name):
+    """Cache key for one slice of a stack or one frame of a video.
+
+    A slice has no bytes of its own to hash, and decoding it to get some would
+    cost more than the embedding it is meant to save. But its pixels are a
+    deterministic function of the source file's bytes and the slice name: the
+    name carries the dimension letters and their 1-based indices
+    (``stack_T1_Z5_C1``) or the frame number (``clip_F00042``), which is
+    exactly the coordinate the extractor uses. Re-assigning the dimensions
+    changes the letters, so it changes the key too.
+
+    This is the change that makes a second curation run over a video project
+    fast, and video projects are the primary case -- before it, only plain
+    files on disk were cached and every frame was re-embedded every time.
+
+    ``None`` when the source could not be hashed, which the cache treats as
+    "do not store" rather than as a key.
+    """
+    if source_digest is None:
+        return None
+    return f"{source_digest}:{slice_name}"
+
+
 class EmbeddingCache:
     """Content-hash-keyed embedding store, persisted as JSON beside the project.
 

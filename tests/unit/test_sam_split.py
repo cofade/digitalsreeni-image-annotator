@@ -93,6 +93,37 @@ def test_a_dataset_folder_groups_by_recording_too(tmp_path):
     assert train_bases.isdisjoint(val_bases)
 
 
+def test_a_supplied_grouping_overrides_the_derived_one():
+    """The GUI warns about a grouping refined by curation clusters (ADR-045),
+    then hands that exact mapping over. Re-deriving it on the worker thread
+    would drop the refinement, so the dialog would describe one split and the
+    run would perform another."""
+    groups = _groups(10)
+    keyed_groups = {f"{index}:img{index}.png": "one" for index in range(10)}
+
+    train, val = split_groups(groups, 80, keyed_groups)
+
+    # Everything is one group now, so a group-aware split cannot hold anything
+    # out -- it falls back to the per-name split rather than emptying val.
+    assert len(train) + len(val) == 10
+    assert val, "an empty val set silently disables early stopping"
+
+
+def test_keys_the_supplied_grouping_omits_fall_back_to_the_derived_one():
+    """A stale mapping degrades to the structural split, not to nonsense."""
+    groups = [
+        SampleGroup(lambda: None, [{"bbox": [0, 0, 1, 1]}], name=name)
+        for base in ("clipA", "clipB")
+        for name in (f"{base}_F{i:05d}" for i in range(10))
+    ]
+    train, val = split_groups(groups, 50, {"nonsense:key": "whatever"})
+
+    for base in ("clipA", "clipB"):
+        held = {g.name for g in val if g.name.startswith(base)}
+        assert len(held) in (0, 10), base
+    assert len(train) + len(val) == 20
+
+
 def test_split_is_disjoint_and_complete():
     groups = _groups(13)
     train, val = split_groups(groups, 70)

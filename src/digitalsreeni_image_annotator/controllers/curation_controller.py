@@ -13,7 +13,8 @@ can take.
 import os
 
 import numpy as np
-from PyQt6.QtCore import QObject
+from PyQt6.QtCore import QObject, Qt
+from PyQt6.QtGui import QCursor
 from PyQt6.QtWidgets import QApplication, QMessageBox, QProgressDialog
 
 from ..core import similarity
@@ -52,9 +53,8 @@ class CurationController(QObject):
         # Both are 768-d, so nothing downstream can detect it -- and `refine`
         # feeds those clusters straight into a real training run's split.
         self._computing = False
-        # Bumped on every assignment to `embeddings` (see the property below),
+        # Cleared on every assignment to `embeddings` (see the property below),
         # so derived results can be cached without a stale-read risk.
-        self._version = 0
         self._clusters_cache = None
         # Source-file digests for this run. Hashing a 2 GB video once is fine;
         # hashing it once per frame is not, and the frames are the reason the
@@ -67,14 +67,14 @@ class CurationController(QObject):
 
     @embeddings.setter
     def embeddings(self, value):
-        """A property purely so every assignment bumps the version.
+        """A property purely so every assignment drops the derived cache.
 
-        The dialog restores a previous model's vectors by plain assignment, and
-        `set_model` clears them; a cache keyed on identity would go stale on
-        either. This is the one write path, so it is the one place to count.
+        The dialog restores a previous model's vectors by plain assignment and
+        `set_model` clears them, so assignment is the invalidation point.
+        Mutating the returned dict **in place** is not supported and would not
+        invalidate anything -- every producer here replaces it wholesale.
         """
         self._embeddings = value
-        self._version += 1
         self._clusters_cache = None
 
     def is_computing(self):
@@ -148,6 +148,13 @@ class CurationController(QObject):
         microscopy. Rather than answer it globally, this makes it answerable.
         """
         if model_name == self.model_name or model_name not in EMBEDDING_MODELS:
+            return False
+        if self._computing:
+            # The invariant belongs here, not only on the one view that
+            # respects it: switching mid-run would leave `model_name` pointing
+            # at the new backend while the running loop writes the *old*
+            # backend's vectors under new-backend cache keys -- persistently.
+            logger.warning("model switch ignored: a run is in flight")
             return False
         # Reclaim the old model's VRAM before the new one is loaded, rather
         # than leaving two on the card until the garbage collector notices.
@@ -328,12 +335,12 @@ class CurationController(QObject):
         The memo is what makes :meth:`refine` honest about its cost. Every
         export and every training launch asks for the clusters, and at the
         supported ceiling one pass is several seconds on the GUI thread —
-        cheap once, not cheap four times. The key is the embedding *version*
-        (bumped on every assignment) plus the model and threshold, so it cannot
+        cheap once, not cheap four times. It is keyed by model and threshold,
+        and dropped outright whenever ``embeddings`` is assigned, so it cannot
         outlive the vectors it describes.
         """
         threshold = self.threshold if threshold is None else threshold
-        key = (self._version, self.model_name, threshold)
+        key = (self.model_name, threshold)
         if self._clusters_cache is not None and self._clusters_cache[0] == key:
             return self._clusters_cache[1]
         result = similarity.cluster(self.embeddings, threshold)
@@ -385,7 +392,14 @@ class CurationController(QObject):
         """
         if not self.embeddings:
             return groups
-        clusters = self.clusters()
+        # Seconds at the supported ceiling, on the GUI thread, immediately
+        # after the user confirmed a dialog. Say so with the cursor rather than
+        # looking frozen.
+        QApplication.setOverrideCursor(QCursor(Qt.CursorShape.WaitCursor))
+        try:
+            clusters = self.clusters()
+        finally:
+            QApplication.restoreOverrideCursor()
         if names_by_key is not None:
             clusters = translate_clusters(clusters, names_by_key)
         return merge_groups(groups, clusters)
@@ -411,7 +425,7 @@ class CurationController(QObject):
                 scored[name] = score
         return scored
 
-    def suggested(self, cluster_names):
+    def suggested(self, cluster_names, scores=None):
         """``(name, reason)`` -- which member of a cluster to work on.
 
         **Precedence, not a combined score.** Redundancy decides *what can be
@@ -434,7 +448,12 @@ class CurationController(QObject):
         names = list(cluster_names or [])
         if not names:
             return None, ""
-        scores = self.review_scores(names)
+        if scores is None:
+            scores = self.review_scores(names)
+        else:
+            # The dialog looks the whole report's scores up once; re-deriving
+            # them per cluster is the same answer at N times the cost.
+            scores = {name: scores[name] for name in names if name in scores}
         review = getattr(self.mw, "review_controller", None)
         uncertainty_only = review is not None and all(
             review.mode_for(name) == MODE_UNCERTAINTY for name in names

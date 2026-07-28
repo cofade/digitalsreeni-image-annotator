@@ -49,10 +49,14 @@ _MAX_BLOCK_ELEMENTS = 4_000_000
 # Above this many images the run stops being worth starting. The old limit was
 # 3000 and it measured the implementation rather than the problem: a pure-
 # Python double loop recomputing both vector norms per pair. Vectorised, 20 000
-# images re-cluster in a few seconds with bounded peak memory (measured with
-# 768-d vectors: analyse 37 MB, cohesion 47 MB, representative 65 MB), and the
-# binding cost has moved to *embedding* -- one forward pass per image through
-# CLIP or DINOv2, which nothing here makes cheaper.
+# images re-cluster in a few seconds with bounded peak memory, and the binding
+# cost has moved to *embedding* -- one forward pass per image through CLIP or
+# DINOv2, which nothing here makes cheaper.
+#
+# Measured on this module at 20 000 images with 768-d vectors: the (n, d)
+# matrix is a 61 MB floor that every routine pays, and the blocked pairwise
+# work sits on top of it -- analyse 99 MB, representative 94 MB, cohesion
+# 113 MB. The floor is inherent; the pairwise term is what blocking bounds.
 #
 # So the limit is now set by what a person will wait for, not by what fits in
 # RAM, and the message says which.
@@ -131,7 +135,12 @@ def _stack(names, embeddings):
     for row, vector in enumerate(vectors):
         if vector.size == reference:
             matrix[row] = vector
-    norms = np.sqrt((matrix * matrix).sum(axis=1))
+    # einsum, not `(matrix * matrix).sum(axis=1)`: the latter materialises a
+    # second full copy of the matrix purely to sum it away, which doubled the
+    # peak of every routine downstream. Every pairwise pass here is carefully
+    # blocked and then all of them call this, so an unblocked allocation here
+    # sets the real ceiling.
+    norms = np.sqrt(np.einsum("ij,ij->i", matrix, matrix))
     norms[norms == 0] = 1.0
     matrix /= norms[:, None]
     return matrix

@@ -191,6 +191,48 @@ def test_the_picker_is_inert_while_a_run_is_in_flight(dialog, monkeypatch):
     assert dialog.model_combo.currentText() == before
 
 
+def test_the_controls_are_disabled_for_the_duration_of_a_run(dialog, monkeypatch):
+    """`is_computing` proves the branch exists; this proves it is reachable.
+
+    Disabling is what stops a *user* re-entering, which is the actual vector:
+    `compute` spins `processEvents` behind a non-modal dialog, so clicks are
+    delivered mid-run.
+    """
+    states = []
+
+    def _compute(_parent=None):
+        states.append(
+            (dialog.model_combo.isEnabled(), dialog.slider.isEnabled())
+        )
+        return True
+
+    monkeypatch.setattr(dialog.controller, "compute", _compute)
+    dialog.model_combo.setCurrentText("DINOv2 (base)")
+
+    assert states == [(False, False)], "the controls stayed live during the run"
+    assert dialog.model_combo.isEnabled() and dialog.slider.isEnabled()
+
+
+def test_isolated_images_carry_their_review_score(qtbot, controller):
+    """Gathering scores from cluster members alone hid the column outright on a
+    project where only the isolated images were scored -- and those are the
+    ones whose uncertainty matters most."""
+    controller.mw.review_controller = _Review({
+        "lonely.png": {"score": 7.5, "mode": MODE_UNCERTAINTY},
+    })
+    made = DatasetCurationDialog(controller.mw, controller)
+    qtbot.addWidget(made)
+
+    assert not made.tree.isColumnHidden(3)
+    isolated = [
+        made.tree.topLevelItem(row)
+        for row in range(made.tree.topLevelItemCount())
+        if made.tree.topLevelItem(row).text(0) == "Isolated images"
+    ]
+    assert isolated, "no isolated group in the report"
+    assert isolated[0].child(0).text(3) == "7.5"
+
+
 # --- the threshold slider --------------------------------------------------
 
 

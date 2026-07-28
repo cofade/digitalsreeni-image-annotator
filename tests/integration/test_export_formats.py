@@ -221,6 +221,50 @@ def test_an_explicit_grouping_overrides_the_derived_one(temp_output_dir):
     assert v4_val == expected_val, "the supplied grouping was ignored"
 
 
+def test_an_empty_grouping_means_no_grouping_not_no_opinion(temp_output_dir):
+    """The sentinel is ``None``, not falsiness.
+
+    An empty mapping is a caller saying "I computed a grouping and it is
+    empty", which is a different statement from "I have no opinion". Treating
+    them alike is safe only by coincidence of today's single caller, and the
+    comment above `export_yolo_v4` argues the rule at length -- so it needs a
+    test, or it needs deleting.
+    """
+    out_dir = os.path.join(temp_output_dir, "empty_grouping")
+    image = QImage(32, 32, QImage.Format.Format_RGB32)
+    image.fill(0xFFFFFFFF)
+    # TWO recordings, deliberately: with one, the derived grouping degenerates
+    # to a single group and falls back to the per-name split anyway -- so both
+    # branches straddle and the test cannot tell them apart. That is how the
+    # first version of this test let the mutation live.
+    clips = {
+        base: [(f"{base}_F{i:05d}", image) for i in range(10)]
+        for base in ("clipA", "clipB")
+    }
+    annotations = {
+        name: _box_annotation()
+        for frames in clips.values()
+        for name, _ in frames
+    }
+
+    export_yolo_v5plus(
+        annotations, {"cell": 1}, image_paths={},
+        slices=[], image_slices=clips,
+        output_dir=out_dir, val_split=40, groups={},
+    )
+    val = {
+        os.path.splitext(f)[0]
+        for f in os.listdir(os.path.join(out_dir, "images", "val"))
+    }
+    assert val
+    straddled = [
+        base
+        for base, frames in clips.items()
+        if 0 < len({name for name, _ in frames} & val) < len(frames)
+    ]
+    assert straddled, "an empty mapping was read as 'derive your own'"
+
+
 def test_unannotated_images_do_not_consume_the_split_budget(temp_output_dir):
     """An opened-but-unannotated image is `all_annotations[name] == {}`, which
     is the normal state for most of a project.

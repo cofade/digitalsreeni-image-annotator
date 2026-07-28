@@ -179,6 +179,78 @@ def test_raw_model_output_is_normalised_before_comparing():
     assert similarity.outliers(embeddings, threshold=0.99) == ["diagonal"]
 
 
+def test_the_matrix_is_built_without_a_second_copy():
+    """The shared entry point, which sets the real ceiling for everything else.
+
+    `(matrix * matrix).sum(axis=1)` materialises a full second copy purely to
+    sum it away, and every blocked pairwise routine calls this before its
+    blocking starts — so it doubled the peak of all of them and made three
+    functions with very different pairwise costs measure identically.
+
+    A wide embedding is the point here: the other memory tests use d=4 so the
+    matrix is negligible and the *pairwise* term is what they measure, which is
+    exactly why neither of them could see this.
+    """
+    import tracemalloc
+
+    import numpy
+
+    count, dimension = 4000, 768
+    rng = numpy.random.default_rng(2)
+    names = [f"n{index:05d}" for index in range(count)]
+    embeddings = {
+        name: rng.random(dimension).astype(numpy.float32) for name in names
+    }
+    matrix_bytes = count * dimension * 4
+
+    tracemalloc.start()
+    try:
+        matrix = similarity._stack(names, embeddings)
+        peak = tracemalloc.get_traced_memory()[1]
+    finally:
+        tracemalloc.stop()
+
+    assert matrix.shape == (count, dimension)
+    assert peak < matrix_bytes * 1.5, f"{peak / 1e6:.0f} MB for a {matrix_bytes / 1e6:.0f} MB matrix"
+
+
+def test_the_main_pass_is_blocked():
+    """The routine the module header quotes its headline figure for.
+
+    `representative` got a memory test after a review found it unblocked;
+    `_scan` -- which every one of `cluster`, `outliers`, `modes` and `analyse`
+    runs -- did not, and mutating its block height away survived the whole
+    suite. Unblocked at the supported ceiling it allocates 1.6 GB for the
+    similarities plus 400 MB per boolean mask.
+
+    The dimension is deliberately tiny so the (n, d) matrix is negligible and
+    what is measured is the pairwise term.
+    """
+    import tracemalloc
+
+    import numpy
+
+    count = 4000
+    assert similarity._block_rows(count) < count, "pick a size that blocks"
+    rng = numpy.random.default_rng(1)
+    embeddings = {
+        f"n{index:05d}": rng.random(4).astype(numpy.float32)
+        for index in range(count)
+    }
+
+    tracemalloc.start()
+    try:
+        result = similarity.analyse(embeddings, 0.99, 0.8)
+        peak = tracemalloc.get_traced_memory()[1]
+    finally:
+        tracemalloc.stop()
+
+    assert result["modes"]
+    # The unblocked similarity matrix alone is count^2 * 4 = 64 MB, before the
+    # two boolean masks.
+    assert peak < count * count * 4 * 0.75, f"{peak / 1e6:.0f} MB"
+
+
 def test_the_representative_pass_is_blocked(monkeypatch):
     """Peak memory, asserted rather than claimed.
 

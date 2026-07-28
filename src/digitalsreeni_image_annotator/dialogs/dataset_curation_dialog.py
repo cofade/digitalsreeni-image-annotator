@@ -162,18 +162,22 @@ class DatasetCurationDialog(QDialog):
         self.slider.setEnabled(False)
         try:
             recomputed = self.controller.compute(self)
+        except Exception:
+            # Restoring only on a False return would leave the controller on a
+            # backend with no vectors if `compute` raised. It catches nearly
+            # everything itself, so this is the unlikely path -- but "restore
+            # the previous model on failure" should mean any failure.
+            recomputed = False
+            raise
         finally:
             self.model_combo.setEnabled(True)
             self.slider.setEnabled(True)
+            if not recomputed:
+                self.controller.set_model(previous)
+                self.controller.embeddings = kept
+                with QSignalBlocker(self.model_combo):
+                    self.model_combo.setCurrentText(previous)
 
-        if recomputed:
-            self._refresh()
-            return
-
-        self.controller.set_model(previous)
-        self.controller.embeddings = kept
-        with QSignalBlocker(self.model_combo):
-            self.model_combo.setCurrentText(previous)
         self._refresh()
 
     # --- report ---
@@ -227,8 +231,12 @@ class DatasetCurationDialog(QDialog):
         return text
 
     def _fill_tree(self, clusters, outliers):
+        # Outliers too, not only cluster members: an isolated image is exactly
+        # the kind the model is least sure about, and gathering scores from
+        # clusters alone hid the column outright on a project where only the
+        # isolated ones were scored.
         scores = self.controller.review_scores(
-            [name for group in clusters for name in group]
+            [name for group in clusters for name in group] + list(outliers)
         )
         # An empty column reads as "no uncertainty here" rather than "nothing
         # measured it", so it is hidden outright when no review has run.
@@ -236,7 +244,7 @@ class DatasetCurationDialog(QDialog):
 
         self.tree.clear()
         for index, names in enumerate(clusters, start=1):
-            suggested, reason = self.controller.suggested(names)
+            suggested, reason = self.controller.suggested(names, scores)
             parent = QTreeWidgetItem([
                 f"Cluster {index}",
                 str(len(names)),
@@ -265,7 +273,10 @@ class DatasetCurationDialog(QDialog):
             ])
             parent.setData(0, Qt.ItemDataRole.UserRole, outliers)
             for name in outliers:
-                child = QTreeWidgetItem([name, "", "", "", ""])
+                score = scores.get(name)
+                child = QTreeWidgetItem([
+                    name, "", "", "" if score is None else f"{score:.1f}", ""
+                ])
                 child.setData(0, Qt.ItemDataRole.UserRole, [name])
                 parent.addChild(child)
             self.tree.addTopLevelItem(parent)

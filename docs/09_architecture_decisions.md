@@ -2478,10 +2478,20 @@ reframed others:
   empirically; answering it globally would have been a guess.
 - **One blocked NumPy pass, no new dependency.** `_scan` computes every threshold's components
   *and* each row's nearest neighbour from a single sweep, in row blocks sized so peak memory is a
-  constant rather than O(n²). Measured at 20 000 images with 768-d vectors: `analyse` 37 MB,
-  `cohesion` 47 MB, `representative` 65 MB — the last of which was 1.6 GB until a review caught
-  that it was the one function still multiplying the whole cluster unblocked. A single video
-  clusters into **one** component, so "a cluster" and "the dataset" are routinely the same size.
+  constant rather than O(n²). The `(n, d)` matrix itself is an unavoidable floor — 61 MB at
+  20 000 images with 768-d vectors — and the blocked pairwise work sits on top of it: measured
+  `analyse` 99 MB, `representative` 94 MB, `cohesion` 113 MB.
+
+  Both halves of that took a review to get right, and the second one twice. `representative` was
+  1.6 GB until a review caught it was the one routine still multiplying a whole cluster unblocked
+  (a single video clusters into **one** component, so "a cluster" and "the dataset" are routinely
+  the same size). The replacement figures were then wrong as well: they were quoted from that
+  review rather than measured here, and the real peaks were 125 MB across the board, all three
+  within 0.2 MB of each other because none was dominated by its own pairwise work. `_stack` — the
+  helper every one of them calls — built a second full copy of the matrix (`(m * m).sum(axis=1)`)
+  purely to sum it away. `np.einsum("ij,ij->i", ...)` removes it, and the numbers above are
+  measurements of the shipped code. **Blocking every pairwise pass is worth nothing if the shared
+  entry point allocates 2n·d before any of it starts.**
 - **No edge list.** Components are built by relabelling, not by union-find over materialised
   edges. A project of 20 000 near-identical frames — precisely the case someone opens this tool to
   diagnose — has 200 million edges; two components can only merge n−1 times.
@@ -2574,6 +2584,16 @@ reframed others:
   shows needs the grouping. So a user who has run curation and then exports at 0 % pays one
   clustering pass for nothing — once per embedding set, thanks to the memo above. Making it lazy
   would mean threading a callable through the prompt for a cost that is now paid at most once.
+- The report is not free to redraw: `_fill_tree` calls `cohesion` and `representative` per
+  cluster, each building its own matrix. On the case this feature exists for — one video, one
+  component — a single slider settle is three full passes over the whole dataset. The 200 ms
+  debounce guards `analyse`, which is the cheapest of them. Acceptable at the sizes curation is
+  usable at, and the reason the ceiling is 20 000 rather than higher.
+- `refine` is reachable from **Fine-Tune SAM from Dataset Folder**, where `SampleGroup.name` is an
+  ext-stripped basename while the project's embeddings are keyed with extensions. Today the
+  translation therefore matches nothing and the refinement is a silent no-op — the right answer
+  (a folder is a different dataset) for the wrong reason. The drift warning does not fire either,
+  because the *keys* match; only the clusters are empty.
 - The refinement clusters at **the threshold the user last set in the report**, which they can
   only have set by looking at it. Cohesion is shown there for exactly this reason — but note that
   `merge_groups` then treats a chained cluster and a compact one identically. A chain whose ends

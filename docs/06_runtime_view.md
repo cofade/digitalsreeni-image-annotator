@@ -934,8 +934,9 @@ Images panel → "Dataset similarity"
   │    `all_images` alone would miss the most redundant data the app handles.
   │
   ├─ embed each item (progress dialog, cancellable)
-  │    cache key = (model, content hash)             for a file
-  │              = (model, source hash + slice name) for a slice or frame  ← #82
+  │    cache key = (model, content hash)                          for a file
+  │              = (model, source hash + slice name + axis order) for a slice
+  │                                                              or frame ← #82
   │    A second run over unchanged data recomputes nothing and decodes
   │    nothing. Before #82 only files were cached, so a video project — the
   │    primary case — re-embedded every frame every time.

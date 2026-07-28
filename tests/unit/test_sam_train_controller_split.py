@@ -87,9 +87,13 @@ def test_without_a_curation_run_the_grouping_is_the_derived_one(controller):
 
 
 def test_the_dialog_config_is_not_mutated(controller):
-    """`_launch` pops keys out of the returned config; doing that to the
-    dialog's own dict would make a second launch see a config missing
-    `base_model`."""
+    """`_launch` pops keys out of the returned config.
+
+    Today that is harmless -- `SAMTrainConfigDialog.get_config` returns a fresh
+    dict literal each call -- so this pins the copy rather than fixing a live
+    bug. Stated plainly because an earlier version of this docstring invented a
+    failure scenario that could not happen.
+    """
     original = {"train_pct": 80}
     controller._training_config(original, _groups())
     assert original == {"train_pct": 80}

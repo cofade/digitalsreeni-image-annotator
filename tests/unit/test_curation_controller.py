@@ -54,6 +54,9 @@ class _Embedder:
         self.calls += 1
         return list(self.vector)
 
+    def load(self, _model_name):
+        pass
+
     def unload(self):
         pass
 
@@ -388,6 +391,54 @@ def test_the_clusters_are_computed_once_per_embedding_set(controller):
         assert len(passes) == 2
     finally:
         module.similarity.cluster = real
+
+
+def test_the_backend_cannot_be_switched_while_a_run_is_in_flight(controller):
+    """The invariant belongs on the controller, not only on the one view that
+    respects it. Switching mid-run leaves `model_name` on the new backend while
+    the running loop writes the OLD backend's vectors under new-backend cache
+    keys -- into a file that outlives the session."""
+    controller._computing = True
+    assert controller.set_model("DINOv2 (base)") is False
+    assert controller.model_name != "DINOv2 (base)"
+
+
+def test_embeddings_are_stored_as_float32_arrays(controller, monkeypatch):
+    """At the supported ceiling this is 60 MB against roughly 500 MB of Python
+    float objects, which is the claim the ADR rests on.
+
+    Stubbed at `_embed_one`, deliberately: letting the real one run on a fake
+    file yields no embeddings, and `compute` then opens a modal QMessageBox
+    with nobody to dismiss it -- so the test would hang rather than fail.
+    """
+    controller.mw.all_images.append({"file_name": "clip.mp4"})
+    controller.mw.image_slices["clip"] = _Slices(["clip_F00000", "clip_F00001"])
+    monkeypatch.setattr(
+        controller, "_embed_one", lambda _kind, _payload, _cache: ([0.1, 0.2], False)
+    )
+
+    assert controller.compute() is True
+
+    stored = next(iter(controller.embeddings.values()))
+    assert isinstance(stored, np.ndarray)
+    assert stored.dtype == np.float32
+
+
+def test_a_cancelled_run_still_saves_what_it_computed(controller, monkeypatch):
+    """Embedding is the expensive half; throwing away a cancelled run's work
+    would make the next attempt start from nothing."""
+    controller.mw.all_images.append({"file_name": "clip.mp4"})
+    controller.mw.image_slices["clip"] = _Slices(["clip_F00000", "clip_F00001"])
+    saved = []
+    real_cache = controller.cache()
+    monkeypatch.setattr(real_cache, "save", lambda: saved.append(True))
+
+    from PyQt6.QtWidgets import QProgressDialog
+
+    monkeypatch.setattr(QProgressDialog, "wasCanceled", lambda _self: True)
+
+    assert controller.compute() is False
+    assert saved, "a cancelled run discarded the embeddings it had computed"
 
 
 def test_a_second_run_cannot_start_while_one_is_in_flight(controller, monkeypatch):

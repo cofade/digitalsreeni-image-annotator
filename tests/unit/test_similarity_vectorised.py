@@ -157,17 +157,59 @@ def test_the_threshold_is_inclusive():
 def test_raw_model_output_is_normalised_before_comparing():
     """`cosine_similarity` normalised defensively and callers relied on it.
 
-    Without normalisation these two parallel vectors would score 20, clear any
-    threshold, and every pair of long vectors in the project would cluster
-    together -- a result that looks like "your dataset is one big duplicate".
+    The fixture is chosen so the dot product and the cosine **disagree about
+    which pair is closest**, not merely about magnitudes:
+
+    * `axis` and `short` are parallel -- cosine 1.0 -- but their dot product is
+      0.15, below any usable threshold;
+    * `axis` and `diagonal` are 45 degrees apart -- cosine 0.71 -- but their dot
+      product is 9.
+
+    So without normalisation the answer is not merely inflated, it is the
+    opposite one. An earlier version of this test used axis-aligned vectors,
+    where dropping the normalisation scaled every similarity without changing
+    which pairs cleared the threshold -- and the mutation survived.
     """
     embeddings = {
-        "long": [4.0, 0.0],
-        "short": [0.5, 0.0],
-        "sideways": [0.0, 3.0],
+        "axis": [3.0, 0.0],
+        "short": [0.05, 0.0],
+        "diagonal": [3.0, 3.0],
     }
-    assert similarity.cluster(embeddings, threshold=0.99) == [["long", "short"]]
-    assert similarity.outliers(embeddings, threshold=0.99) == ["sideways"]
+    assert similarity.cluster(embeddings, threshold=0.99) == [["axis", "short"]]
+    assert similarity.outliers(embeddings, threshold=0.99) == ["diagonal"]
+
+
+def test_the_representative_pass_is_blocked(monkeypatch):
+    """Peak memory, asserted rather than claimed.
+
+    A single video clusters into ONE component, so `cluster_names` is routinely
+    the whole dataset and "just multiply the cluster" is a k x k allocation --
+    1.6 GB at the supported ceiling, once per cluster, on the GUI thread. Every
+    other pairwise routine here was blocked; this one was not, and no test
+    noticed because blocking changes memory and nothing else.
+    """
+    import tracemalloc
+
+    import numpy
+
+    count = 4000
+    assert similarity._block_rows(count) < count, "pick a size that blocks"
+    names = [f"n{index:05d}" for index in range(count)]
+    rng = numpy.random.default_rng(0)
+    embeddings = {
+        name: rng.random(4).astype(numpy.float32) for name in names
+    }
+
+    tracemalloc.start()
+    try:
+        chosen = similarity.representative(names, embeddings)
+        peak = tracemalloc.get_traced_memory()[1]
+    finally:
+        tracemalloc.stop()
+
+    assert chosen in embeddings
+    # The full product alone is count^2 * 4 bytes = 64 MB; blocked it is ~32.
+    assert peak < count * count * 4 * 0.75, f"{peak / 1e6:.0f} MB"
 
 
 # --- blocking --------------------------------------------------------------

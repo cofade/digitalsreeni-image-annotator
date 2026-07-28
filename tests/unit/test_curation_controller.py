@@ -24,12 +24,19 @@ from src.digitalsreeni_image_annotator.inference.embedding_utils import (
 )
 
 
+class _Provider:
+    def __init__(self, dimensions):
+        self.dimensions = list(dimensions)
+
+
 class _Slices:
     """Duck-types LazySliceList closely enough for collection and embedding."""
 
-    def __init__(self, names):
+    def __init__(self, names, dimensions=None):
         self.names = list(names)
         self.materialised = []
+        if dimensions is not None:
+            self.provider = _Provider(dimensions)
 
     def get(self, name):
         self.materialised.append(name)
@@ -86,11 +93,12 @@ def controller(qtbot):
     return made
 
 
-def _add_stack(window, file_name, path, slice_names):
+def _add_stack(window, file_name, path, slice_names, dimensions=None):
     base = file_name.rsplit(".", 1)[0]
-    window.all_images.append({"file_name": file_name})
+    if not any(info["file_name"] == file_name for info in window.all_images):
+        window.all_images.append({"file_name": file_name})
     window.image_paths[file_name] = path
-    window.image_slices[base] = _Slices(slice_names)
+    window.image_slices[base] = _Slices(slice_names, dimensions)
     return window.image_slices[base]
 
 
@@ -216,6 +224,27 @@ def test_the_axis_assignment_is_part_of_the_slice_key():
     )
     # A video provider has no dimensions and needs none.
     assert slice_digest("abc", "clip_F00000", None) == "abc:clip_F00000"
+
+
+def test_the_controller_passes_the_axis_assignment_into_the_key(
+    controller, tmp_path
+):
+    """`slice_digest` accepting the assignment is worth nothing if the caller
+    never reads it off the provider. Same file, same slice name, two different
+    assignments: the second must be a cache miss."""
+    stack = tmp_path / "stack.tif"
+    stack.write_bytes(b"pretend stack")
+    cache = EmbeddingCache(str(tmp_path))
+
+    _add_stack(controller.mw, "stack.tif", str(stack), ["stack_Z1"], ["Z", "H", "W"])
+    payload = controller.collect_work_items()[0][2]
+    controller._embed_one("slice", payload, cache)
+
+    _add_stack(controller.mw, "stack.tif", str(stack), ["stack_Z1"], ["H", "W", "Z"])
+    payload = controller.collect_work_items()[0][2]
+    _vector, from_cache = controller._embed_one("slice", payload, cache)
+
+    assert not from_cache, "a different axis assignment reused the old vectors"
 
 
 def test_slice_cache_entries_do_not_cross_models(controller, tmp_path):
@@ -361,12 +390,21 @@ def test_the_clusters_are_computed_once_per_embedding_set(controller):
         module.similarity.cluster = real
 
 
-def test_a_second_run_cannot_start_while_one_is_in_flight(controller):
+def test_a_second_run_cannot_start_while_one_is_in_flight(controller, monkeypatch):
     """`compute` spins `processEvents` on every item behind a NON-modal
     progress dialog, so the backend combo stays live. Re-entering unloads the
     model the outer loop is still using and leaves a mixed CLIP+DINOv2
     embedding set — undetectable downstream, since both are 768-d, and
-    `refine` feeds it into a real training run's split (ADR-013)."""
+    `refine` feeds it into a real training run's split (ADR-013).
+
+    `_compute` is stubbed rather than left to run: without the guard it reaches
+    a modal QMessageBox with nobody to dismiss it, so the test would announce
+    the bug by hanging the suite forever instead of failing. A mutation gate
+    caught that — it had to kill the run on a timeout.
+    """
+    monkeypatch.setattr(
+        controller, "_compute", lambda _parent: pytest.fail("re-entered a run")
+    )
     controller._computing = True
     assert controller.compute() is False
 
@@ -447,6 +485,31 @@ def test_a_partly_scored_cluster_falls_back_to_the_medoid(controller):
         "right": np.array([1.0, 0.4], dtype=np.float32),
     }
     controller.mw.review_controller = _Review({"right": _uncertainty(0.9)})
+    assert controller.suggested(["left", "middle", "right"]) == (
+        "middle",
+        "most typical",
+    )
+
+
+def test_a_record_without_a_score_still_counts_as_unmeasured(controller):
+    """The coverage check is not redundant with the mode check.
+
+    Every *ordinary* record carries both a score and a mode, so "all members
+    are uncertainty-mode" normally implies "all members are scored" -- which is
+    why dropping the count check survived a first round of tests. A record with
+    a mode and no score separates them, and without the count check the ranking
+    walks straight into a KeyError.
+    """
+    controller.embeddings = {
+        "left": np.array([1.0, 0.0], dtype=np.float32),
+        "middle": np.array([1.0, 0.2], dtype=np.float32),
+        "right": np.array([1.0, 0.4], dtype=np.float32),
+    }
+    controller.mw.review_controller = _Review({
+        "left": {"score": None, "mode": MODE_UNCERTAINTY},
+        "middle": _uncertainty(0.4),
+        "right": _uncertainty(0.9),
+    })
     assert controller.suggested(["left", "middle", "right"]) == (
         "middle",
         "most typical",

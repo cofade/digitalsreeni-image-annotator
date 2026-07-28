@@ -192,6 +192,23 @@ def test_cohesion_separates_a_compact_cluster_from_a_chained_one():
     assert loose["min"] < tight["min"]
 
 
+def test_cohesion_reports_the_actual_pair_and_not_the_diagonal():
+    """Two images have exactly one pair, so min and mean are that pair.
+
+    Counting each image's similarity to *itself* would pull the mean towards 1
+    and make every cluster look tighter than it is. The separation test above
+    compares a difference, which three extra 1.0s barely move; this pins the
+    numbers.
+    """
+    embeddings = {
+        "a": _unit(1.0, 0.0),
+        "b": _unit(0.5, math.sqrt(3) / 2),  # exactly 60 degrees -> cosine 0.5
+    }
+    result = similarity.cohesion(["a", "b"], embeddings)
+    assert result["min"] == pytest.approx(0.5, abs=1e-6)
+    assert result["mean"] == pytest.approx(0.5, abs=1e-6)
+
+
 def test_cohesion_of_fewer_than_two_images_is_none():
     """A single image has no pairs; reporting 1.0 would be inventing a
     measurement."""

@@ -162,6 +162,110 @@ def test_outliers_needs_at_least_two_images():
     assert similarity.outliers({"a": _unit(1, 0)}) == []
 
 
+# --- cohesion (#82) --------------------------------------------------------
+
+
+def test_cohesion_separates_a_compact_cluster_from_a_chained_one():
+    """The one known weakness of connected components, made visible.
+
+    Transitivity is the right call for a slow pan, but it means a cluster can
+    be a chain rather than a blob -- and the report otherwise draws both the
+    same way. A compact cluster has its minimum pair close to its mean; a
+    chained one has a minimum well below it.
+    """
+    compact = {
+        "a": _unit(1.0, 0.00),
+        "b": _unit(1.0, 0.02),
+        "c": _unit(1.0, 0.04),
+    }
+    chained = {
+        "a": _unit(1.0, 0.00),
+        "b": _unit(1.0, 0.30),
+        "c": _unit(1.0, 0.62),
+    }
+
+    tight = similarity.cohesion(["a", "b", "c"], compact)
+    loose = similarity.cohesion(["a", "b", "c"], chained)
+
+    assert tight["mean"] - tight["min"] < 0.01
+    assert loose["mean"] - loose["min"] > 0.05
+    assert loose["min"] < tight["min"]
+
+
+def test_cohesion_of_fewer_than_two_images_is_none():
+    """A single image has no pairs; reporting 1.0 would be inventing a
+    measurement."""
+    embeddings = {"a": _unit(1, 0)}
+    assert similarity.cohesion(["a"], embeddings) is None
+    assert similarity.cohesion([], embeddings) is None
+    assert similarity.cohesion(None, embeddings) is None
+
+
+def test_cohesion_ignores_names_it_has_no_embedding_for():
+    embeddings = {"a": _unit(1, 0), "b": _unit(1, 0)}
+    assert similarity.cohesion(["a", "b", "gone"], embeddings) == (
+        similarity.cohesion(["a", "b"], embeddings)
+    )
+    assert similarity.cohesion(["a", "gone"], embeddings) is None
+
+
+# --- appearance modes (#82) ------------------------------------------------
+
+
+def test_modes_partition_every_image_including_the_lonely_ones():
+    """`cluster` drops singletons because an image resembling nothing is not a
+    near-duplicate finding. `modes` keeps them, because a dataset made of forty
+    images that resemble nothing *is* the finding."""
+    embeddings = {
+        "a1": _unit(1, 0), "a2": _unit(1, 0),
+        "b1": _unit(0, 1),
+    }
+    groups = similarity.modes(embeddings, threshold=0.9)
+    assert groups == [["a1", "a2"], ["b1"]]
+    assert sum(len(group) for group in groups) == len(embeddings)
+
+
+def test_modes_use_a_lower_threshold_than_near_duplicate_clustering():
+    """Modes answer a coarser question, so the default must be well below the
+    near-duplicate default -- otherwise the two numbers say the same thing."""
+    assert similarity.MODE_SIMILARITY < similarity.DEFAULT_SIMILARITY
+
+
+def test_modes_of_an_empty_set_is_empty():
+    assert similarity.modes({}) == []
+    assert similarity.modes(None) == []
+
+
+def test_a_single_image_is_one_mode():
+    assert similarity.modes({"only": _unit(1, 0)}) == [["only"]]
+
+
+# --- the combined pass (#82) -----------------------------------------------
+
+
+def test_analyse_agrees_with_the_individual_functions():
+    """`analyse` exists to answer all three questions from one sweep over the
+    pairs. It must not answer them differently."""
+    embeddings = {
+        "a1": _unit(1.0, 0.00), "a2": _unit(1.0, 0.01),
+        "b1": _unit(0.0, 1.00),
+        "c1": _unit(1.0, 1.00),
+    }
+    result = similarity.analyse(embeddings, threshold=0.95, mode_threshold=0.6)
+    assert result["clusters"] == similarity.cluster(embeddings, 0.95)
+    assert result["outliers"] == similarity.outliers(embeddings, 0.95)
+    assert result["modes"] == similarity.modes(embeddings, 0.6)
+
+
+def test_analyse_of_a_trivial_project_reports_one_mode_per_image():
+    assert similarity.analyse({}) == {
+        "clusters": [], "outliers": [], "modes": []
+    }
+    assert similarity.analyse({"only": _unit(1, 0)}) == {
+        "clusters": [], "outliers": [], "modes": [["only"]]
+    }
+
+
 # --- summary ---------------------------------------------------------------
 
 

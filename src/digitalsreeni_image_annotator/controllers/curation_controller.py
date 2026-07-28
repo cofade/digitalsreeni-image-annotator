@@ -42,12 +42,43 @@ class CurationController(QObject):
         self.model_name = DEFAULT_MODEL
         self.threshold = similarity.DEFAULT_SIMILARITY
         self.mode_threshold = similarity.MODE_SIMILARITY
-        self.embeddings = {}
+        self._embeddings = {}
         self._cache = None
+        # In-flight guard (ADR-013). `compute` spins `processEvents` on every
+        # item and its progress dialog is non-modal, so the model combo stays
+        # live for the whole run: a second selection re-enters here, unloads
+        # the model the outer loop is still using, and the outer loop then
+        # overwrites `embeddings` with a mixture of CLIP and DINOv2 vectors.
+        # Both are 768-d, so nothing downstream can detect it -- and `refine`
+        # feeds those clusters straight into a real training run's split.
+        self._computing = False
+        # Bumped on every assignment to `embeddings` (see the property below),
+        # so derived results can be cached without a stale-read risk.
+        self._version = 0
+        self._clusters_cache = None
         # Source-file digests for this run. Hashing a 2 GB video once is fine;
         # hashing it once per frame is not, and the frames are the reason the
         # cache exists at all.
         self._digests = {}
+
+    @property
+    def embeddings(self):
+        return self._embeddings
+
+    @embeddings.setter
+    def embeddings(self, value):
+        """A property purely so every assignment bumps the version.
+
+        The dialog restores a previous model's vectors by plain assignment, and
+        `set_model` clears them; a cache keyed on identity would go stale on
+        either. This is the one write path, so it is the one place to count.
+        """
+        self._embeddings = value
+        self._version += 1
+        self._clusters_cache = None
+
+    def is_computing(self):
+        return self._computing
 
     # --- collection ---
 
@@ -143,6 +174,16 @@ class CurationController(QObject):
         user switches backend, instead of closing and reopening itself.
         """
         parent = parent or self.mw
+        if self._computing:
+            logger.warning("curation run re-entered; ignoring")
+            return False
+        self._computing = True
+        try:
+            return self._compute(parent)
+        finally:
+            self._computing = False
+
+    def _compute(self, parent):
         self._digests = {}
         items = self.collect_work_items()
         if len(items) < 2:
@@ -249,7 +290,13 @@ class CurationController(QObject):
             return vector, False
 
         slices, name, source = payload
-        digest = slice_digest(self._source_digest(source), name)
+        # The axis assignment is part of the key: two assignments of one array
+        # can produce identical slice names for different pixels (see
+        # `slice_digest`). A video provider has no `dimensions` and needs none.
+        provider = getattr(slices, "provider", None)
+        digest = slice_digest(
+            self._source_digest(source), name, getattr(provider, "dimensions", None)
+        )
         cached = cache.get(self.model_name, digest)
         if cached is not None:
             return cached, True
@@ -276,10 +323,22 @@ class CurationController(QObject):
         )
 
     def clusters(self, threshold=None):
-        """Near-duplicate clusters at ``threshold``."""
-        return similarity.cluster(
-            self.embeddings, self.threshold if threshold is None else threshold
-        )
+        """Near-duplicate clusters at ``threshold``, memoised.
+
+        The memo is what makes :meth:`refine` honest about its cost. Every
+        export and every training launch asks for the clusters, and at the
+        supported ceiling one pass is several seconds on the GUI thread —
+        cheap once, not cheap four times. The key is the embedding *version*
+        (bumped on every assignment) plus the model and threshold, so it cannot
+        outlive the vectors it describes.
+        """
+        threshold = self.threshold if threshold is None else threshold
+        key = (self._version, self.model_name, threshold)
+        if self._clusters_cache is not None and self._clusters_cache[0] == key:
+            return self._clusters_cache[1]
+        result = similarity.cluster(self.embeddings, threshold)
+        self._clusters_cache = (key, result)
+        return result
 
     def representative(self, cluster_names):
         return similarity.representative(cluster_names, self.embeddings)

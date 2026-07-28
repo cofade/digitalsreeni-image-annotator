@@ -170,6 +170,27 @@ def test_a_failed_switch_puts_the_previous_model_back(dialog, monkeypatch):
     assert dialog.tree.topLevelItemCount() > 0, "the report was left empty"
 
 
+def test_the_picker_is_inert_while_a_run_is_in_flight(dialog, monkeypatch):
+    """`compute` spins the event loop on every item and its progress dialog is
+    non-modal, so the combo stays clickable for the whole run. A second
+    selection used to unload the model the outer loop was still using and leave
+    a mixed CLIP+DINOv2 embedding set behind — both are 768-d, so nothing
+    downstream can detect it, and `refine` feeds those clusters into a real
+    training run's split."""
+    monkeypatch.setattr(dialog.controller, "is_computing", lambda: True)
+    before = dialog.controller.model_name
+    monkeypatch.setattr(
+        dialog.controller,
+        "compute",
+        lambda _parent=None: pytest.fail("re-entered a run in flight"),
+    )
+
+    dialog.model_combo.setCurrentText("DINOv2 (base)")
+
+    assert dialog.controller.model_name == before
+    assert dialog.model_combo.currentText() == before
+
+
 # --- the threshold slider --------------------------------------------------
 
 
@@ -179,7 +200,7 @@ def test_dragging_the_slider_does_not_re_analyse_per_tick(dialog, monkeypatch):
     calls = []
     monkeypatch.setattr(
         dialog.controller, "analyse", lambda *a, **k: calls.append(1) or {
-            "clusters": [], "outliers": [], "modes": []
+            "clusters": [], "outliers": [], "modes": [], "mode_threshold": 0.8
         }
     )
 
@@ -194,7 +215,7 @@ def test_the_slider_re_analyses_once_the_drag_settles(qtbot, dialog, monkeypatch
     calls = []
     monkeypatch.setattr(
         dialog.controller, "analyse", lambda *a, **k: calls.append(1) or {
-            "clusters": [], "outliers": [], "modes": []
+            "clusters": [], "outliers": [], "modes": [], "mode_threshold": 0.8
         }
     )
 

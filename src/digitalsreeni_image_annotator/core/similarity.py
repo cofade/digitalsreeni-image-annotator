@@ -39,14 +39,20 @@ MODE_SIMILARITY = 0.80
 # peak memory for the pairwise work is a fixed ~16 MB (float32) instead of
 # growing with n^2. The block *row count* is derived from this and n, so a
 # larger dataset gets narrower blocks rather than a bigger allocation.
+#
+# Every pairwise routine here has to use it. `representative` did not, and a
+# single video clusters into ONE component -- so "a cluster" was routinely the
+# whole dataset and the unblocked k x k product was a 1.6 GB allocation at the
+# limit below.
 _MAX_BLOCK_ELEMENTS = 4_000_000
 
 # Above this many images the run stops being worth starting. The old limit was
 # 3000 and it measured the implementation rather than the problem: a pure-
 # Python double loop recomputing both vector norms per pair. Vectorised, 20 000
-# images re-cluster in a few seconds with peak memory around 120 MB (measured,
-# 768-d vectors), and the binding cost has moved to *embedding* -- one forward
-# pass per image through CLIP or DINOv2, which nothing here makes cheaper.
+# images re-cluster in a few seconds with bounded peak memory (measured with
+# 768-d vectors: analyse 37 MB, cohesion 47 MB, representative 65 MB), and the
+# binding cost has moved to *embedding* -- one forward pass per image through
+# CLIP or DINOv2, which nothing here makes cheaper.
 #
 # So the limit is now set by what a person will wait for, not by what fits in
 # RAM, and the message says which.
@@ -319,10 +325,20 @@ def analyse(
 
     ``modes`` is computed at its own, lower threshold in the same pass: two
     comparisons against one matrix product cost nothing next to the product.
+    It is **clamped** to no higher than ``threshold``, and the effective value
+    is returned: the slider reaches 0.50, well below the 0.80 default, and
+    modes finer than the near-duplicate clusters they are supposed to
+    generalise would invert the relationship the report describes.
     """
+    mode_threshold = min(mode_threshold, threshold)
     names, matrix = _matrix(embeddings)
     if len(names) < 2:
-        return {"clusters": [], "outliers": [], "modes": [[name] for name in names]}
+        return {
+            "clusters": [],
+            "outliers": [],
+            "modes": [[name] for name in names],
+            "mode_threshold": mode_threshold,
+        }
 
     labellings, nearest = _scan(matrix, [threshold, mode_threshold])
     return {
@@ -333,6 +349,7 @@ def analyse(
             name for index, name in enumerate(names) if nearest[index] < threshold
         ],
         "modes": _named_groups(names, labellings[1]),
+        "mode_threshold": mode_threshold,
     }
 
 
@@ -374,11 +391,22 @@ def representative(cluster_names, embeddings):
     if len(cluster_names) == 1:
         return cluster_names[0]
     matrix = _stack(cluster_names, embeddings)
-    # Mean similarity to the others: the row sum less the row's similarity to
-    # itself, which is 1 for any real vector and 0 for a zero one -- so it is
-    # subtracted rather than assumed.
-    similarities = matrix @ matrix.T
-    totals = similarities.sum(axis=1) - np.diagonal(similarities)
+    count = matrix.shape[0]
+    totals = np.empty(count, dtype=np.float32)
+    # Blocked like everything else here. A single video clusters into ONE
+    # component, so `cluster_names` can be the whole dataset -- an unblocked
+    # k x k product would be a 1.6 GB allocation at the supported ceiling, and
+    # the dialog calls this once per cluster.
+    chunk = _block_rows(count)
+    for start in range(0, count, chunk):
+        stop = min(start + chunk, count)
+        similarities = matrix[start:stop] @ matrix.T
+        # Mean similarity to the *others*: the row sum less the row's
+        # similarity to itself, which is 1 for any real vector and 0 for a zero
+        # one -- so it is subtracted rather than assumed. The divisor is the
+        # same for every row, so argmax over the sums is the same answer.
+        own = similarities[np.arange(stop - start), np.arange(start, stop)]
+        totals[start:stop] = similarities.sum(axis=1) - own
     # argmax takes the first of a tie, matching the strict `>` the loop used.
     return cluster_names[int(np.argmax(totals))]
 

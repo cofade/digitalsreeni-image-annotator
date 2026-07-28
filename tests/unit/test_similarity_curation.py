@@ -259,11 +259,35 @@ def test_analyse_agrees_with_the_individual_functions():
 
 def test_analyse_of_a_trivial_project_reports_one_mode_per_image():
     assert similarity.analyse({}) == {
-        "clusters": [], "outliers": [], "modes": []
+        "clusters": [], "outliers": [], "modes": [],
+        "mode_threshold": similarity.MODE_SIMILARITY,
     }
     assert similarity.analyse({"only": _unit(1, 0)}) == {
-        "clusters": [], "outliers": [], "modes": [["only"]]
+        "clusters": [], "outliers": [], "modes": [["only"]],
+        "mode_threshold": similarity.MODE_SIMILARITY,
     }
+
+
+def test_modes_are_never_finer_than_the_clusters_they_generalise():
+    """The slider reaches 0.50, well below the 0.80 mode default. Unclamped, a
+    threshold of 0.6 would report *more* appearance modes than near-duplicate
+    clusters — inverting the relationship the report describes, in a line that
+    states its own threshold and therefore looks authoritative."""
+    embeddings = {
+        "a": _unit(1.0, 0.0),
+        "b": _unit(1.0, 0.5),
+        "c": _unit(0.0, 1.0),
+    }
+    result = similarity.analyse(embeddings, threshold=0.6)
+
+    assert result["mode_threshold"] == 0.6
+    clustered = {name for group in result["clusters"] for name in group}
+    for mode in result["modes"]:
+        # Every cluster is contained in one mode, never split across two.
+        for group in result["clusters"]:
+            shared = set(group) & set(mode)
+            assert shared in (set(), set(group))
+    assert clustered
 
 
 # --- summary ---------------------------------------------------------------

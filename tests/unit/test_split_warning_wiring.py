@@ -106,6 +106,57 @@ def test_a_caller_without_project_state_gets_the_plain_prompt(monkeypatch):
     assert io_controller.prompt_validation_split(None) == (20, True)
 
 
+# --- split_inputs: one grouping, computed once ------------------------------
+
+
+def test_split_inputs_carries_the_curation_refinement(qtbot):
+    """The one route by which near-duplicate clusters reach a split (ADR-045).
+
+    These two files are independent by name — nothing structural links them —
+    so if `split_inputs` returned the bare derived grouping (or None), the
+    refinement would be silently inert and every split would simply look
+    reasonable.
+    """
+    import numpy as np
+    from PyQt6.QtWidgets import QListWidget, QWidget
+
+    from src.digitalsreeni_image_annotator.controllers.curation_controller import (
+        CurationController,
+    )
+
+    class _Window(QWidget):
+        def __init__(self):
+            super().__init__()
+            self.all_images = []
+            self.image_paths = {
+                name: f"C:/photos/{name}"
+                for name in ("burst_a.png", "burst_b.png", "other.png")
+            }
+            self.image_slices = {}
+            self.slices = []
+            self.image_list = QListWidget()
+            self.current_project_file = None
+            self.all_annotations = {
+                name: {"cell": [{"bbox": [0, 0, 1, 1]}]} for name in self.image_paths
+            }
+
+    window = _Window()
+    qtbot.addWidget(window)
+    window.curation_controller = CurationController(window)
+    window.curation_controller.embeddings = {
+        "burst_a.png": np.array([1.0, 0.0], dtype=np.float32),
+        "burst_b.png": np.array([1.0, 0.01], dtype=np.float32),
+        "other.png": np.array([0.0, 1.0], dtype=np.float32),
+    }
+
+    names, groups = io_controller.split_inputs(window)
+
+    assert set(names) == set(window.all_annotations)
+    assert groups is not None, "no grouping reached the split"
+    assert groups["burst_a.png"] == groups["burst_b.png"]
+    assert groups["other.png"] != groups["burst_a.png"]
+
+
 # --- the training call sites ------------------------------------------------
 
 

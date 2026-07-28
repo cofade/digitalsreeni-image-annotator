@@ -2478,7 +2478,10 @@ reframed others:
   empirically; answering it globally would have been a guess.
 - **One blocked NumPy pass, no new dependency.** `_scan` computes every threshold's components
   *and* each row's nearest neighbour from a single sweep, in row blocks sized so peak memory is a
-  constant (~120 MB measured at 20 000 images with 768-d vectors) rather than O(n²).
+  constant rather than O(n²). Measured at 20 000 images with 768-d vectors: `analyse` 37 MB,
+  `cohesion` 47 MB, `representative` 65 MB — the last of which was 1.6 GB until a review caught
+  that it was the one function still multiplying the whole cluster unblocked. A single video
+  clusters into **one** component, so "a cluster" and "the dataset" are routinely the same size.
 - **No edge list.** Components are built by relabelling, not by union-find over materialised
   edges. A project of 20 000 near-identical frames — precisely the case someone opens this tool to
   diagnose — has 200 million edges; two components can only merge n−1 times.
@@ -2487,9 +2490,9 @@ reframed others:
   is, because it is a heuristic and model-dependent.
 - **Precedence with #71, not a combined score.** Redundancy decides what can be skipped;
   uncertainty ranks what is left. With review scores the suggested cluster member switches from
-  the medoid ("most typical", right for *keeping*) to the most uncertain ("most informative",
-  right for *annotating*) — but only when every member is scored and every score is an
-  uncertainty score.
+  the medoid (labelled `most typical`, right for *keeping*) to the most uncertain (labelled
+  `most uncertain`, right for *annotating*) — but only when every member is scored and every score
+  is an uncertainty score.
 - **Slices are cached**, keyed on `(model, source-file digest, slice name)`.
 - **No automatic deletion, ever.** Re-affirmed rather than re-decided. The controller has no
   delete path at all, which is the strongest form that promise can take.
@@ -2549,6 +2552,30 @@ reframed others:
   compute the grouping for the warning and a different one for the export.
 - Curation is **not** wired into `dialogs/dataset_splitter.py` (#85): that tool splits a folder
   the app has never embedded.
-- The clusterer is called twice per training run (once for the warning, once for the export) with
-  no memoisation. At project sizes where curation is usable that is a fraction of a second; a
-  cache keyed on the embedding set would be state to invalidate for no measured gain.
+- `clusters()` is **memoised** on `(embedding version, model, threshold)`, where the version is
+  bumped by the `embeddings` property setter — the one write path, so the memo cannot outlive the
+  vectors it describes. Without it every export and every training launch pays a full pass on the
+  GUI thread, which at the new 20 000 ceiling is seconds each time. An earlier draft of this ADR
+  claimed the repetition was "a fraction of a second at project sizes where curation is usable";
+  that sentence and a 20 000-image limit could not both be true.
+- `compute()` carries an **in-flight guard** (ADR-013), and the dialog disables the picker for the
+  duration. Its `QProgressDialog` is non-modal and the loop spins `processEvents` on every item,
+  so the combo stayed live for the whole run: a second selection unloaded the model the outer loop
+  was still using and left `embeddings` holding a mixture of CLIP and DINOv2 vectors. Both are
+  768-d, so nothing downstream could detect it — and `refine` feeds those clusters into a real
+  training run's split. Found in review, reproduced headlessly.
+- The slice cache key includes the **axis assignment**, not just the source digest and the slice
+  name. A `(10, 512, 512)` array assigned `ZHW` and the same array assigned `HWZ` both produce the
+  names `base_Z1`…`base_Z10` — `SliceProvider._build_index` only emits the non-spatial letters —
+  while indexing a different axis. Same file, same name, different pixels, and the cache persists
+  across sessions. (Swapping which axis is called H and which W is harmless: both are
+  `slice(None)` in the index tuple.)
+- `split_inputs` runs **before** the validation-percentage prompt, because the warning that prompt
+  shows needs the grouping. So a user who has run curation and then exports at 0 % pays one
+  clustering pass for nothing — once per embedding set, thanks to the memo above. Making it lazy
+  would mean threading a callable through the prompt for a cost that is now paid at most once.
+- The refinement clusters at **the threshold the user last set in the report**, which they can
+  only have set by looking at it. Cohesion is shown there for exactly this reason — but note that
+  `merge_groups` then treats a chained cluster and a compact one identically. A chain whose ends
+  do not resemble each other is still merged into one group, which costs split granularity rather
+  than correctness.

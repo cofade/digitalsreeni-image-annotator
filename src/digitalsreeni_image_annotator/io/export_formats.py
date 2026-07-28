@@ -186,7 +186,10 @@ def create_coco_annotation(ann, image_id, annotation_id, class_name, class_mappi
 # override rather than an addition on purpose -- the caller's mapping is built
 # by folding clusters *into* the derived one
 # (`CurationController.split_groups`), so accepting both here would invite two
-# different answers to the same question.
+# different answers to the same question. The sentinel is `None`, not falsiness:
+# an empty mapping means "nothing to split", which is a different statement from
+# "no opinion", and conflating them is safe only by coincidence of the current
+# caller.
 
 
 def _is_exportable(image_name, slice_index, image_paths):
@@ -276,7 +279,7 @@ def export_yolo_v4(all_annotations, class_mapping, image_paths, slices, image_sl
         name for name, ann in all_annotations.items()
         if ann and _is_exportable(name, slice_index, image_paths)
     ]
-    name_groups = groups or derive_groups(annotated, image_slices)
+    name_groups = derive_groups(annotated, image_slices) if groups is None else groups
     _, val_names = assign_train_val(annotated, val_split, name_groups)
 
     for image_name, annotations in all_annotations.items():
@@ -463,7 +466,7 @@ def export_yolo_v5plus(all_annotations, class_mapping, image_paths, slices, imag
         name for name, ann in all_annotations.items()
         if ann and _is_exportable(name, slice_index, image_paths)
     ]
-    name_groups = groups or derive_groups(annotated, image_slices)
+    name_groups = derive_groups(annotated, image_slices) if groups is None else groups
     _, val_names = assign_train_val(annotated, val_split, name_groups)
 
     logger.debug(f"export: {len(all_annotations)} image entries, "

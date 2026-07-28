@@ -168,6 +168,11 @@ def test_an_explicit_grouping_overrides_the_derived_one(temp_output_dir):
     would be silently inert, which is precisely the failure mode this whole
     area keeps producing.
     """
+    from src.digitalsreeni_image_annotator.core.dataset_split import (
+        derive_groups,
+        plan_split,
+    )
+
     photo_dir = os.path.join(temp_output_dir, "photos_grouped")
     os.makedirs(photo_dir)
 
@@ -186,6 +191,16 @@ def test_an_explicit_grouping_overrides_the_derived_one(temp_output_dir):
     }
     burst = {name for name, group in groups.items() if group == "burst"}
 
+    # The exact val set the supplied grouping implies, and it must differ from
+    # the one the derived (per-name) grouping gives -- otherwise the assertion
+    # would hold whether or not the parameter is honoured, which is how the
+    # first version of this test passed against a mutation that ignored it.
+    names = sorted(annotations)
+    _, expected_val = plan_split(names, 40, groups)[:2]
+    _, derived_val = plan_split(names, 40, derive_groups(names, {}))[:2]
+    assert expected_val != derived_val, "pick a fixture the two disagree on"
+    assert burst <= expected_val or not (burst & expected_val)
+
     v5_dir = os.path.join(temp_output_dir, "grouped_arg_v5")
     export_yolo_v5plus(
         annotations, {"cell": 1}, image_paths,
@@ -193,8 +208,7 @@ def test_an_explicit_grouping_overrides_the_derived_one(temp_output_dir):
         groups=groups,
     )
     v5_val = set(os.listdir(os.path.join(v5_dir, "images", "val")))
-    held = burst & v5_val
-    assert len(held) in (0, len(burst)), "the supplied grouping was ignored"
+    assert v5_val == expected_val, "the supplied grouping was ignored"
 
     # The v4 twin: separate comprehension, separate layout.
     v4_dir = os.path.join(temp_output_dir, "grouped_arg_v4")
@@ -204,8 +218,7 @@ def test_an_explicit_grouping_overrides_the_derived_one(temp_output_dir):
         groups=groups,
     )
     v4_val = set(os.listdir(os.path.join(v4_dir, "valid", "images")))
-    held = burst & v4_val
-    assert len(held) in (0, len(burst)), "the supplied grouping was ignored"
+    assert v4_val == expected_val, "the supplied grouping was ignored"
 
 
 def test_unannotated_images_do_not_consume_the_split_budget(temp_output_dir):

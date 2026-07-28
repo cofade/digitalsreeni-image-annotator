@@ -145,11 +145,28 @@ class DatasetCurationDialog(QDialog):
         the progress dialog) must not leave the report empty: the previous
         model's vectors are put back and the combo follows.
         """
+        if self.controller.is_computing():
+            # Belt to the controller's braces: the progress dialog is
+            # non-modal and `compute` spins the event loop, so without this the
+            # combo is live during a run.
+            with QSignalBlocker(self.model_combo):
+                self.model_combo.setCurrentText(self.controller.model_name)
+            return
+
         previous = self.controller.model_name
         kept = self.controller.embeddings
         if not self.controller.set_model(model_name):
             return
-        if self.controller.compute(self):
+
+        self.model_combo.setEnabled(False)
+        self.slider.setEnabled(False)
+        try:
+            recomputed = self.controller.compute(self)
+        finally:
+            self.model_combo.setEnabled(True)
+            self.slider.setEnabled(True)
+
+        if recomputed:
             self._refresh()
             return
 
@@ -182,10 +199,12 @@ class DatasetCurationDialog(QDialog):
             f"Keeping one per cluster would skip {stats['redundant_images']}. "
             f"{len(outliers)} image(s) resemble nothing else."
         )
-        self.coverage_label.setText(self._coverage_text(result["modes"]))
+        self.coverage_label.setText(
+            self._coverage_text(result["modes"], result["mode_threshold"])
+        )
         self._fill_tree(clusters, outliers)
 
-    def _coverage_text(self, modes):
+    def _coverage_text(self, modes, mode_threshold):
         """How many distinct kinds of image the dataset holds, and how evenly.
 
         Redundancy is only half the picture: a dataset can be free of
@@ -200,7 +219,7 @@ class DatasetCurationDialog(QDialog):
         alone = sum(1 for size in sizes if size == 1)
         text = (
             f"{len(modes)} appearance mode(s) at similarity "
-            f"{self.controller.mode_threshold:.2f}: the largest holds "
+            f"{mode_threshold:.2f}: the largest holds "
             f"{max(sizes)} image(s), the smallest {min(sizes)}."
         )
         if alone:

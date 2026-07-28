@@ -205,6 +205,19 @@ def test_slice_keys_are_distinct_per_frame_and_per_source():
     assert slice_digest(None, "clip_F00000") is None
 
 
+def test_the_axis_assignment_is_part_of_the_slice_key():
+    """A (10, 512, 512) array assigned ZHW and the same array assigned HWZ both
+    yield the names `base_Z1`..`base_Z10` -- `_build_index` only emits the
+    non-spatial letters -- while indexing a different axis. Same file, same
+    name, different pixels; and the cache persists across sessions.
+    """
+    assert slice_digest("abc", "stack_Z1", ["Z", "H", "W"]) != slice_digest(
+        "abc", "stack_Z1", ["H", "W", "Z"]
+    )
+    # A video provider has no dimensions and needs none.
+    assert slice_digest("abc", "clip_F00000", None) == "abc:clip_F00000"
+
+
 def test_slice_cache_entries_do_not_cross_models(controller, tmp_path):
     video = tmp_path / "clip.mp4"
     video.write_bytes(b"pretend video")
@@ -309,6 +322,63 @@ def test_refinement_translates_clusters_for_a_keyed_split(controller):
 def test_refinement_without_embeddings_returns_the_grouping_unchanged(controller):
     groups = {"0:a": "a", "1:b": "b"}
     assert controller.refine(groups, {"0:a": "a", "1:b": "b"}) == groups
+
+
+def test_the_clusters_are_computed_once_per_embedding_set(controller):
+    """Every export and every training launch asks for them, and one pass is
+    several seconds at the supported ceiling. Cheap once is not cheap four
+    times."""
+    controller.embeddings = {
+        "a": np.array([1.0, 0.0], dtype=np.float32),
+        "b": np.array([1.0, 0.01], dtype=np.float32),
+    }
+    passes = []
+    import src.digitalsreeni_image_annotator.controllers.curation_controller as module
+
+    real = module.similarity.cluster
+
+    def _counted(embeddings, threshold):
+        passes.append(threshold)
+        return real(embeddings, threshold)
+
+    controller.clusters()
+    module.similarity.cluster = _counted
+    try:
+        controller.clusters()
+        controller.clusters()
+        assert passes == [], "the clusters were recomputed"
+
+        # New vectors invalidate it — a memo that outlived them would describe
+        # the wrong dataset.
+        controller.embeddings = dict(controller.embeddings)
+        controller.clusters()
+        assert len(passes) == 1
+
+        # So does a different threshold.
+        controller.clusters(0.5)
+        assert len(passes) == 2
+    finally:
+        module.similarity.cluster = real
+
+
+def test_a_second_run_cannot_start_while_one_is_in_flight(controller):
+    """`compute` spins `processEvents` on every item behind a NON-modal
+    progress dialog, so the backend combo stays live. Re-entering unloads the
+    model the outer loop is still using and leaves a mixed CLIP+DINOv2
+    embedding set — undetectable downstream, since both are 768-d, and
+    `refine` feeds it into a real training run's split (ADR-013)."""
+    controller._computing = True
+    assert controller.compute() is False
+
+
+def test_the_guard_is_released_even_when_a_run_fails(controller, monkeypatch):
+    def _boom(_parent):
+        raise RuntimeError("embedding exploded")
+
+    monkeypatch.setattr(controller, "_compute", _boom)
+    with pytest.raises(RuntimeError):
+        controller.compute()
+    assert controller.is_computing() is False
 
 
 # --- cooperation with the review ranking (#71) -----------------------------

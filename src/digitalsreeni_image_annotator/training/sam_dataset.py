@@ -166,6 +166,17 @@ def split_groups(groups, train_pct, keyed_groups=None):
 
     keyed, derived = split_keys(groups)
     if keyed_groups:
+        if not set(keyed_groups) & set(derived):
+            # The keys are "{index}:{name}", rebuilt here from the same list the
+            # caller keyed. If they ever stop matching -- a reordered or
+            # rebuilt group list -- every lookup falls back and the refinement
+            # vanishes without a trace. Say so; the fallback is safe, the
+            # silence is not.
+            logger.warning(
+                "the supplied grouping matched none of the %d split keys; "
+                "using the derived grouping instead",
+                len(derived),
+            )
         derived = {
             key: keyed_groups.get(key, group) for key, group in derived.items()
         }

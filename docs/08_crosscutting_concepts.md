@@ -617,10 +617,10 @@ Two features rank the same images by different criteria, and they meet on the cl
   or disagrees with the labels.
 
 The rule is **precedence, never a combined score**: redundancy filters, uncertainty ranks what is
-left. So the suggested member of a near-duplicate cluster is the medoid — "most typical", the
-right pick when the question is *which one to keep* — unless review scores are available, in which
-case it becomes the most uncertain member — "most informative", the right pick when the question is
-*which one to annotate*.
+left. So the suggested member of a near-duplicate cluster is the medoid, labelled `most typical` —
+the right pick when the question is *which one to keep* — unless review scores are available, in
+which case it becomes the most uncertain member, labelled `most uncertain` — the right pick when
+the question is *which one to annotate*.
 
 Multiplying the two into one number would need a weight nobody can justify, and would hide which
 of the two drove the answer.

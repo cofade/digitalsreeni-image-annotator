@@ -346,6 +346,8 @@ class YOLOTrainer(QObject):
             self.main_window.image_slices,
             self.dataset_path,
             val_split,
+            # The group-aware split (ADR-044) is derived inside the exporter,
+            # so this path gets it without passing anything.
             keypoint_schemas=self.main_window.keypoint_schemas,
         )
 

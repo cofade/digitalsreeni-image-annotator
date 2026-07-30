@@ -205,9 +205,11 @@ class YOLOController(QObject):
 
         # YOLO training needs a non-empty validation set; hold some images out
         # by default (0 keeps everything in train, but val/ will then be empty).
-        from .io_controller import prompt_validation_split
+        from .io_controller import annotated_image_names, prompt_validation_split
 
-        val_split, ok = prompt_validation_split(self.mw)
+        val_split, ok = prompt_validation_split(
+            self.mw, annotated_image_names(self.mw), self.mw.image_slices
+        )
         if not ok:
             return
 

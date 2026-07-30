@@ -4,13 +4,13 @@ import json
 # headless export require a display. `core.image_size` reads the header via
 # Pillow instead. Slice QImages still arrive as arguments and are used as
 # objects, which needs no import.
+from ..core.dataset_split import assign_train_val, derive_groups
 from ..core.image_size import image_dimensions
 from ..core.keypoint_schema import schema_k
 from ..core.slice_index import resolve_slice_image as _resolve_slice_image
 from ..core.slice_index import slice_index as _slice_index
 from ..utils import calculate_area, calculate_bbox
 import yaml
-import hashlib
 import os
 import shutil
 import tempfile
@@ -174,27 +174,74 @@ def create_coco_annotation(ann, image_id, annotation_id, class_name, class_mappi
 
 
 
-def assign_train_val(image_names, val_pct):
-    """Deterministically partition image names into (train_set, val_set).
+# `assign_train_val` moved to core.dataset_split (issue #81, ADR-044) and is
+# imported above. It stays re-exported from here: `training.sam_dataset` and the
+# split tests import it from this module, and the split remains an export
+# concern even though the grouping logic is not.
 
-    val_pct in [0, 100]; 0 -> everything in train (the original behaviour).
-    Ordering uses a stable filename hash so the split is reproducible across
-    runs and machines (unlike the built-in hash() which is salted per process).
-    The val count is the nearest integer to the requested fraction, clamped so
-    the val set is never accidentally empty: whenever val_pct > 0 and there are
-    >= 2 annotated images, at least one image lands in val and at least one
-    stays in train.
+
+def _is_exportable(image_name, slice_index, image_paths):
+    """Whether the export loop below will actually write ``image_name``.
+
+    Used to filter the split input, and it has to be: a name the loop skips
+    must not consume a slot in the train/val budget. Otherwise the requested
+    percentage describes a larger set than what lands on disk — and once whole
+    groups move together (ADR-044), a video's worth of unwritable frames can
+    take the entire train side with it. That is not hypothetical: headlessly,
+    where no slice collection is loaded, it produced an empty `images/train`
+    with `data.yaml` still pointing at it.
+
+    Mirrors the loop's resolution order, with one deliberate gap: planning a
+    split must not decode pixels, so a slice that is *indexed* but whose
+    QImage turns out to be unavailable (a released video handler, an
+    undecodable frame) passes here and is skipped by the loop. It therefore
+    over-estimates slightly and never under-estimates, which is the harmless
+    direction — a name wrongly kept costs a split slot, a name wrongly dropped
+    would lose an image from the dataset.
+
+    This is a second implementation of the loop's dispatch, and what keeps the
+    two honest is
+    ``test_the_split_preview_lists_exactly_what_the_export_writes``: it runs a
+    mixed name set through both and asserts the written files equal the
+    returned names. Calling this from inside the loop as well was tried and
+    reverted — the loop's own branches already skip everything it rejects, so
+    the extra call changed nothing any test could detect.
     """
-    names = list(image_names)
-    if val_pct <= 0 or len(names) < 2:
-        return set(names), set()
-    ordered = sorted(names, key=lambda n: hashlib.md5(n.encode("utf-8")).hexdigest())
-    n = len(ordered)
-    # round() is half-to-even, which is fine here; the clamp keeps both sides
-    # non-empty regardless of how the nearest-integer falls.
-    val_count = max(1, min(n - 1, round(n * val_pct / 100)))
-    val = set(ordered[:val_count])
-    return set(names) - val, val
+    if image_name in slice_index:
+        return True
+    if '_' in image_name and '.' not in image_name:
+        # Looks like a slice, but no loaded collection holds it, so there are
+        # no pixels to write (the CLI passes empty collections by design).
+        return False
+    image_path = image_paths.get(image_name)
+    if image_path is None:
+        image_path = next(
+            (path for name, path in image_paths.items() if image_name in name), None
+        )
+    if not image_path:
+        return False
+    # TIFF/CZI sources are skipped in favour of their extracted slices.
+    return not image_path.lower().endswith(('.tif', '.tiff', '.czi'))
+
+
+def exportable_annotated_names(all_annotations, image_paths, slices, image_slices):
+    """The annotated names a YOLO export will actually write.
+
+    Exactly the set the split partitions. The UI's split preview calls this so
+    the warning it shows is about the split that runs — computing the two
+    separately is how they drift, and they did: a preview that counted an
+    unopened video's frames saw two groups and stayed quiet while the export
+    saw one and silently fell back to the per-name split.
+
+    Parameter order matches ``export_yolo_v5plus``'s (minus ``class_mapping``)
+    on purpose: a helper whose whole job is to agree with the exporter should
+    not be one transposed positional argument away from disagreeing with it.
+    """
+    index = _slice_index(slices, image_slices)
+    return [
+        name for name, annotations in (all_annotations or {}).items()
+        if annotations and _is_exportable(name, index, image_paths)
+    ]
 
 
 def export_yolo_v4(all_annotations, class_mapping, image_paths, slices, image_slices, output_dir, val_split=0):
@@ -211,9 +258,17 @@ def export_yolo_v4(all_annotations, class_mapping, image_paths, slices, image_sl
     # Create a mapping of slice names to their QImage objects
     slice_index = _slice_index(slices, image_slices)
 
-    # Deterministically split the annotated images into train/val.
-    annotated = [name for name, ann in all_annotations.items() if ann]
-    _, val_names = assign_train_val(annotated, val_split)
+    # Split by GROUP, not by name (ADR-044): a stack's slices and a video's
+    # frames are near-identical observations, and letting them straddle the
+    # split silently inflates every validation metric. Deriving the grouping
+    # here rather than taking it from the caller means every path -- including
+    # the headless CLI -- is protected without opting in.
+    annotated = [
+        name for name, ann in all_annotations.items()
+        if ann and _is_exportable(name, slice_index, image_paths)
+    ]
+    name_groups = derive_groups(annotated, image_slices)
+    _, val_names = assign_train_val(annotated, val_split, name_groups)
 
     for image_name, annotations in all_annotations.items():
         # Skip if there are no annotations for this image/slice
@@ -394,9 +449,13 @@ def export_yolo_v5plus(all_annotations, class_mapping, image_paths, slices, imag
     # here, which is what lets a video's annotated frames train (#45/#47).
     slice_index = _slice_index(slices, image_slices)
 
-    # Deterministically split the annotated images into train/val.
-    annotated = [name for name, ann in all_annotations.items() if ann]
-    _, val_names = assign_train_val(annotated, val_split)
+    # Split by GROUP, not by name (ADR-044) -- see export_yolo_v4 above.
+    annotated = [
+        name for name, ann in all_annotations.items()
+        if ann and _is_exportable(name, slice_index, image_paths)
+    ]
+    name_groups = derive_groups(annotated, image_slices)
+    _, val_names = assign_train_val(annotated, val_split, name_groups)
 
     logger.debug(f"export: {len(all_annotations)} image entries, "
           f"{len(image_paths)} known image paths, "

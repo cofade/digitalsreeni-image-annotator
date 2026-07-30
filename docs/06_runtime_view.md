@@ -700,9 +700,21 @@ User clicks "Export" > "YOLO v8/v11"
     ├─> Select output directory
     │
     ├─> Prompt for validation split % (QInputDialog, default 20, 0 = all train)
-    │       assign_train_val() deterministically partitions the annotated
-    │       images via a stable filename hash; the val count is exact so a
-    │       requested split is never silently empty (issue #83)
+    │       plan_split() partitions by GROUP, not by name (issue #81,
+    │       ADR-044): a stack's slices and a video's frames are one group and
+    │       never straddle the split, so validation is not measured on frames
+    │       all but identical to trained ones. Ordering is a stable MD5 of the
+    │       group key, so the split is reproducible across runs and machines.
+    │       A group is indivisible, so the requested count is a TARGET: the
+    │       guarantee is only that no single group added, dropped or swapped
+    │       would land closer. Neither side is ever empty.
+    │
+    ├─> Warn if the grouping degenerates
+    │       Everything in one group (a project that is one video) -> falls back
+    │       to the per-name split and says the metrics will be optimistic; an
+    │       empty val set would be truthful but silently disables validation
+    │       and early stopping (ADR-028). Also warns when the split leaves
+    │       training with a single recording.
     │
     ├─> export_yolo_v5plus(all_annotations, class_mapping, ..., val_split)
     │   │
@@ -762,7 +774,10 @@ User: SAM Fine-Tune (beta) > Train on Current Project…
     │       trainer loads its OWN SAM instance; locking avoids a 2nd model on the same CUDA context
     │
     └─> SAMTrainingThread → SAMFineTuner.train(...)
-            │  split_groups(train_pct, seed) → train/val (deterministic; empty val at 100%)
+            │  split_groups(groups, train_pct) → train/val, keyed by SOURCE not image
+            │    (ADR-044: a recording's frames never straddle the split, or the
+            │     val loss driving early stopping is measured on near-copies of
+            │     trained frames); deterministic; empty val at 100%
             │  build predictor (one warmup predict), pin device, apply freeze policy
             │  LambdaLR(warmup_cosine_lambda(total_steps)) when the schedule is on
             │  for each epoch:

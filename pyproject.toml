@@ -143,6 +143,7 @@ module = [
     "digitalsreeni_image_annotator.core.annotation_types",
     "digitalsreeni_image_annotator.core.annotation_qc",
     "digitalsreeni_image_annotator.core.constants",
+    "digitalsreeni_image_annotator.core.dataset_split",
     "digitalsreeni_image_annotator.core.disagreement",
     "digitalsreeni_image_annotator.core.image_size",
     "digitalsreeni_image_annotator.core.mask_filters",

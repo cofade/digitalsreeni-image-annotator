@@ -95,6 +95,14 @@ def run_export(args):
 
     os.makedirs(args.out, exist_ok=True)
     label = EXPORT_FORMATS[args.format]
+
+    # No split warning here, deliberately (ADR-044). The GUI raises one wherever
+    # a percentage is chosen, but headlessly it would have nothing to say: slice
+    # and frame pixels are unavailable, so `_is_exportable` drops those names
+    # before the split ever sees them, and every name that survives is a file on
+    # disk and therefore its own group. There is no leaky split to warn about
+    # because there is no group larger than one image — which the `note:` above
+    # about unexported slices already tells the user.
     _stderr(f"Exporting {len(project.image_paths)} image(s) as {label}...")
     try:
         _export_dispatch(label, project, args.out, args.val_split)

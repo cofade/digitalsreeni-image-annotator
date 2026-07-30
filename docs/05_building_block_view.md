@@ -179,7 +179,7 @@ because it is *training*, not inference.
 | Module | Responsibility |
 |--------|----------------|
 | `training/sam_trainer.py` | `SAMFineTuner` — custom decoder (optionally encoder) fine-tuning loop reusing `SAM2Predictor.get_im_features` / `prompt_inference` under autograd, focal+dice loss, AdamW. Per-epoch train/val loss + LR logging, `LambdaLR` warmup→cosine schedule, best-val checkpoint save+reload-verify (ADR-028). Also geometry helpers (`polygon_to_mask`, `mask_to_xyxy`, `mask_to_point`), `make_custom_filename`, `list_custom_models`, and the `SampleGroup` lazy-rasterising dataset item (carries a `name` for the split). |
-| `training/sam_dataset.py` | `build_groups_from_project` (live `all_annotations`) and `build_groups_from_folder` (prepared dataset) → `list[SampleGroup]`, mirroring `export_yolo_v5plus` image resolution. `split_groups(train_pct, seed)` deterministically holds out a per-image validation set (reusing `assign_train_val`). |
+| `training/sam_dataset.py` | `build_groups_from_project` (live `all_annotations`) and `build_groups_from_folder` (prepared dataset) → `list[SampleGroup]`, mirroring `export_yolo_v5plus` image resolution. `split_groups(groups, train_pct)` deterministically holds out a validation set keyed by **source, not by image** (ADR-044): `SampleGroup.name` is run through `core/dataset_split.derive_groups`, so a stack's slices and a video's frames go to one side together — which matters more here than for YOLO, because val loss drives early stopping. `build_groups_from_folder` ext-strips the manifest path into `name` so the folder path groups like the project path. |
 | `training/lr_schedule.py` | Pure `warmup_cosine_lambda(total_steps, warmup_frac, floor)` → `step→multiplier` for SAM's `LambdaLR` (ADR-028); unit-tested without torch. |
 | `training/early_stop.py` | Pure `EarlyStopper(patience)` — tracks best/best-epoch and patience-based stop for the SAM loop (ADR-028); unit-tested without torch. |
 | `training/mlflow_tracker.py` | Always-on MLflow experiment tracking (ADR-027). `MLflowTracker` (no enable/disable; tracking errors never abort training; on start fires `set_run_url_callback` with the run's UI deep link), `_NullTracker` no-op for trainer calls with no tracker, `resolve_tracking_uri()` (override → `<project>/mlruns` → `<cwd>/mlruns`), `to_mlflow_uri()` (Windows-safe `file://`), `run_ui_url()`, `start_mlflow_ui_server()` / `launch_mlflow_ui()`. SAM logs through it explicitly; YOLO uses Ultralytics' native MLflow callback. |
@@ -284,6 +284,7 @@ out-of-process.
 | `core/mask_filters.py` | Polygon IoU and the noise limits for unprompted mask proposals (#69). |
 | `core/onion.py` | Onion-skin neighbour selection, the content choice (annotations / image / both) and the settings clamps (#67). Ends never wrap. |
 | `core/image_size.py` | Image dimensions via a Pillow header read (#76) — what replaced `QImage` in the export layer. |
+| `core/dataset_split.py` | Group-aware train/val splitting (#81, ADR-044): `derive_groups` (exact from `image_slices`, name-prefix fallback), `plan_split` (whole groups, locally-optimal size, plus the `fell_back` flag), `split_warning` (the text the GUI shows — here rather than on the controller so it stays Qt-free) and `assign_train_val`, which moved here from `io/export_formats.py` and stays re-exported there. Deliberately imports nothing from `core/slice_cache`, which reaches `QImage`. |
 
 ## Level 3: CLI
 
@@ -331,7 +332,7 @@ Each tool is a standalone dialog/window:
 |--------|---------|--------------|
 | `annotation_statistics.py` | Statistics display | Count, area per class, plotly charts |
 | `coco_json_combiner.py` | Merge datasets | Combine multiple COCO JSON files |
-| `dataset_splitter.py` | Train/val/test split | Stratified splitting, configurable ratios |
+| `dataset_splitter.py` | Train/val/test split | Configurable ratios, **unseeded** `random.shuffle` — neither reproducible nor group-aware (ADR-044) |
 | `image_patcher.py` | Create patches | Sliding window with overlap |
 | `image_augmenter.py` | Data augmentation | Rotation, flip, brightness, preview |
 | `slice_registration.py` | Align slices | Multiple registration algorithms (pystackreg) |
@@ -418,9 +419,14 @@ segmentation-only output (issue #35 PR-3).
 
 **Slice Naming Convention**:
 ```
-{filename}_T{t}_Z{z}_C{c}_S{s}
-Example: stack.tif_T0_Z5_C0_S0
+{ext-stripped base}_T{t+1}_Z{z+1}_C{c+1}_S{s+1}
+Example: stack_T1_Z5_C1_S1     (from stack.tif — no extension, 1-based)
+Video:   clip_F00042           (core/video_handler.frame_key)
 ```
+
+The missing extension is what distinguishes a slice name from an image name across the
+exporters and `core/dataset_split` (ADR-044) — see
+[Slice Naming Convention](08_crosscutting_concepts.md#slice-naming-convention).
 
 **Dimension Labels**: T (Time), Z (Depth), C (Channel), S (Scene), H (Height), W (Width)
 

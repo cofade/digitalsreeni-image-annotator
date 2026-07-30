@@ -1236,10 +1236,12 @@ first 10% of steps, cosine floor = 10% of peak); only the *peak* LR, train %, an
 patience are user-editable (the literature says the peak LR matters more than the
 shape).
 
-- **Deterministic per-image split.** A new `sam_dataset.split_groups(groups,
-  train_pct, seed)` reuses the YOLO export's stable-MD5 `assign_train_val` (ADR for
-  #83) so SAM and YOLO split identically and reproducibly. `SampleGroup` gained a
-  `name` used only as the split key. At 100% train (or a single image) the val set is
+- **Deterministic split.** A new `sam_dataset.split_groups(groups, train_pct)`
+  reuses the YOLO export's stable-MD5 `assign_train_val` (ADR for #83) so SAM and
+  YOLO split identically and reproducibly. `SampleGroup` gained a `name` used only as
+  the split key. *(Superseded in part by ADR-044: the key is now the source group
+  derived from that name, not the name itself — otherwise the val loss that drives
+  early stopping below is measured on near-copies of trained frames.)* At 100% train (or a single image) the val set is
   empty and the val pass / early stopping are skipped (the UI says so; the SAM dialog
   also disables OK at 0% train). **YOLO's split stays at "Prepare Dataset" time** —
   it's baked into `images/train` vs `images/val` folders at export, so the Train
@@ -2284,3 +2286,144 @@ unclaimed.
   image is the *common* case, and breaking it would defeat the feature. Digits are unaffected in
   practice (type-ahead on a numeric prefix is rare). Revisit if type-ahead turns out to be load-
   bearing for anyone.
+
+## ADR-044: The Train/Val Split Key Is the Group, Not the Image Name
+
+**Status**: Accepted (issue #81; the decision came out of the #80 curation discussion)
+
+**Context**: `assign_train_val` partitioned train/val by a stable MD5 of the image *name*. That is
+correct exactly when every name is an independent observation, and in this app it routinely is
+not. A multi-dimensional stack contributes one name per slice (`stack_T1_Z5_C1`) and a video one
+per frame (`video_F00042`), and consecutive frames are near-identical. A name-keyed split
+therefore scatters the frames of one recording across both sides **by construction** — the model
+is validated on data it effectively trained on.
+
+Nothing fails. The dataset exports, training runs, and the validation metrics come back *better*
+— the more redundant the data, the better they look. That is the worst available failure mode for
+a number people use to decide whether a model is ready.
+
+The function was the single choke point for all three training paths: `export_yolo_v4`,
+`export_yolo_v5plus` (and therefore `prepare_dataset` → in-app YOLO training) and
+`training/sam_dataset.py::split_groups` (SAM fine-tuning — where val loss also drives early
+stopping, so a leaky split does not merely misreport, it changes when the run stops).
+
+**Decision**: The split key is a **group**, and a group never straddles the split.
+
+- Grouping is derived from **structure, not from a model**. `image_slices` is already keyed by the
+  ext-stripped base name, so `{slice_name: base}` is exact and needs no parsing and no pixel work.
+  Names it does not cover fall back to a name-prefix heuristic; anything left is its own group.
+- **Always on, no opt-in.** The exporters derive the grouping themselves, so no caller has to
+  remember to ask for it. The headless CLI is safe for a different reason and it is worth being
+  precise about which: it cannot resolve slice or frame pixels at all, so `_is_exportable` drops
+  those names before the split sees them and every surviving name is a file on disk, hence its own
+  group. There is no group larger than one image there, so there is nothing to leak and nothing to
+  warn about — the CLI's existing `note:` about unexported slices is the honest signal. An earlier
+  revision of this change shipped a CLI warning branch that could not fire.
+- Embedding clusters from the curation feature (#72) could **refine** the grouping — union them
+  into the derived groups so two near-identical images from different files also stay on one side
+  — but are never required: the worst case, a 200-frame video, is fixed with no model, no GPU and
+  no curation run. None of that is in this change, not even the seam. `similarity.cluster` is
+  pure-Python all-pairs, so calling it during an export would freeze the GUI for minutes on a few
+  hundred images; the merge helper and the parameter to feed it land in #82 together with the
+  vectorised clusterer and an actual caller.
+- The exporters filter the split input to names they will actually **write** (`_is_exportable`).
+  A name the export loop skips must not consume a slot in the train/val budget: once whole groups
+  move together, a video's worth of unwritable frames takes the entire train side with it. That
+  is not hypothetical — headlessly, where no slice collection is loaded, an earlier revision of
+  this change produced an empty `images/train` with `data.yaml` still pointing at it. As a side
+  effect the requested percentage now describes what lands on disk rather than what was counted.
+- New Qt-free `core/dataset_split.py`. `assign_train_val` moved there and stays **re-exported**
+  from `io/export_formats.py`, which is where `training/sam_dataset.py` and the split tests import
+  it from.
+- **Degenerate case: warn, do not silently disable validation.** When everything belongs to one
+  group — a project that is a single video — no honest split exists. `plan_split` returns a
+  `fell_back` flag, uses the per-name split, and the UI states plainly that the validation numbers
+  will be optimistic.
+
+**Alternatives considered**:
+
+- *An empty val set in the degenerate case*: the truthful answer, and rejected. The trainer skips
+  the validation pass and early stopping when val is empty (ADR-028), so the user silently loses
+  two features and gets no explanation — that reads as a regression, not as information.
+- *Opt-in checkbox, default off*: no behavioural change for anyone, and the leak stays the default
+  for everyone who never finds the checkbox. The bug would remain in practice.
+- *Grouping from embedding clusters only*: conceptually cleaner, practically worse. It requires a
+  GPU curation run before every export, and without one there is no protection at all.
+- *Splitting a group proportionally instead of whole*: defeats the purpose. A partially split
+  group leaks exactly as much as an unsplit one.
+
+**Consequences**:
+
+- The requested val percentage becomes a **target rather than a guarantee**, and the honest bound
+  is narrow: *no single group added, dropped, or swapped for another would land closer to the
+  target*. Choosing the best subset is subset-sum, so `_split_by_group` fills with groups that
+  fit, allows one large group to replace the selection when that lands nearer, then hill-climbs on
+  single add/drop/swap moves until none improves. The climb enumerates one representative per
+  distinct group *size*, since same-size groups are interchangeable for hitting a count — without
+  that, the ungrouped path (one group per image) would compare millions of identical singletons.
+  On a project of one 100-frame video plus one photo, a requested 20 % delivers a single image:
+  that is the closer of the two available answers, not a defect. **Group cohesion is not
+  sufficient test coverage here** — a selection can keep every group whole and still deliver 1 %
+  for a requested 20 %, so the delivered *size* needs its own property test, as do the bounds that
+  keep both sides non-empty, and so does every boolean filter feeding the budget.
+- `groups=None` is bit-for-bit the historical per-name split (every name its own group), so
+  the existing `test_yolo_split.py` tests are unaffected.
+- The name-prefix fallback deliberately errs toward **over-grouping**: a stack literally named
+  `run_T1` yields base `run`, merging it with `run_T2`. That costs some split granularity; the
+  opposite error would reopen the leak this ADR exists to close. The suffix is restricted to the
+  letters `DimensionDialog` actually assigns (T/Z/C/S) plus F for video, because matching any
+  `[A-Z]\d+` collapsed a whole 96-well plate into one group. Ambiguity remains where the name is
+  genuinely ambiguous — `Plate1_C1_Z1` cannot be told apart from a stack `Plate1` with a channel
+  and a Z dimension, so wells in rows C, F, S, T and Z still merge. Nothing in a filename can
+  resolve that, which is the argument for the `image_slices` mapping being the primary source and
+  the heuristic only the fallback for paths that have none.
+- **Known gap:** a folder of *extracted* video frames on disk (`clip_F00001.png` as real files)
+  does not group. The dot means "a file, therefore an independent observation", and that is the
+  discriminator both the exporters and `_slice_base` rely on. Grouping ext-stripped filenames too
+  would close it, at the cost of collapsing legitimately independent photographs that happen to be
+  named `sample_T1.png` / `sample_T2.png` into one group — a false alarm on a flat dataset,
+  reported rather than silent, but disruptive. Left open deliberately, and recorded here rather
+  than discovered later: this is the one remaining path where the leak is still silent.
+  `dialogs/dataset_splitter.py` — the standalone folder-splitting tool, which is not one of the
+  three choke points above — walks straight into it and is also unseeded, so its splits are not
+  even reproducible. Tracked as **#85**; the app is **not** uniformly group-aware, and that tool
+  is where it is not.
+  - One exception, deliberately inconsistent with the paragraph above:
+    `build_groups_from_folder` **does** ext-strip, because a prepared SAM dataset is written by
+    `export_sam_dataset` from slice names and is therefore known to contain them. The cost is the
+    one just described — `sample_T1.png` and `sample_T2.png` in such a folder merge — and it is
+    accepted there because the alternative was no grouping at all on that path. `_is_exportable`
+    carries a second, narrower version of the same gap: it cannot decode pixels, so a slice that
+    is *indexed* but turns out to be undecodable passes the filter and consumes a split slot the
+    export never fills. Same shape as the empty-`images/val` bug, much smaller blast radius, and
+    unavoidable without decoding during planning. The two SAM entry
+    points consequently group the same data slightly differently.
+- `SAMFineTuner.train` calls `split_groups` on a worker thread with no access to `image_slices`,
+  so it uses the prefix fallback — which covers every name the app itself produces.
+- The wording lives in `core/dataset_split.split_warning`, **not** on the controller. It began
+  next to the dialog, in a module importing Qt at top level, which is what forced the CLI to
+  hand-roll a subset of it — the same duplication that had already let the split preview and the
+  export drift apart. `io_controller` is now only the QMessageBox shell. (The CLI ended up needing
+  no warning at all, per the point above, but keeping pure text out of a Qt module is right
+  regardless.)
+- The warning offers **Cancel**, and all three GUI call sites honour it: `prompt_validation_split`
+  (YOLO export menu and Prepare YOLO Dataset) returns to its input dialog,
+  `TrainingController.run_yolo` and `SAMTrainController._launch` abandon the run. A warning saying
+  the validation numbers cannot be trusted, with only an OK button, trains exactly the
+  click-through reflex it exists to prevent — and its advice ("choose a different percentage") had
+  nothing to act on. `run_yolo` is the one that must not be missed: the unified Train dialog
+  carries its own split slider and never passes through the prompt, so it would otherwise be the
+  app's main training path with no signal at all.
+- It covers a second case besides the degenerate grouping: a split that leaves **training with a
+  single group**. Holding out a percentage by image count can route every small group to
+  validation when one group dominates, which is optimal by the count the split aims at and useless
+  as a dataset — and silent, because the grouping technically succeeded.
+- The preview behind the warning and the export itself must be computed over the **same** set of
+  names, which is why both go through `exportable_annotated_names`. They were computed separately
+  once, and a preview that counted an unopened video's frames stayed quiet while the export fell
+  back to the per-name split.
+- `training/sam_dataset.py::build_groups_from_folder` normalises `SampleGroup.name` to the
+  ext-stripped basename. The manifest stores `images/clip_F00042.png`, and that dot made every
+  frame its own group — so "Fine-Tune SAM from Dataset Folder" got no grouping at all while the
+  project path was correctly grouped. Normalising at the producer keeps every consumer of `name`
+  seeing one shape.

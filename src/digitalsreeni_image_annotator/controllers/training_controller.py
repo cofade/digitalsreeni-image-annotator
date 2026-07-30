@@ -69,6 +69,26 @@ class TrainingController(QObject):
         if trainer is None:
             return
 
+        # This dialog carries its own split slider, so it never passes through
+        # `prompt_validation_split` — the split warning has to be raised here
+        # too, or the app's main training path is the one place it is missing
+        # (ADR-044). Declining it abandons the run: the user has just been told
+        # the validation numbers cannot be trusted.
+        #
+        # Before `load_model`, which downloads weights on first use: the split
+        # is knowable without the model, and backing out should not cost a
+        # several-hundred-megabyte download. Only `prepare_dataset` has to come
+        # after the load (ADR-042).
+        from .io_controller import annotated_image_names, confirm_split_warning
+
+        if not confirm_split_warning(
+            self.mw,
+            annotated_image_names(self.mw),
+            self.mw.image_slices,
+            config["val_split"],
+        ):
+            return
+
         # load_model reports its own failure and returns False.
         if not trainer.load_model(config["base_model"]):
             return

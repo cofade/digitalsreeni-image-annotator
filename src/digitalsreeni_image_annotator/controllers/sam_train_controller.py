@@ -173,6 +173,30 @@ class SAMTrainController(QObject):
         if dialog.exec() != SAMTrainConfigDialog.DialogCode.Accepted:
             return
         cfg = dialog.get_config()
+
+        # Same grouping caveat as the YOLO path (ADR-044), and it bites harder
+        # here: the SAM val loss drives early stopping, so a val set sharing a
+        # recording with train does not merely report an optimistic number, it
+        # changes when the run stops. Worth being able to back out of.
+        from ..training.sam_dataset import split_keys
+        from .io_controller import confirm_split_warning
+
+        # The exact keys and grouping `split_groups` will use, not a rebuilt
+        # approximation of them: two groups can share a name, and a bare name
+        # list collapses those before the split sees them.
+        keyed, keyed_groups = split_keys(groups)
+        if not confirm_split_warning(
+            self.mw,
+            list(keyed),
+            None,
+            # Hard key, like `run_yolo`'s `config["val_split"]`: a soft default
+            # would silently set 0% and switch the warning off for good if the
+            # dialog's key were ever renamed.
+            100 - cfg["train_pct"],
+            groups=keyed_groups,
+        ):
+            return
+
         base_model = cfg.pop("base_model")
         out_name = cfg.pop("out_name")
         cfg["out_path"] = make_custom_filename(base_model, out_name)

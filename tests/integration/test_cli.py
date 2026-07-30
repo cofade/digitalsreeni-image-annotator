@@ -252,6 +252,73 @@ def test_no_autosave_or_recovery_file_appears(project, tmp_path):
 # --- export ----------------------------------------------------------------
 
 
+def test_a_headless_export_writes_no_frames_and_splits_only_real_images(tmp_path):
+    """Why the CLI carries no split warning (ADR-044), asserted through the CLI.
+
+    A video's frames have no pixels headlessly, so they are dropped before the
+    split sees them and every surviving name is a file on disk — hence its own
+    group, hence nothing to leak. ADR-044 rests its whole "the CLI needs no
+    warning" argument on that, so it is pinned here by running the real command
+    rather than by restating the arguments it passes.
+
+    An earlier revision shipped a warning branch here that could never fire,
+    with a test that passed only on unrelated stderr noise (issue #84).
+    """
+    from PIL import Image
+
+    images_dir = tmp_path / "images"
+    images_dir.mkdir()
+
+    images, paths, rel = [], {}, {}
+    for index in range(5):
+        name = f"photo{index}.png"
+        Image.new("RGB", (60, 60), (64, 64, 64)).save(images_dir / name)
+        paths[name] = str(images_dir / name)
+        rel[name] = os.path.join("images", name)
+        images.append({
+            "file_name": name, "width": 60, "height": 60, "id": index + 1,
+            "is_multi_slice": False,
+            "annotations": {"cell": [_square(5, 5, 20)]},
+        })
+    # A video: its annotated frames live as slice entries with no file of
+    # their own, which is exactly what the CLI cannot resolve. The container
+    # itself has to exist, or `run_export` refuses the whole project as having
+    # missing images before any of this matters.
+    (images_dir / "clip.mp4").write_bytes(b"")
+    paths["clip.mp4"] = str(images_dir / "clip.mp4")
+    rel["clip.mp4"] = os.path.join("images", "clip.mp4")
+    images.append({
+        "file_name": "clip.mp4", "width": 60, "height": 60, "id": 99,
+        "is_multi_slice": True,
+        "slices": [
+            {"name": f"clip_F{i:05d}", "annotations": {"cell": [_square(5, 5, 20)]}}
+            for i in range(20)
+        ],
+    })
+
+    project_path = tmp_path / "mixed.iap"
+    project_path.write_text(json.dumps({
+        "classes": [{"name": "cell", "id": 1, "color": "#1F77B4"}],
+        "images": images,
+        "image_paths": paths,
+        "image_paths_rel": rel,
+    }), encoding="utf-8")
+
+    out = tmp_path / "out"
+    assert main([
+        "export", "--project", str(project_path), "--format", "yolov5",
+        "--out", str(out), "--val-split", "20",
+    ]) == EXIT_OK
+
+    train = os.listdir(out / "images" / "train")
+    val = os.listdir(out / "images" / "val")
+    assert not any(name.startswith("clip_F") for name in train + val), (
+        "a frame was written headlessly; the no-warning argument no longer holds"
+    )
+    # The 20% is over the five real images, not over the 25 annotated names.
+    assert len(train) == 4 and len(val) == 1
+
+
 def test_export_writes_coco(project, tmp_path):
     out = tmp_path / "coco_out"
     assert main([

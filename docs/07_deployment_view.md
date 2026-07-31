@@ -73,7 +73,10 @@ not the order the Windows loader would, because `find_qt` decides first and
 registers exactly one directory. It exits 1 on an `error` or `suspect` finding
 and 0 otherwise (a `warning` is a forecast, not a fault). The DLL rules are
 Windows-only and gated as such; off Windows the command reports the environment
-and makes no claims about it. Because the CLI never imports Qt, it still runs in
+and makes no claims about it. Rules whose evidence only means something *after*
+Qt has actually failed — the MSVC runtime comparison — do not run here at all;
+they are reachable only from the startup guard, which knows the import failed.
+Their inputs are still printed, so a pasted report carries them either way. Because the CLI never imports Qt, it still runs in
 an environment where the GUI itself cannot start — which is the whole point
 (issue #92, ADR-046).
 

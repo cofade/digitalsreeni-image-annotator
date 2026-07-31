@@ -340,6 +340,9 @@ def run_doctor(args):
         FAILING_SEVERITIES, diagnose, format_report, qt_environment,
     )
 
+    # No `qt_failed`: this is a proactive preflight, so rules whose evidence only
+    # means something after an actual failure stay quiet (ADR-046). The MSVC state is
+    # still printed in the report -- it is just not a finding.
     env = qt_environment()
     findings = diagnose(env)
     print(format_report(env, findings))

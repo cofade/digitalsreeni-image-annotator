@@ -426,8 +426,15 @@ _CLEAN_ENV_REMEDY = (
 )
 
 
-def diagnose(env: dict[str, Any]) -> list[Finding]:
-    """Rules over the :func:`qt_environment` mapping. Pure; no I/O."""
+def diagnose(env: dict[str, Any], *, qt_failed: bool = False) -> list[Finding]:
+    """Rules over the :func:`qt_environment` mapping. Pure; no I/O.
+
+    ``qt_failed`` says whether Qt has *actually* failed to import. It gates the rules
+    whose evidence is only meaningful in that context — see :func:`_diagnose_msvc_shadowing`.
+    ``sreeni-cli doctor`` runs without it (a proactive preflight must not cry wolf);
+    :func:`format_import_failure` passes it, because there the failure is a given and
+    the question is only what explains it.
+    """
     findings: list[Finding] = []
     distributions = env.get("distributions", {})
     binding = distributions.get(BINDING_DIST)
@@ -456,7 +463,8 @@ def diagnose(env: dict[str, Any]) -> list[Finding]:
         return findings
 
     findings.extend(_diagnose_qt_resolution(env, binding))
-    findings.extend(_diagnose_msvc_shadowing(env))
+    if qt_failed:
+        findings.extend(_diagnose_msvc_shadowing(env))
     return findings
 
 
@@ -623,10 +631,22 @@ def _mismatch_finding(effective: dict[str, Any], location: str, shadowed: str | 
 def _diagnose_msvc_shadowing(env: dict[str, Any]) -> list[Finding]:
     """Flag an environment-local MSVC runtime older than the system's.
 
-    Reported as ``suspect``, not ``warning``: newer Qt builds do import STL symbols an
-    older ``msvcp140.dll`` lacks, so this genuinely can be the cause -- but proving it
-    would mean loading the DLL and reading its export table, which this module will
-    not do. It should therefore fail `doctor`, and it should not claim certainty.
+    **Only runs when Qt has actually failed to import** (``qt_failed``), and this is
+    the whole reason that parameter exists. CPython's own Windows installer bundles
+    the VC redistributable next to ``python.exe``, and it is routinely a minor behind
+    System32's: a stock GitHub Actions runner has 14.42.34438.0 beside the interpreter
+    and 14.51.36247.0 in System32. As an unconditional rule this therefore fires on
+    essentially *every* Windows Python — it failed the whole windows-latest CI matrix,
+    which is how it was caught, rather than on any machine with a real problem.
+
+    Narrowing the comparison does not rescue it: 14.42 vs 14.51 is a genuine minor
+    difference, and the 14.x redistributable is deliberately binary-compatible across
+    exactly that range, so the version gap carries almost no signal on its own.
+
+    What it does carry is *conditional* signal. Once Qt has demonstrably failed with
+    the mismatch signature, an older bundled runtime is a plausible explanation worth
+    putting in front of the user — as a ``suspect``, since confirming it would mean
+    loading the DLL and reading its export table, which this module will not do.
     """
     by_name: dict[str, list[dict[str, Any]]] = {}
     for candidate in env.get("msvc_candidates", []):
@@ -767,7 +787,9 @@ def format_import_failure(exc: BaseException) -> str:
     ]
     try:
         env = qt_environment()
-        findings = diagnose(env)
+        # qt_failed=True: Qt demonstrably did not load, so evidence that would be too
+        # weak to raise proactively is worth showing here.
+        findings = diagnose(env, qt_failed=True)
         if findings:
             lines.append("Likely cause")
             lines.append("------------")

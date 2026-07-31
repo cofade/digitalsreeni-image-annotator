@@ -322,7 +322,31 @@ def test_a_newer_system_build_number_is_not_treated_as_a_mismatch():
         _msvc(qd.SOURCE_CONDA_LIBRARY_BIN, "14.44.35208.0"),
         _msvc(qd.SOURCE_SYSTEM32, "14.44.35211.0"),
     ])
+    assert qd.diagnose(env, qt_failed=True) == []
+
+
+def test_a_stock_cpython_layout_is_not_flagged_by_a_proactive_doctor_run():
+    """CPython's Windows installer bundles the VC redistributable next to python.exe,
+    routinely a minor behind System32's: a stock GitHub Actions runner has
+    14.42.34438.0 beside the interpreter and 14.51.36247.0 in System32. As an
+    unconditional rule this fired on EVERY windows-latest CI leg -- 100% false
+    positives on healthy machines -- which is what `qt_failed` exists to fix."""
+    env = _env(msvc=[
+        _msvc(qd.SOURCE_PYTHON_DIR, "14.42.34438.0", name="vcruntime140.dll"),
+        _msvc(qd.SOURCE_SYSTEM32, "14.51.36247.0", name="vcruntime140.dll"),
+    ])
     assert qd.diagnose(env) == []
+
+
+def test_the_same_layout_is_offered_as_evidence_once_qt_has_failed():
+    """The version gap carries no signal on its own, but it is a plausible explanation
+    once Qt has demonstrably failed with the mismatch signature."""
+    env = _env(msvc=[
+        _msvc(qd.SOURCE_PYTHON_DIR, "14.42.34438.0", name="vcruntime140.dll"),
+        _msvc(qd.SOURCE_SYSTEM32, "14.51.36247.0", name="vcruntime140.dll"),
+    ])
+    findings = qd.diagnose(env, qt_failed=True)
+    assert _severities(findings) == [qd.SEVERITY_SUSPECT]
 
 
 def test_an_older_local_msvc_runtime_is_a_suspect():
@@ -334,7 +358,7 @@ def test_an_older_local_msvc_runtime_is_a_suspect():
         _msvc(qd.SOURCE_CONDA_LIBRARY_BIN, "14.29.30139.0"),
         _msvc(qd.SOURCE_SYSTEM32, "14.42.34433.0"),
     ])
-    findings = qd.diagnose(env)
+    findings = qd.diagnose(env, qt_failed=True)
     assert _severities(findings) == [qd.SEVERITY_SUSPECT]
     assert findings[0].severity in qd.FAILING_SEVERITIES
     assert "msvcp140.dll" in findings[0].title
@@ -345,12 +369,12 @@ def test_a_newer_or_equal_local_msvc_runtime_is_fine():
         _msvc(qd.SOURCE_CONDA_LIBRARY_BIN, "14.42.34433.0"),
         _msvc(qd.SOURCE_SYSTEM32, "14.42.34433.0"),
     ])
-    assert qd.diagnose(env) == []
+    assert qd.diagnose(env, qt_failed=True) == []
 
 
 def test_msvc_without_a_system_copy_is_not_judged():
     env = _env(msvc=[_msvc(qd.SOURCE_CONDA_LIBRARY_BIN, "14.29.30139.0")])
-    assert qd.diagnose(env) == []
+    assert qd.diagnose(env, qt_failed=True) == []
 
 
 def test_vcruntime140_1_is_watched_too():
@@ -625,6 +649,13 @@ def test_this_machine_gets_a_clean_bill_of_health():
         "doctor would fail on a machine where PyQt6 imports fine: "
         + "; ".join(f"[{f.severity}] {f.title} -- {f.detail}" for f in failing)
     )
+
+
+def test_the_import_failure_path_may_be_noisier_but_must_not_crash():
+    """`qt_failed=True` deliberately admits weaker evidence, so findings here are fine
+    on a healthy machine -- but the rules still have to run cleanly against a real
+    environment on every platform."""
+    assert isinstance(qd.diagnose(qd.qt_environment(), qt_failed=True), list)
 
 
 def test_the_probe_does_not_import_pyqt6():

@@ -2725,10 +2725,25 @@ install silently took whatever Qt minor had shipped most recently, tested or not
 - ✅ `sreeni-cli doctor` exits 1 on an `error` **or `suspect`** finding — anything that could
   explain a Qt that will not load — so it works as a preflight in a build script. `warning`
   findings (a second Qt on the path whose version currently matches) print but do not fail, since
-  that is a forecast rather than a fault. One threshold serves both of the command's jobs only
-  because `suspect` is kept narrow: the MSVC rule compares major.minor, not build numbers, or it
-  would fire on most conda installs, where the bundled runtime trails Windows Update by a
-  servicing build or two.
+  that is a forecast rather than a fault.
+- ⚠️ **`diagnose(env, qt_failed=...)` — some evidence only counts once Qt has actually failed.**
+  The MSVC rule is the case that forced this. CPython's own Windows installer bundles the VC
+  redistributable next to `python.exe`, routinely a minor behind System32's (a stock GitHub
+  Actions runner: 14.42.34438.0 beside the interpreter, 14.51.36247.0 in System32). As an
+  unconditional rule it fired on **every** `windows-latest` CI leg — 100 % false positives, on the
+  one platform this feature exists for. Narrowing the comparison does not rescue it: 14.42 vs
+  14.51 is a real minor gap, and the 14.x redistributable is deliberately binary-compatible
+  across exactly that range, so the version difference carries almost no signal alone. It carries
+  *conditional* signal: once Qt has demonstrably failed with the mismatch signature, an older
+  bundled runtime is worth putting in front of the user. So `doctor` (a proactive preflight) does
+  not run it and `format_import_failure` does. That is also what lets one exit threshold serve
+  both of the command's jobs — rather than a `--strict` flag on a command whose value is that you
+  can tell a confused user to run it with no further instructions.
+
+  This was caught by `test_this_machine_gets_a_clean_bill_of_health`, which asserts that a machine
+  where PyQt6 demonstrably imports produces no `doctor`-failing finding. Every hand-built test
+  environment in that file pins `platform` to `win32` and supplies candidates by hand, so a rule
+  that misjudges a *real* install looks correct to all of them.
 - ⚠️ **Every rule below the pip-metadata check makes claims about Windows only**, gated by one
   early return in `diagnose()`. The probe looks for the literal name `Qt6Core.dll`; on Linux that
   is `libQt6Core.so.6` and on macOS it lives inside `QtCore.framework`, so off Windows it finds

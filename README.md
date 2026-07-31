@@ -77,8 +77,12 @@ cd digitalsreeni-image-annotator
 pip install -e .
 ```
 
-The Ultralytics library pulls in SAM 2 and PyTorch; SAM 2 weights download
+The Ultralytics library pulls in SAM 2 and PyTorch; SAM 2 weights download
 automatically on first use — no separate SAM2 / PyTorch install needed.
+
+Prefer a **clean virtual environment**. Installing into an existing Conda
+environment that already carries its own Qt is the one setup known to break — see
+[Troubleshooting](#troubleshooting-qt-fails-to-import) below.
 
 ### GPU acceleration (NVIDIA)
 
@@ -111,6 +115,50 @@ install an older PyTorch that still supports it:
 
 ```bash
 pip install torch==2.4.1 torchvision==0.19.1 --index-url https://download.pytorch.org/whl/cu121
+```
+
+### Troubleshooting: Qt fails to import
+
+If starting the app fails with
+
+```
+ImportError: DLL load failed while importing QtCore: The specified procedure could not be found.
+```
+
+(Windows exception `0xc0000139`, `STATUS_ENTRYPOINT_NOT_FOUND`), run:
+
+```bash
+sreeni-cli doctor
+```
+
+It never imports Qt, so it still works when the application itself cannot start.
+It prints the installed PyQt6 / Qt / sip versions and every `Qt6Core.dll` on the
+Windows loader search path, in the order the loader reaches them.
+
+**What causes it.** Almost always a second Qt in the environment, not a bad PyQt6
+release. In a Conda environment `qt6-main` (pulled in by `pyqt`, `qtpy`, `spyder`,
+`napari`, matplotlib's Qt backend, …) installs its own `Qt6Core.dll`, and Windows
+finds it *before* the copy the PyQt6 wheel ships. conda-forge's Qt lags PyPI's, so
+a newer PyQt6 ends up calling into an older Qt that lacks the symbols it needs.
+An outdated `msvcp140.dll` from Conda's `vc14_runtime` does the same thing.
+
+This is why downgrading PyQt6 appears to fix it: the binding stops being newer
+than the Qt it collided with.
+
+**Fixes**, best first:
+
+```bash
+# 1. Install into a clean virtual environment with no Qt of its own
+python -m venv .venv
+.venv\Scripts\activate          # Linux/macOS: source .venv/bin/activate
+pip install -e .
+
+# 2. Or remove the conflicting Qt, if nothing in the environment needs it
+conda remove qt6-main
+
+# 3. Or match the binding to the Qt already present
+#    (doctor prints the version to use here — 6.8.* is only an example)
+pip install "PyQt6==<major>.<minor>.*"
 ```
 
 ## Quick start

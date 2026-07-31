@@ -441,6 +441,20 @@ def diagnose(env: dict[str, Any]) -> list[Finding]:
         )]
 
     findings.extend(_diagnose_pip_skew(env, binding))
+
+    # Everything below reasons about a file called Qt6Core.dll and about how Windows
+    # resolves it. On Linux that file is libQt6Core.so.6 and on macOS it lives inside
+    # QtCore.framework, so the probe finds nothing -- and every rule below would read
+    # that absence as breakage, on machines where PyQt6 demonstrably imports.
+    #
+    # One gate, here, rather than a platform check inside each rule: the same bug has
+    # already been shipped twice from two different functions (an error on a missing
+    # PyQt6-Qt6 distribution, then an error on an empty candidate list), both times
+    # recommending a force-reinstall to someone whose install was fine. The invariant
+    # is "this rule set only makes claims about Windows", and it belongs in one place.
+    if env.get("platform") != "win32":
+        return findings
+
     findings.extend(_diagnose_qt_resolution(env, binding))
     findings.extend(_diagnose_msvc_shadowing(env))
     return findings
@@ -501,7 +515,7 @@ def _diagnose_qt_resolution(env: dict[str, Any], binding: str) -> list[Finding]:
         )]
 
     effective = candidates[0]
-    if effective["source"] in (SOURCE_WHEEL, SOURCE_SYSTEM32):
+    if effective["source"] == SOURCE_WHEEL:
         return []
 
     found = _major_minor(effective["version"])
@@ -554,6 +568,25 @@ def _mismatch_finding(effective: dict[str, Any], location: str, shadowed: str | 
                       expected: tuple[int, int], expected_from: str,
                       found: tuple[int, int]) -> Finding:
     remedy = _CLEAN_ENV_REMEDY
+    if effective["source"] == SOURCE_PACKAGE_DIR:
+        # A Qt6Core.dll sitting next to QtCore.pyd was put there by hand -- it is the
+        # fix people try for this error before they know the cause. Deleting it is
+        # unambiguously right, and telling them to pin the binding to match a DLL they
+        # dropped there themselves would be absurd.
+        remedy = (
+            f"Delete {effective['path']} -- it was placed inside the PyQt6 package by\n"
+            "hand and overrides the Qt the wheel ships.\n"
+            f"  or, to start clean:\n{_CLEAN_ENV_REMEDY}"
+        )
+        return Finding(
+            severity=SEVERITY_ERROR,
+            title="A hand-placed Qt6Core.dll inside the PyQt6 package overrides its own Qt",
+            detail=(
+                f"{location}. PyQt6 expects Qt {expected[0]}.{expected[1]}.x (from "
+                f"{expected_from}) but that copy is {found[0]}.{found[1]}.x."
+            ),
+            remedy=remedy,
+        )
     if effective["source"] in (SOURCE_CONDA_LIBRARY_BIN, SOURCE_PATH, SOURCE_PYTHON_DIR):
         remedy += (
             "\n  or remove the conflicting Qt if nothing in the environment needs it:\n"
@@ -599,9 +632,14 @@ def _diagnose_msvc_shadowing(env: dict[str, Any]) -> list[Finding]:
         local = [c for c in candidates if c["source"] != SOURCE_SYSTEM32]
         if system is None or not local:
             continue
-        system_version = _version_tuple(system["version"])
+        # Compared at major.minor, NOT the full four-part version. MSVC STL symbol
+        # additions land on the minor (14.29 -> 14.42); the build number tracks
+        # servicing. Conda's vc14_runtime trails Windows Update's build essentially
+        # always, so comparing all four parts would fire this -- which now fails
+        # `doctor` -- on a large share of perfectly healthy conda installs.
+        system_version = _major_minor(system["version"])
         for candidate in local:
-            local_version = _version_tuple(candidate["version"])
+            local_version = _major_minor(candidate["version"])
             if not system_version or not local_version or local_version >= system_version:
                 continue
             findings.append(Finding(
@@ -611,7 +649,10 @@ def _diagnose_msvc_shadowing(env: dict[str, Any]) -> list[Finding]:
                     f"{candidate['path']} is version {candidate['version']} while "
                     f"{system['path']} is {system['version']}. Qt is built against the "
                     "newer MSVC runtime and may import symbols the older copy lacks, "
-                    "which produces the same 0xc0000139 from a different DLL."
+                    "which produces the same 0xc0000139 from a different DLL. Note that "
+                    "unlike the Qt case this directory is not necessarily on the search "
+                    "path -- msvcp140.dll is resolved by the loader, not by PyQt6's "
+                    "find_qt(), so this copy only wins if something put it there."
                 ),
                 remedy=(
                     "Update the environment's runtime (conda update vc14_runtime) or "
@@ -636,12 +677,17 @@ def format_report(env: dict[str, Any], findings: list[Finding]) -> str:
     lines.append("Distributions")
     for name, value in (env.get("distributions") or {}).items():
         lines.append(f"  {name:<12} {value or 'not installed'}")
+    # "no bundled Qt" and "could not read its version" are different states, and only
+    # the directory check distinguishes them: wheel_qt_version comes from the PE
+    # resource reader, which returns None on every non-Windows platform. Rendering the
+    # falsy value as a conclusion would assert "PyQt6 uses a system Qt" about a plain
+    # pip install on Linux that ships the PyQt6-Qt6 wheel.
     wheel_bin = env.get("wheel_qt_bin")
-    lines.append(
-        f"  wheel Qt     {env.get('wheel_qt_version') or 'none (PyQt6 uses a system Qt)'}"
-    )
     if wheel_bin:
+        lines.append(f"  wheel Qt     {env.get('wheel_qt_version') or 'version unreadable'}")
         lines.append(f"               {wheel_bin}")
+    else:
+        lines.append("  wheel Qt     none bundled (PyQt6 uses a system Qt)")
 
     lines.append("")
     lines.append(f"{QT_CORE_DLL}, in the order PyQt6 consults it (first one wins)")

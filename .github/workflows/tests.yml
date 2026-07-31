@@ -145,10 +145,14 @@ jobs:
         pip install --upgrade PyQt6
         python -c "import PyQt6.QtCore as c; print('PyQt6', c.PYQT_VERSION_STR, 'Qt', c.QT_VERSION_STR)"
 
-    - name: Report the Qt environment
-      run: sreeni-cli doctor
-
     - name: Run the suite
       run: pytest tests/ -q --no-header
       env:
         QT_QPA_PLATFORM: offscreen
+
+    # After the suite, and separately non-fatal. `continue-on-error` on the job stops
+    # the whole job at the first failing step, so a doctor false positive here would
+    # skip the very thing this job exists to run.
+    - name: Report the Qt environment
+      continue-on-error: true
+      run: sreeni-cli doctor

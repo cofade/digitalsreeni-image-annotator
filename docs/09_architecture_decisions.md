@@ -2722,9 +2722,19 @@ install silently took whatever Qt minor had shipped most recently, tested or not
 
 - ✅ The failure now names the file, its version, the version PyQt6 expected, and three concrete
   remedies (clean venv / remove the conflicting Qt / match the binding to the Qt present).
-- ✅ `sreeni-cli doctor` exits 1 on an `error` finding, so it works as a preflight in a build
-  script. `warning` findings — a second Qt on the path whose version currently matches — print but
-  do not fail, since that is a forecast rather than a fault.
+- ✅ `sreeni-cli doctor` exits 1 on an `error` **or `suspect`** finding — anything that could
+  explain a Qt that will not load — so it works as a preflight in a build script. `warning`
+  findings (a second Qt on the path whose version currently matches) print but do not fail, since
+  that is a forecast rather than a fault. One threshold serves both of the command's jobs only
+  because `suspect` is kept narrow: the MSVC rule compares major.minor, not build numbers, or it
+  would fire on most conda installs, where the bundled runtime trails Windows Update by a
+  servicing build or two.
+- ⚠️ **Every rule below the pip-metadata check makes claims about Windows only**, gated by one
+  early return in `diagnose()`. The probe looks for the literal name `Qt6Core.dll`; on Linux that
+  is `libQt6Core.so.6` and on macOS it lives inside `QtCore.framework`, so off Windows it finds
+  nothing and an ungated rule reads the absence as breakage. That bug shipped twice from two
+  different rules — first "`PyQt6-Qt6` is missing", then "no `Qt6Core.dll` found" — both times
+  telling someone whose install worked to force-reinstall PyQt6. The gate is one place on purpose.
 - ⚠️ **The order in `main.py` is load-bearing.** The eager `import torch` (ADR-017) must stay
   strictly above the guarded Qt import. The two Windows DLL workarounds now sit adjacent, and
   swapping them re-breaks ADR-017 in a way that only reproduces on Windows with torch installed.

@@ -174,22 +174,26 @@ def test_main_imports_torch_before_qt():
     ).read_text(encoding="utf-8")
     tree = ast.parse(source)
 
-    torch_line = None
-    qt_line = None
+    # min() over every match, not the first one walk() happens to yield: ast.walk is
+    # breadth-first, so "first visited" is not "lowest line" as soon as anyone adds a
+    # nested import.
+    torch_lines = []
+    qt_lines = []
     for node in ast.walk(tree):
         if isinstance(node, ast.Import):
             for alias in node.names:
-                if alias.name.split(".")[0] == "torch" and torch_line is None:
-                    torch_line = node.lineno
+                if alias.name.split(".")[0] == "torch":
+                    torch_lines.append(node.lineno)
         elif isinstance(node, ast.ImportFrom):
             root = (node.module or "").split(".")[0]
-            if root == "torch" and torch_line is None:
-                torch_line = node.lineno
-            elif root == "PyQt6" and qt_line is None:
-                qt_line = node.lineno
+            if root == "torch":
+                torch_lines.append(node.lineno)
+            elif root == "PyQt6":
+                qt_lines.append(node.lineno)
 
-    assert torch_line is not None, "main.py no longer imports torch (ADR-017)"
-    assert qt_line is not None, "main.py no longer imports PyQt6"
+    assert torch_lines, "main.py no longer imports torch (ADR-017)"
+    assert qt_lines, "main.py no longer imports PyQt6"
+    torch_line, qt_line = min(torch_lines), min(qt_lines)
     assert torch_line < qt_line, (
         f"main.py imports PyQt6 at line {qt_line} before torch at line {torch_line}. "
         "ADR-017 requires torch first; this fails only on Windows with torch installed."

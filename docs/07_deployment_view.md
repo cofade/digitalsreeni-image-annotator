@@ -67,10 +67,14 @@ sreeni-cli doctor
 `train` is deliberately out of scope.
 
 `doctor` takes no arguments and reports on the environment it runs in: the
-installed PyQt6 / Qt / sip versions and every `Qt6Core.dll` on the loader search
-path, in the order the loader would reach them. It exits 1 on an `error` finding
-and 0 otherwise. Because the CLI never imports Qt, it still runs in an
-environment where the GUI itself cannot start — which is the whole point
+installed PyQt6 / Qt / sip versions, the MSVC runtime picture, and every
+`Qt6Core.dll` **in the order `PyQt6/__init__.py::find_qt()` will consult it** —
+not the order the Windows loader would, because `find_qt` decides first and
+registers exactly one directory. It exits 1 on an `error` or `suspect` finding
+and 0 otherwise (a `warning` is a forecast, not a fault). The DLL rules are
+Windows-only and gated as such; off Windows the command reports the environment
+and makes no claims about it. Because the CLI never imports Qt, it still runs in
+an environment where the GUI itself cannot start — which is the whole point
 (issue #92, ADR-046).
 
 **Exit codes** — the contract that makes `validate` a CI gate:

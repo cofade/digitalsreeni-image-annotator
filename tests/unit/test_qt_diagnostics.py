@@ -137,6 +137,19 @@ def test_the_expected_version_comes_from_the_wheel_dll_not_only_metadata():
     assert "the Qt it ships" in findings[0].detail
 
 
+def test_a_hand_placed_dll_inside_the_package_is_told_to_delete_it():
+    """A Qt6Core.dll next to QtCore.pyd was put there by hand -- it is the fix people
+    try for this error before they know the cause. "Pin the binding to match the DLL
+    you dropped there yourself" would be absurd advice."""
+    env = _env(qt_core=[_dll(qd.SOURCE_PACKAGE_DIR, "6.8.2.0")])
+    findings = qd.diagnose(env)
+
+    assert _severities(findings) == [qd.SEVERITY_ERROR]
+    assert "Delete" in findings[0].remedy
+    assert "pip install \"PyQt6==" not in findings[0].remedy
+    assert "hand" in findings[0].title
+
+
 def test_a_foreign_dll_wearing_the_name_gets_no_pip_pin_advice():
     """Whatever this is, it is not a Qt 6 build -- so `pip install "PyQt6==10.0.*"`
     would be a command that cannot resolve. Removing it is the only honest advice."""
@@ -224,16 +237,44 @@ def test_missing_pyqt6_reports_that_and_stops():
 
 
 def test_binding_and_runtime_minor_skew_is_an_error():
-    findings = qd.diagnose(_env(binding="6.11.0", runtime="6.8.2",
-                                wheel_qt_version="6.8.2.0"))
+    findings = qd.diagnose(_env(
+        binding="6.11.0", runtime="6.8.2", wheel_qt_version="6.8.2.0",
+        qt_core=[_dll(qd.SOURCE_WHEEL, "6.8.2.0")],
+    ))
     assert any("different minor versions" in f.title for f in findings)
 
 
-def test_no_qt_anywhere_is_an_error():
+def test_no_qt_anywhere_on_windows_is_an_error():
     env = _env(qt_core=[], wheel_bin=None, wheel_qt_version=None, runtime=None)
     findings = qd.diagnose(env)
     assert _severities(findings) == [qd.SEVERITY_ERROR]
     assert "No Qt6Core.dll" in findings[0].title
+
+
+@pytest.mark.parametrize("platform", ["linux", "darwin"])
+def test_the_dll_rules_make_no_claims_off_windows(platform):
+    """On Linux the file is libQt6Core.so.6 and on macOS it is inside
+    QtCore.framework, so the probe -- which looks for the literal name Qt6Core.dll --
+    finds nothing. Every rule that reasons about that name would read the absence as
+    breakage and tell a user whose install works fine to force-reinstall PyQt6.
+
+    This shipped twice from two different rules before the platform gate went in one
+    place, which is why it is asserted here rather than left to the live check below.
+    """
+    env = _env(qt_core=[], wheel_bin=None, wheel_qt_version=None, runtime=None,
+               msvc=[])
+    env["platform"] = platform
+    assert qd.diagnose(env) == []
+
+
+@pytest.mark.parametrize("platform", ["linux", "darwin"])
+def test_pip_skew_is_still_reported_off_windows(platform):
+    """The gate covers the DLL rules, not everything: a binding/runtime wheel skew is
+    read from package metadata and is just as wrong on Linux."""
+    env = _env(binding="6.11.0", runtime="6.8.2", qt_core=[], wheel_bin=None,
+               wheel_qt_version=None)
+    env["platform"] = platform
+    assert any("different minor versions" in f.title for f in qd.diagnose(env))
 
 
 # --- the second shadowing path: the MSVC runtime ---------------------------
@@ -246,6 +287,18 @@ def _msvc(source, version, name="msvcp140.dll"):
         "source": source,
         "version": version,
     }
+
+
+def test_a_newer_system_build_number_is_not_treated_as_a_mismatch():
+    """Conda's vc14_runtime trails Windows Update's servicing builds essentially
+    always. MSVC STL symbol additions land on the minor (14.29 -> 14.42), not the
+    build, so comparing all four parts would fail `doctor` on a large share of healthy
+    conda installs -- on the exact platform this tool targets."""
+    env = _env(msvc=[
+        _msvc(qd.SOURCE_CONDA_LIBRARY_BIN, "14.44.35208.0"),
+        _msvc(qd.SOURCE_SYSTEM32, "14.44.35211.0"),
+    ])
+    assert qd.diagnose(env) == []
 
 
 def test_an_older_local_msvc_runtime_is_a_suspect():
@@ -531,6 +584,23 @@ def test_qt_environment_runs_on_this_machine():
                 "wheel_qt_bin", "wheel_qt_version", "package_dir"):
         assert key in env
     assert isinstance(qd.diagnose(env), list)
+
+
+def test_this_machine_gets_a_clean_bill_of_health():
+    """The suite is running under pytest-qt, so PyQt6 demonstrably imports here. A
+    finding that would fail `doctor` is therefore a false positive by construction.
+
+    This is the assertion that catches the whole class of bug the hand-built
+    environments cannot: every one of those fixes `platform` to win32 and supplies
+    candidates by hand, so a rule that misjudges a real Linux or macOS install looks
+    perfectly correct to all of them. It runs on every CI leg.
+    """
+    findings = qd.diagnose(qd.qt_environment())
+    failing = [f for f in findings if f.severity in qd.FAILING_SEVERITIES]
+    assert not failing, (
+        "doctor would fail on a machine where PyQt6 imports fine: "
+        + "; ".join(f"[{f.severity}] {f.title} -- {f.detail}" for f in failing)
+    )
 
 
 def test_the_probe_does_not_import_pyqt6():

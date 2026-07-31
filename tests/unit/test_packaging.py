@@ -16,8 +16,6 @@ try:
 except ModuleNotFoundError:  # pragma: no cover - version-dependent
     import tomli as tomllib
 
-import pytest
-
 REPO_ROOT = Path(__file__).resolve().parents[2]
 
 
@@ -71,8 +69,7 @@ def _version_tuple(spec):
     return tuple(parts + [0] * (3 - len(parts)))
 
 
-@pytest.mark.parametrize("name", ["ultralytics"])
-def test_the_other_bounded_dependency_stays_bounded(name):
-    """`ultralytics` carries a ceiling for the same reason as PyQt6 (asserted above):
-    a major bump upstream has broken this app before, and CI cannot see it coming."""
-    assert "<" in _requirement(name)
+def test_ultralytics_stays_bounded():
+    """It carries a ceiling for the same reason as PyQt6 (asserted above): a major bump
+    upstream has broken this app before, and CI cannot see it coming."""
+    assert "<" in _requirement("ultralytics")

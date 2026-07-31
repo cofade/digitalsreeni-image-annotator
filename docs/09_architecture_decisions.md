@@ -2633,15 +2633,43 @@ The obvious reading — "PyQt6 6.11 is broken, pin below it" — is wrong, and t
 does not export — **the wrong copy of a dependency won the search**. Two mechanisms produce that
 in a Conda environment, and both explain why matching the binding to Qt 6.8 "fixes" it:
 
-1. `qt6-main` (pulled in by `pyqt`, `qtpy`, `spyder`, `napari`, matplotlib's Qt backend, …) puts
-   `Qt6Core.dll` in `%CONDA_PREFIX%\Library\bin`. For a dependency of an extension module Windows
-   searches the **application directory** — which for Conda *is* the environment root — and the
-   directories registered via `os.add_dll_directory` before it reaches the ones PyQt6 registers
-   for its own bundled Qt. conda-forge's Qt lags PyPI's, so a 6.11 binding resolves against a
-   6.8-era runtime.
+1. A Qt from somewhere else in the environment is loaded instead of the wheel's. conda-forge's Qt
+   lags PyPI's, so a 6.11 binding resolves against a 6.8-era runtime.
 2. Conda's `vc14_runtime` / `vs2015_runtime` ship `msvcp140.dll` into the environment. Newer Qt
    builds are compiled against a newer MSVC STL and import symbols an older copy lacks — the same
    status code from a completely different DLL.
+
+**How Qt is actually located** — this is the part it is easy to get wrong, and the first draft of
+this ADR did. The Windows loader is not what decides: `PyQt6/__init__.py::find_qt()` runs at
+`import PyQt6` and settles the question first.
+
+```python
+dll_dir = os.path.dirname(sys.executable)
+if not os.path.isfile(dll_dir + '\\Qt6Core.dll'):
+    dll_dir = os.path.dirname(__file__) + '\\Qt6\\bin'
+    if os.path.isfile(dll_dir + '\\Qt6Core.dll'):
+        os.environ['PATH'] = dll_dir + ';' + os.environ['PATH']
+    else:
+        for dll_dir in os.environ['PATH'].split(';'):
+            if os.path.isfile(dll_dir + '\\Qt6Core.dll'):
+                break
+        else:
+            return
+os.add_dll_directory(dll_dir)
+```
+
+Three consequences, and all three are load-bearing for the diagnostic:
+
+- The **interpreter's own directory wins outright**, and when it does the wheel's Qt is never
+  registered at all. For a Conda environment that directory *is* the environment root.
+- **`PATH` is consulted**, but only when the wheel ships no Qt of its own. That is how
+  `%CONDA_PREFIX%\Library\bin` (installed by `qt6-main`, pulled in by `pyqt`, `qtpy`, `spyder`,
+  `napari`, matplotlib's Qt backend, …) becomes the registered directory. CPython ≥ 3.8 ignores
+  `PATH` when resolving an extension module's dependencies, so it is tempting to conclude `PATH`
+  cannot matter — PyQt6 puts it back.
+- The directory holding `QtCore.pyd` is searched ahead of all of it via
+  `LOAD_LIBRARY_SEARCH_DLL_LOAD_DIR`, and "copy the DLL next to the module" is a common wrong fix
+  people try for this error.
 
 Separately, the dependency was declared `PyQt6>=6.7.0` with **no upper bound**, so every fresh
 install silently took whatever Qt minor had shipped most recently, tested or not.
@@ -2654,10 +2682,19 @@ install silently took whatever Qt minor had shipped most recently, tested or not
    character away from being deleted and nothing else would notice.
 2. **`core/qt_diagnostics.py`**, a Qt-free module that names the offending DLL: the installed
    `PyQt6` / `PyQt6-Qt6` / `PyQt6-sip` versions read from *package metadata*, every `Qt6Core.dll`
-   on the loader search path in the order the loader would reach them, and each one's version read
-   out of its PE version resource. `qt_environment()` does the I/O; `diagnose()` is a pure
+   that will be consulted **in the order `find_qt()` will consult it**, and each one's version
+   read out of its PE version resource. `qt_environment()` does the I/O; `diagnose()` is a pure
    function over the mapping it returns, so the rules are testable on a Linux CI runner with no
-   Conda, no Windows and no broken Qt.
+   Conda, no Windows and no broken Qt — while the probe itself is tested against a fake
+   environment built under `tmp_path`.
+
+   Findings carry three severities, and the distinction is not cosmetic. `error` is a mismatch
+   **proven** from two version numbers that were read; `suspect` could well be the cause but
+   cannot be confirmed without loading the DLL, which is the one thing this module must not do;
+   `warning` is consistent today and fragile tomorrow. Collapsing the first two is how a
+   diagnostic ends up asserting something it does not know — the first draft printed two
+   mismatched version numbers and then declared that they matched, because "could not parse" fell
+   into the same branch as "equal". `doctor` fails on `error` and `suspect`, not on `warning`.
 3. **Two entry points to it**: a `try/except ImportError` around the Qt import in `main.py`, and a
    `sreeni-cli doctor` subcommand.
 
@@ -2693,10 +2730,22 @@ install silently took whatever Qt minor had shipped most recently, tested or not
   swapping them re-breaks ADR-017 in a way that only reproduces on Windows with torch installed.
 - ⚠️ Only the `PyQt6` import is guarded, not `annotator_window`. Wrapping both would report an
   unrelated missing dependency as a Qt failure.
+- ⚠️ **The startup guard only runs if importing the package has not already pulled Qt in.** It
+  depends on `__init__.py` staying lazy (ADR-017): un-lazy it and the `ImportError` fires while
+  importing the *parent package*, the user is back to a raw traceback, and none of this code is
+  reached. The top-level package is in the Qt-free subprocess list in `tests/integration/test_cli.py`
+  for that reason, alongside the submodules.
 - ⚠️ Raising the cap past 6.12 needs a real run, not a bump — 6.12 is the last Qt supporting
-  Windows 10, so what follows it changes the platform baseline.
-- ⚠️ The probe cannot see DLLs *already loaded* into the process, which is one of the ways the
-  loader picks a winner. It reports the on-disk search order, which covers the Conda cases.
+  Windows 10, so what follows it changes the platform baseline. The cap would otherwise be
+  self-sealing: CI installs the project, so it can only exercise versions the cap already allows.
+  An advisory `latest-pyqt` job (`continue-on-error`) installs the newest PyQt6 over the top and
+  runs the suite, so the cap has a trigger and a signal instead of freezing the project silently.
+- ⚠️ On a future Python where only 6.12+ ships wheels, `>=6.7.0,<6.12` sends pip to build 6.7
+  from sdist and fail with a message about `sip`, not about this cap. That is the cost of any
+  ceiling; the advisory job is what should catch it first.
+- ⚠️ The probe cannot see DLLs *already loaded* into the process, which is the one resolution
+  step that outranks everything `find_qt` does. It reports the on-disk order, which covers the
+  Conda cases; a DLL pre-loaded by another library would not be visible to it.
 
 **Related**:
 

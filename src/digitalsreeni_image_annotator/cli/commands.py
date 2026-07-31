@@ -331,16 +331,19 @@ def run_doctor(args):
     the environment where the GUI cannot start, which is exactly the environment where
     importing Qt raises or kills the process.
 
-    Only ``error`` findings fail the command. A ``warning`` means "a second Qt is on
-    the path but its version currently matches", which is worth printing and not worth
-    failing a build over.
+    ``error`` and ``suspect`` findings fail the command -- anything that could explain
+    a Qt that will not load. A ``warning`` is a forecast ("a second Qt is on the path
+    but its version currently matches"), worth printing and not worth failing a build
+    over.
     """
-    from ..core.qt_diagnostics import diagnose, format_report, qt_environment
+    from ..core.qt_diagnostics import (
+        FAILING_SEVERITIES, diagnose, format_report, qt_environment,
+    )
 
     env = qt_environment()
     findings = diagnose(env)
     print(format_report(env, findings))
-    if any(finding.severity == "error" for finding in findings):
+    if any(finding.severity in FAILING_SEVERITIES for finding in findings):
         return EXIT_ERROR
     return EXIT_OK
 

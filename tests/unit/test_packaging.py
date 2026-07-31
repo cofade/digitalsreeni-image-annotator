@@ -55,12 +55,24 @@ def test_pyqt6_has_an_upper_bound():
 
 
 def test_pyqt6_floor_still_admits_the_documented_minimum():
-    """docs/02_architecture_constraints.md and ADR-014 both promise 6.7 as the floor."""
-    assert ">=6.7" in _requirement("PyQt6")
+    """docs/02_architecture_constraints.md and ADR-014 both promise 6.7 as the floor.
+
+    Parsed rather than substring-matched: `">=6.7" in spec` also passes on `>=6.70`.
+    """
+    import re
+
+    floors = re.findall(r">=\s*([0-9][0-9.]*)", _requirement("PyQt6"))
+    assert floors, "PyQt6 requirement has no lower bound"
+    assert _version_tuple(floors[0]) <= (6, 7, 0)
 
 
-@pytest.mark.parametrize("name", ["ultralytics", "PyQt6"])
-def test_the_bounded_dependencies_stay_bounded(name):
-    """Both carry a ceiling for the same reason: a major/minor bump upstream has
-    broken this app before, and neither is exercised by CI until someone upgrades."""
+def _version_tuple(spec):
+    parts = [int(part) for part in spec.split(".") if part.isdigit()]
+    return tuple(parts + [0] * (3 - len(parts)))
+
+
+@pytest.mark.parametrize("name", ["ultralytics"])
+def test_the_other_bounded_dependency_stays_bounded(name):
+    """`ultralytics` carries a ceiling for the same reason as PyQt6 (asserted above):
+    a major bump upstream has broken this app before, and CI cannot see it coming."""
     assert "<" in _requirement(name)

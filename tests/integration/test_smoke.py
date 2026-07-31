@@ -152,3 +152,72 @@ def test_annotator_window_inline_imports_are_resolvable():
         f"Stale inline imports in annotator_window.py at lines: {bad}. "
         f"The module was likely moved into a subpackage; update the import path."
     )
+
+
+def test_main_imports_torch_before_qt():
+    """Parse main.py's AST: `import torch` must come before any PyQt6 import.
+
+    Two ADRs hang off this single ordering. ADR-017 requires torch to claim its DLL
+    slot before Qt loads, or `c10.dll` init fails with WinError 1114; ADR-046 added a
+    guarded Qt import immediately below it, so the two Windows DLL workarounds are now
+    adjacent and an innocent-looking tidy-up can swap them. The regression reproduces
+    only on Windows with torch installed, and `main.py` is deliberately excluded from
+    the import list above (importing it here would trigger that very conflict) -- so
+    reading the source is the only gate available.
+    """
+    import ast
+    import pathlib
+
+    source = (
+        pathlib.Path(__file__).parents[2]
+        / "src" / "digitalsreeni_image_annotator" / "main.py"
+    ).read_text(encoding="utf-8")
+    tree = ast.parse(source)
+
+    torch_line = None
+    qt_line = None
+    for node in ast.walk(tree):
+        if isinstance(node, ast.Import):
+            for alias in node.names:
+                if alias.name.split(".")[0] == "torch" and torch_line is None:
+                    torch_line = node.lineno
+        elif isinstance(node, ast.ImportFrom):
+            root = (node.module or "").split(".")[0]
+            if root == "torch" and torch_line is None:
+                torch_line = node.lineno
+            elif root == "PyQt6" and qt_line is None:
+                qt_line = node.lineno
+
+    assert torch_line is not None, "main.py no longer imports torch (ADR-017)"
+    assert qt_line is not None, "main.py no longer imports PyQt6"
+    assert torch_line < qt_line, (
+        f"main.py imports PyQt6 at line {qt_line} before torch at line {torch_line}. "
+        "ADR-017 requires torch first; this fails only on Windows with torch installed."
+    )
+
+
+def test_main_guards_the_qt_import():
+    """The PyQt6 import in main.py must sit inside a try/except (ADR-046).
+
+    Without it a contaminated environment gets a bare `DLL load failed` traceback,
+    which is the entire complaint in issue #92.
+    """
+    import ast
+    import pathlib
+
+    source = (
+        pathlib.Path(__file__).parents[2]
+        / "src" / "digitalsreeni_image_annotator" / "main.py"
+    ).read_text(encoding="utf-8")
+    tree = ast.parse(source)
+
+    guarded = any(
+        isinstance(node, ast.Try)
+        and any(
+            isinstance(inner, ast.ImportFrom)
+            and (inner.module or "").split(".")[0] == "PyQt6"
+            for inner in ast.walk(node)
+        )
+        for node in ast.walk(tree)
+    )
+    assert guarded, "main.py imports PyQt6 outside a try/except (ADR-046)"

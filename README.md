@@ -156,8 +156,9 @@ pip install -e .
 # 2. Or remove the conflicting Qt, if nothing in the environment needs it
 conda remove qt6-main
 
-# 3. Or match the binding to the Qt already present (doctor prints the version)
-pip install "PyQt6==6.8.*"
+# 3. Or match the binding to the Qt already present
+#    (doctor prints the version to use here — 6.8.* is only an example)
+pip install "PyQt6==<major>.<minor>.*"
 ```
 
 ## Quick start

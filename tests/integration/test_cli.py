@@ -69,6 +69,12 @@ def test_the_command_module_pulls_in_neither_qt_nor_torch():
         # explain a Qt that will not import, so importing Qt would make it fail in
         # precisely the environment it was written for (issue #92).
         "digitalsreeni_image_annotator.core.qt_diagnostics",
+        # The top-level package itself. main.py's Qt import guard (ADR-046) only ever
+        # runs if importing the package has not already pulled Qt in -- if anyone
+        # un-lazies __init__.py (ADR-017), the ImportError fires while importing the
+        # parent and the user is back to a raw traceback, with the new code never
+        # reached. Nothing else covers the package as opposed to its submodules.
+        "digitalsreeni_image_annotator",
     ],
 )
 def test_the_shared_layer_the_cli_depends_on_is_qt_free(module):

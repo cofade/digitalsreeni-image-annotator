@@ -142,7 +142,11 @@ jobs:
       run: |
         python -m pip install --upgrade pip
         pip install -e ".[dev]"
-        pip install --upgrade PyQt6
+        # All three named explicitly. PyQt6's own metadata pins a matching
+        # PyQt6-Qt6 (6.11.0 requires >=6.11.0,<6.12.0), so the resolver would
+        # pair them anyway -- but a skew here would trip the health-check test
+        # for a reason that has nothing to do with the version ceiling.
+        pip install --upgrade PyQt6 PyQt6-Qt6 PyQt6-sip
         python -c "import PyQt6.QtCore as c; print('PyQt6', c.PYQT_VERSION_STR, 'Qt', c.QT_VERSION_STR)"
 
     - name: Run the suite

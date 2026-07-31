@@ -489,7 +489,8 @@ def _expected_qt(env: dict[str, Any]) -> tuple[tuple[int, int] | None, str]:
 
     The wheel's own ``Qt6Core.dll`` is preferred over ``PyQt6-Qt6`` metadata: it is
     what the binding was compiled against, and it is readable even when the metadata
-    is absent.
+    is absent. When neither is available the caller falls back to the binding's own
+    version, since PyQt6 6.11 is built against Qt 6.11.x.
     """
     wheel_version = _major_minor(env.get("wheel_qt_version"))
     if wheel_version:
@@ -521,14 +522,19 @@ def _diagnose_qt_resolution(env: dict[str, Any], binding: str) -> list[Finding]:
     found = _major_minor(effective["version"])
     wheel_bin = env.get("wheel_qt_bin")
 
-    if wheel_bin:
-        expected, expected_from = _expected_qt(env)
-        shadowed = f"the Qt PyQt6 ships in {wheel_bin}"
-    else:
-        # No Qt in the wheel, so nothing is being shadowed -- this copy is simply the
-        # Qt in use. Judge it against the binding's own version instead.
+    expected, expected_from = _expected_qt(env)
+    if not expected:
+        # No Qt in the wheel and no runtime metadata: this copy is simply the Qt in
+        # use, so judge it against the binding's own version instead.
         expected, expected_from = _major_minor(binding), BINDING_DIST
-        shadowed = None
+    # Only claim something is being *shadowed* when there is a Qt in the wheel to
+    # shadow. The directory existing is not enough: a partial or corrupted
+    # PyQt6-Qt6 leaves an empty Qt6/bin, and that absence is precisely why something
+    # else won -- saying it was preferred over the wheel's Qt would invert the story.
+    shadowed = (
+        f"the Qt PyQt6 ships in {wheel_bin}"
+        if wheel_bin and env.get("wheel_qt_version") is not None else None
+    )
 
     location = f"{effective['path']} (version {effective['version'] or 'unreadable'})"
 
@@ -684,13 +690,23 @@ def format_report(env: dict[str, Any], findings: list[Finding]) -> str:
     # pip install on Linux that ships the PyQt6-Qt6 wheel.
     wheel_bin = env.get("wheel_qt_bin")
     if wheel_bin:
-        lines.append(f"  wheel Qt     {env.get('wheel_qt_version') or 'version unreadable'}")
+        if env.get("platform") == "win32":
+            detail = env.get("wheel_qt_version") or "version unreadable"
+        else:
+            detail = "present (version readable on Windows only)"
+        lines.append(f"  wheel Qt     {detail}")
         lines.append(f"               {wheel_bin}")
     else:
         lines.append("  wheel Qt     none bundled (PyQt6 uses a system Qt)")
 
+    # Off Windows both this section and the wheel-Qt line above are empty by
+    # construction -- the probe looks for a filename that only exists there. Say so,
+    # or a Linux user pastes "none found" into a bug report as if it were the symptom.
+    windows_only = "" if env.get("platform") == "win32" else "   (Windows only)"
     lines.append("")
-    lines.append(f"{QT_CORE_DLL}, in the order PyQt6 consults it (first one wins)")
+    lines.append(
+        f"{QT_CORE_DLL}, in the order PyQt6 consults it (first one wins){windows_only}"
+    )
     candidates = env.get("qt_core_candidates") or []
     if candidates:
         for index, candidate in enumerate(candidates, start=1):
@@ -704,7 +720,7 @@ def format_report(env: dict[str, Any], findings: list[Finding]) -> str:
     # Printed unconditionally: a bug report pasted from this command should carry the
     # MSVC picture whether or not a rule happened to fire on it.
     lines.append("")
-    lines.append("MSVC runtime")
+    lines.append(f"MSVC runtime{windows_only}")
     msvc = env.get("msvc_candidates") or []
     if msvc:
         for candidate in msvc:

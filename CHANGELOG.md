@@ -16,9 +16,10 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 - `run-app` Claude skill and a `.claude/settings.json` read-only command
   allowlist.
 - `sreeni-cli doctor` and `core/qt_diagnostics.py`: report the PyQt6 / Qt / sip
-  versions and every `Qt6Core.dll` on the Windows loader search path, and name
-  the one that shadows the wheel's. The GUI entry point now prints the same
-  diagnosis instead of a bare `DLL load failed` traceback (issue #92, ADR-046).
+  versions and every `Qt6Core.dll` in the order PyQt6's own `find_qt()` consults
+  them, and name the one that wins over the Qt the wheel ships. The GUI entry
+  point now prints the same diagnosis instead of a bare `DLL load failed`
+  traceback (issue #92, ADR-046).
 
 ### Changed
 - Packaging migrated from `setup.py` to a PEP 621 `pyproject.toml`; dev/test

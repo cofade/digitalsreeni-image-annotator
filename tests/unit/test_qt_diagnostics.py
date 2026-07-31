@@ -141,7 +141,12 @@ def test_a_hand_placed_dll_inside_the_package_is_told_to_delete_it():
     """A Qt6Core.dll next to QtCore.pyd was put there by hand -- it is the fix people
     try for this error before they know the cause. "Pin the binding to match the DLL
     you dropped there yourself" would be absurd advice."""
-    env = _env(qt_core=[_dll(qd.SOURCE_PACKAGE_DIR, "6.8.2.0")])
+    # Both entries: the probe always continues past the package dir to the wheel, so
+    # a package-dir-only list is a state it cannot emit.
+    env = _env(qt_core=[
+        _dll(qd.SOURCE_PACKAGE_DIR, "6.8.2.0"),
+        _dll(qd.SOURCE_WHEEL, "6.11.1.0"),
+    ])
     findings = qd.diagnose(env)
 
     assert _severities(findings) == [qd.SEVERITY_ERROR]
@@ -161,6 +166,19 @@ def test_a_foreign_dll_wearing_the_name_gets_no_pip_pin_advice():
     assert _severities(findings) == [qd.SEVERITY_ERROR]
     assert "PyQt6==" not in findings[0].remedy
     assert "python -m venv" in findings[0].remedy
+
+
+def test_an_empty_wheel_qt_directory_is_not_described_as_shadowed():
+    """A partial or corrupted PyQt6-Qt6 leaves Qt6/bin present but empty. That absence
+    is *why* something else won, so reporting the other copy as "used in preference to
+    the Qt PyQt6 ships in <dir>" would invert the story."""
+    env = _env(wheel_qt_version=None, runtime="6.11.1",
+               qt_core=[_dll(qd.SOURCE_SYSTEM32, "6.2.0.0")])
+    findings = qd.diagnose(env)
+
+    assert _severities(findings) == [qd.SEVERITY_ERROR]
+    assert "in preference to" not in findings[0].detail
+    assert "6.11" in findings[0].detail  # still judged against the metadata version
 
 
 def test_a_binding_newer_than_the_system_qt_is_an_error():
@@ -195,13 +213,19 @@ def test_an_unreadable_shadow_version_is_a_suspect_not_a_match_claim():
     assert "not currently breaking" not in findings[0].detail
 
 
-def test_an_unknown_expected_version_is_also_a_suspect():
-    env = _env(runtime=None, wheel_qt_version=None, qt_core=[
+def test_the_binding_version_is_the_last_resort_expectation():
+    """With the wheel's Qt unreadable AND no runtime metadata there is still a third
+    signal: PyQt6 6.11 is built against Qt 6.11.x, so the binding's own version says
+    what is expected. Falling back to "unknown" here would downgrade a provable
+    mismatch to a shrug."""
+    env = _env(binding="6.11.0", runtime=None, wheel_qt_version=None, qt_core=[
         _dll(qd.SOURCE_CONDA_LIBRARY_BIN, "6.8.2.0"),
         _dll(qd.SOURCE_WHEEL, None),
     ])
     findings = qd.diagnose(env)
-    assert _severities(findings) == [qd.SEVERITY_SUSPECT]
+
+    assert _severities(findings) == [qd.SEVERITY_ERROR]
+    assert qd.BINDING_DIST in findings[0].detail
     assert "version matches" not in findings[0].detail
     assert "not currently breaking" not in findings[0].detail
 

@@ -36,9 +36,13 @@ would load torch and require a display on a CI runner.
 Everything on the left of that boundary is imported by both, and **must not
 import Qt at module level**. `tests/integration/test_cli.py` enforces this in a
 subprocess for `cli/`, `cli.commands`, `io/export_formats`, `io/import_formats`,
-`core/project_io` and `core/annotation_qc`. The subprocess matters: the test
-session has already imported PyQt6, so an in-process `sys.modules` check would
-pass regardless of what those modules do.
+`core/project_io`, `core/annotation_qc` and `core/qt_diagnostics`. The subprocess
+matters: the test session has already imported PyQt6, so an in-process
+`sys.modules` check would pass regardless of what those modules do.
+
+`core/qt_diagnostics` is the sharpest case for the rule. It exists to explain a Qt
+that will not import, so a `from PyQt6 ...` in it would fail in exactly the
+environment it was written for (ADR-046).
 
 Two Qt dependencies were removed to reach this boundary (issue #76):
 
@@ -57,9 +61,17 @@ sreeni-cli export   --project data.iap --format coco --out ./dataset [--val-spli
 sreeni-cli convert  --in ./coco.json --from coco --to yolov5 --out ./yolo [--images DIR]
 sreeni-cli validate --project data.iap [--json report.json] [--fail-on error|warning|info|never]
 sreeni-cli predict  --model best.pt --images ./raw --out ./preds [--format coco|yolov5] [--conf 0.25]
+sreeni-cli doctor
 ```
 
 `train` is deliberately out of scope.
+
+`doctor` takes no arguments and reports on the environment it runs in: the
+installed PyQt6 / Qt / sip versions and every `Qt6Core.dll` on the loader search
+path, in the order the loader would reach them. It exits 1 on an `error` finding
+and 0 otherwise. Because the CLI never imports Qt, it still runs in an
+environment where the GUI itself cannot start — which is the whole point
+(issue #92, ADR-046).
 
 **Exit codes** — the contract that makes `validate` a CI gate:
 

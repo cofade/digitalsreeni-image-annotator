@@ -2126,6 +2126,10 @@ a tool that has to be baby-sat.
   would load torch and require a display on a CI runner.
 - **Four commands**: `export`, `convert`, `validate`, `predict`. `train` is deliberately out of
   scope — it needs a GPU, a progress UI and a stop button, none of which belong in a build step.
+  (A fifth, `doctor`, was added later for a different reason — see
+  [ADR-046](#adr-046-bounded-pyqt6-range-and-a-qt-free-diagnostic-for-qt-import-failures). It
+  belongs here precisely *because* this package never imports Qt: it is the one command that still
+  runs when the GUI cannot start.)
 - **Exit codes are the contract**: 0 success, 1 usage/read/operation error, 2 `validate` findings
   at or above `--fail-on`. Progress narration to stderr, machine-readable output to stdout.
   `--fail-on` is inclusive-upward (`warning` also fails on errors), so a project can tighten its
@@ -2155,8 +2159,9 @@ in the shared layer, each sufficient on its own to make headless operation impos
 
 - The Qt-free boundary is now load-bearing and **enforced by a subprocess test**
   (`tests/integration/test_cli.py`) over `cli/`, `cli.commands`, both `io/` modules,
-  `core/project_io` and `core/annotation_qc`. The subprocess matters: the test session has
-  already imported PyQt6, so an in-process `sys.modules` check would pass regardless.
+  `core/project_io`, `core/annotation_qc` and `core/qt_diagnostics`. The subprocess matters: the
+  test session has already imported PyQt6, so an in-process `sys.modules` check would pass
+  regardless.
 - An accidental `from PyQt6 ...` in any shared module re-breaks headless operation, and would
   work perfectly on the machine of whoever added it. The test is the only thing that catches it.
 - **Documented limits**: the CLI exports what a project already materialised; extracting new
@@ -2599,3 +2604,104 @@ reframed others:
   `merge_groups` then treats a chained cluster and a compact one identically. A chain whose ends
   do not resemble each other is still merged into one group, which costs split granularity rather
   than correctness.
+
+---
+
+## ADR-046: Bounded PyQt6 Range, and a Qt-Free Diagnostic for Qt Import Failures
+
+**Status**: Accepted
+
+**Context**: Upstream [issue #92](https://github.com/bnsreenu/digitalsreeni-image-annotator/issues/92)
+reported that upgrading to PyQt6 6.11.0 / Qt 6.11.1 inside an **existing Conda Python 3.10
+environment on Windows 10** made every PyQt import fail:
+
+```
+ImportError: DLL load failed while importing QtCore: The specified procedure could not be found.
+```
+
+`-X faulthandler` reported Windows exception `0xc0000139` (`STATUS_ENTRYPOINT_NOT_FOUND`), and
+`pip install PyQt6==6.8.1` fixed it immediately.
+
+The obvious reading — "PyQt6 6.11 is broken, pin below it" — is wrong, and the evidence says so:
+
+- PyQt6 6.11.0 imports cleanly on the maintainer's Windows 11 / Python 3.12 venv.
+- CI installs PyQt6 **unpinned** and is green on ubuntu / windows / macOS x Python 3.10-3.14, so
+  6.11 is exercised on every push.
+- Qt 6.11 has not dropped Windows 10; Qt 6.12 is upstream's *last* release that supports it.
+
+`0xc0000139` means a loaded DLL imported a function name that the DLL the loader actually resolved
+does not export — **the wrong copy of a dependency won the search**. Two mechanisms produce that
+in a Conda environment, and both explain why matching the binding to Qt 6.8 "fixes" it:
+
+1. `qt6-main` (pulled in by `pyqt`, `qtpy`, `spyder`, `napari`, matplotlib's Qt backend, …) puts
+   `Qt6Core.dll` in `%CONDA_PREFIX%\Library\bin`. For a dependency of an extension module Windows
+   searches the **application directory** — which for Conda *is* the environment root — and the
+   directories registered via `os.add_dll_directory` before it reaches the ones PyQt6 registers
+   for its own bundled Qt. conda-forge's Qt lags PyPI's, so a 6.11 binding resolves against a
+   6.8-era runtime.
+2. Conda's `vc14_runtime` / `vs2015_runtime` ship `msvcp140.dll` into the environment. Newer Qt
+   builds are compiled against a newer MSVC STL and import symbols an older copy lacks — the same
+   status code from a completely different DLL.
+
+Separately, the dependency was declared `PyQt6>=6.7.0` with **no upper bound**, so every fresh
+install silently took whatever Qt minor had shipped most recently, tested or not.
+
+**Decision**: Three changes, addressing two different problems.
+
+1. **Bound the dependency**: `PyQt6>=6.7.0,<6.12`. The ceiling is "the highest minor CI actually
+   exercises, plus one" — hygiene against an untested minor arriving on release day, **not** a
+   fix for #92. `tests/unit/test_packaging.py` asserts the bound is still there, because it is one
+   character away from being deleted and nothing else would notice.
+2. **`core/qt_diagnostics.py`**, a Qt-free module that names the offending DLL: the installed
+   `PyQt6` / `PyQt6-Qt6` / `PyQt6-sip` versions read from *package metadata*, every `Qt6Core.dll`
+   on the loader search path in the order the loader would reach them, and each one's version read
+   out of its PE version resource. `qt_environment()` does the I/O; `diagnose()` is a pure
+   function over the mapping it returns, so the rules are testable on a Linux CI runner with no
+   Conda, no Windows and no broken Qt.
+3. **Two entry points to it**: a `try/except ImportError` around the Qt import in `main.py`, and a
+   `sreeni-cli doctor` subcommand.
+
+**Rationale**:
+
+- *Why not pin to 6.8.1 and close the issue.* It would downgrade every working install — three
+  minors of Qt fixes — to paper over one environment's DLL collision, and it would not even be
+  reliable: the same Conda env with a Qt 6.5 in it breaks 6.8.1 too. The version number is a
+  symptom of the mismatch, not the cause.
+- *Why the diagnostic must not import Qt.* It exists because importing Qt failed. It is also
+  reached from `cli/`, which is bound by the Qt-free rule (ADR-041); the subprocess test in
+  `tests/integration/test_cli.py` covers it for that reason.
+- *Why it reads the PE version resource instead of loading the DLL.* `dll_file_version` opens the
+  file and parses `VS_FIXEDFILEINFO`; it never calls `LoadLibrary`. That is what makes it safe to
+  point at the very DLL that is crashing the process.
+- *Why a CLI command as well as the startup guard.* When the loader terminates the process instead
+  of raising, no in-process handler can run. `sreeni-cli` never imports Qt, so it still starts in
+  the broken environment and can say which file is at fault.
+- *Why not manipulate the DLL search order at runtime.* An `os.add_dll_directory` call ahead of
+  the wheel's Qt would fight the loader in a way that breaks differently per environment, and
+  ADR-017 is already one load-order workaround. Two would be a maintenance trap; telling the user
+  what is wrong is more honest than guessing on their behalf.
+
+**Consequences**:
+
+- ✅ The failure now names the file, its version, the version PyQt6 expected, and three concrete
+  remedies (clean venv / remove the conflicting Qt / match the binding to the Qt present).
+- ✅ `sreeni-cli doctor` exits 1 on an `error` finding, so it works as a preflight in a build
+  script. `warning` findings — a second Qt on the path whose version currently matches — print but
+  do not fail, since that is a forecast rather than a fault.
+- ⚠️ **The order in `main.py` is load-bearing.** The eager `import torch` (ADR-017) must stay
+  strictly above the guarded Qt import. The two Windows DLL workarounds now sit adjacent, and
+  swapping them re-breaks ADR-017 in a way that only reproduces on Windows with torch installed.
+- ⚠️ Only the `PyQt6` import is guarded, not `annotator_window`. Wrapping both would report an
+  unrelated missing dependency as a Qt failure.
+- ⚠️ Raising the cap past 6.12 needs a real run, not a bump — 6.12 is the last Qt supporting
+  Windows 10, so what follows it changes the platform baseline.
+- ⚠️ The probe cannot see DLLs *already loaded* into the process, which is one of the ways the
+  loader picks a winner. It reports the on-disk search order, which covers the Conda cases.
+
+**Related**:
+
+- [ADR-017](#adr-017-eager-torch-import-in-mainpy-before-qapplication-creation) — the other
+  Windows Qt-DLL workaround, and the ordering constraint this one must respect.
+- [ADR-041](#adr-041-a-separate-headless-cli-entry-point) — the Qt-free boundary that
+  `core/qt_diagnostics` and the `doctor` command sit inside.
+- [ADR-014](#adr-014-migrate-from-pyqt5-to-pyqt6) — the `>=6.7.0` floor this keeps.

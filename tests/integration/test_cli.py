@@ -65,6 +65,10 @@ def test_the_command_module_pulls_in_neither_qt_nor_torch():
         "digitalsreeni_image_annotator.io.import_formats",
         "digitalsreeni_image_annotator.core.project_io",
         "digitalsreeni_image_annotator.core.annotation_qc",
+        # The doctor command's engine. This one matters most of all: it exists to
+        # explain a Qt that will not import, so importing Qt would make it fail in
+        # precisely the environment it was written for (issue #92).
+        "digitalsreeni_image_annotator.core.qt_diagnostics",
     ],
 )
 def test_the_shared_layer_the_cli_depends_on_is_qt_free(module):
@@ -84,7 +88,7 @@ def test_help_works_without_a_display():
         capture_output=True, text=True,
     )
     assert result.returncode == 0
-    for command in ("export", "convert", "validate", "predict"):
+    for command in ("export", "convert", "validate", "predict", "doctor"):
         assert command in result.stdout
 
 

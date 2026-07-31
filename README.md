@@ -132,15 +132,17 @@ sreeni-cli doctor
 ```
 
 It never imports Qt, so it still works when the application itself cannot start.
-It prints the installed PyQt6 / Qt / sip versions and every `Qt6Core.dll` on the
-Windows loader search path, in the order the loader reaches them.
+It prints the installed PyQt6 / Qt / sip versions and every `Qt6Core.dll` in the
+order PyQt6's own `find_qt()` consults them, with each one's version.
 
 **What causes it.** Almost always a second Qt in the environment, not a bad PyQt6
 release. In a Conda environment `qt6-main` (pulled in by `pyqt`, `qtpy`, `spyder`,
-`napari`, matplotlib's Qt backend, …) installs its own `Qt6Core.dll`, and Windows
-finds it *before* the copy the PyQt6 wheel ships. conda-forge's Qt lags PyPI's, so
-a newer PyQt6 ends up calling into an older Qt that lacks the symbols it needs.
-An outdated `msvcp140.dll` from Conda's `vc14_runtime` does the same thing.
+`napari`, matplotlib's Qt backend, …) installs its own `Qt6Core.dll`, and PyQt6
+finds it *before* the copy its own wheel ships — the interpreter's directory is
+checked first, and for a Conda environment that is the environment root.
+conda-forge's Qt lags PyPI's, so a newer PyQt6 ends up calling into an older Qt
+that lacks the symbols it needs. An outdated `msvcp140.dll` from Conda's
+`vc14_runtime` does the same thing.
 
 This is why downgrading PyQt6 appears to fix it: the binding stops being newer
 than the Qt it collided with.
